@@ -1,0 +1,24 @@
+# JetBrains IDE (WebStorm)
+.idea/
+
+# 크리덴셜·환경변수 — 커밋 금지 (CLAUDE.md 리포 규칙)
+.env
+.env.*
+!.env.example
+
+private/
+
+# 인증서·키·크리덴셜 번들 — 위치 불문 커밋 금지 (실환경 키 유출 방지)
+*.pem
+*.key
+*.p12
+*.crt
+*-certificates.tar
+wazuh-certificates*.tar
+
+# Claude Code 프로젝트 지침 — 실환경 정찰 수치·랩 사설 IP·SSH 키 경로 포함으로 커밋 금지
+CLAUDE.md
+
+# Python 캐시
+__pycache__/
+*.pyc

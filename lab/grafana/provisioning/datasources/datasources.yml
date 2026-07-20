@@ -1,0 +1,52 @@
+# Grafana 데이터소스 provisioning — 코드로 관리(UI 클릭 대신).
+# Grafana 기동 시 이 파일을 읽어 데이터소스를 자동 등록한다.
+#
+# 지금 활성: Loki (인증 없는 랩).
+# 뼈대만(주석): Zabbix, Wazuh Indexer — 크리덴셜이 필요해 값 채운 뒤 주석 해제.
+
+apiVersion: 1
+
+datasources:
+  # ── Loki (로그) — 바로 동작 ────────────────────────────────
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100          # 같은 compose 네트워크의 서비스명
+    isDefault: false
+    editable: true
+
+  # ── Zabbix (메트릭) — 플러그인 설치됨. 아래 값 채우고 주석 해제 ──
+  # 사전 준비(Zabbix UI 에서): 읽기 전용 계정 또는 API 토큰 생성.
+  # 플러그인 타입: alexanderzobnin-zabbix-datasource
+  #
+  # - name: Zabbix
+  #   type: alexanderzobnin-zabbix-datasource
+  #   access: proxy
+  #   url: http://zabbix-web:8080/api_jsonrpc.php
+  #   isDefault: true
+  #   jsonData:
+  #     username: <읽기전용_계정>       # 예: grafana-ro
+  #     trends: true
+  #     trendsFrom: "7d"
+  #     cacheTTL: "1h"
+  #   secureJsonData:
+  #     password: <계정_비밀번호>        # 또는 apiToken 방식
+  #   editable: true
+
+  # ── Wazuh Indexer (보안) — OpenSearch 데이터소스 ─────────────
+  # IXcloud VM 에 이 몸통을 올리면 사설망으로 Wazuh Indexer(9200)에 붙는다.
+  # 읽기 전용 계정 후보: readall (NEXT_STEPS_GUIDE STEP 1 참고).
+  #
+  # - name: Wazuh
+  #   type: grafana-opensearch-datasource   # 플러그인 추가 설치 필요할 수 있음
+  #   access: proxy
+  #   url: https://<INDEXER_IP>:9200        # 인덱서 node-1 (IXcloud 사설 IP — 로컬에서 채움)
+  #   jsonData:
+  #     database: "wazuh-alerts-*"
+  #     timeField: "@timestamp"
+  #     flavor: opensearch
+  #     tlsSkipVerify: true                  # 랩 자체서명 인증서
+  #   basicAuth: true
+  #   basicAuthUser: readall
+  #   secureJsonData:
+  #     basicAuthPassword: <readall_비밀번호>
