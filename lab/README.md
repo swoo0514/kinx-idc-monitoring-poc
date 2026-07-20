@@ -34,6 +34,9 @@
 비공개(private) 저장소이므로 접근 권한이 있는 계정으로 인증이 필요합니다. HTTPS는 Personal Access Token을, SSH는 등록된 공개키를 사용합니다.
 
 ```bash
+# git 미설치 시 먼저 설치
+sudo dnf -y install git
+
 # HTTPS (인증 시 비밀번호 대신 Personal Access Token 입력)
 git clone https://github.com/swoo0514/kinx-idc-monitoring-poc.git
 
@@ -48,6 +51,8 @@ cd kinx-idc-monitoring-poc/lab
 ```bash
 sudo dnf -y install dnf-plugins-core
 sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+# Rocky 9는 $releasever가 "9.0"으로 확장되나 Docker repo는 major(9)만 제공 → 404 방지 위해 9로 고정
+sudo sed -i 's/\$releasever/9/g' /etc/yum.repos.d/docker-ce.repo
 sudo dnf -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin
 sudo systemctl enable --now docker
 sudo usermod -aG docker $USER   # 로그아웃 후 재접속하여 권한 적용
