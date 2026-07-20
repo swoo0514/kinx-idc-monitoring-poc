@@ -14,8 +14,11 @@
 | Memory | 8 GB (최소 4 GB) |
 | Disk | 40 GB 이상 |
 | OS | Rocky Linux 9 (실환경 정합) |
+| 네트워크 | 사설 IP(Wazuh 클러스터와 동일 사설망 — 연동 필수) + 공인 IP 1개(대시보드 접근용) |
 
 > 위 사양은 관측 코어 4종 기준 추정치입니다. Profile 확장 시 증설이 필요합니다 — 특히 `--profile chaos`(에이전트 노드·snmpsim)는 +2~4 GB, `--profile ai`(Ollama)는 모델 크기에 따라 별도의 사양·GPU 검토가 필요합니다.
+
+> **네트워크 구성:** 본 VM은 사설 IP와 공인 IP를 함께 사용합니다. 사설 IP는 Grafana가 Wazuh Indexer(사설망 내)에 연동하기 위해 필수이며, 공인 IP는 Zabbix Web·Grafana 대시보드에 브라우저로 접근하기 위한 용도입니다. 공인 IP의 노출 포트(아래 방화벽 항목)는 반드시 작업자 IP로 제한합니다.
 
 ### 소프트웨어
 
@@ -75,10 +78,10 @@ docker compose logs -f zabbix-server # "server #0 started" 출력 시 정상
 
 | 서비스 | 접속 URL | 초기 계정 |
 | --- | --- | --- |
-| Zabbix Web | `http://<VM_IP>:8080` | `Admin` / `zabbix` (로그인 후 즉시 변경) |
-| Grafana | `http://<VM_IP>:3000` | `admin` / `.env`의 `GRAFANA_ADMIN_PASSWORD` |
+| Zabbix Web | `http://<공인_IP>:8080` | `Admin` / `zabbix` (로그인 후 즉시 변경) |
+| Grafana | `http://<공인_IP>:3000` | `admin` / `.env`의 `GRAFANA_ADMIN_PASSWORD` |
 
-> 방화벽: 8080·3000은 작업자 IP에만 허용합니다. 10051(Zabbix Trapper)은 사설망 내 에이전트 통신용으로만 개방합니다.
+> **방화벽(보안 그룹):** 공인 IP 측은 22(SSH)·8080(Zabbix)·3000(Grafana)만, 그리고 반드시 **작업자 IP(Source /32)로 제한**하여 개방합니다. 나머지 공인 포트는 전부 차단합니다. 10051(Zabbix Trapper)·3100(Loki)은 사설망 내 통신 전용이므로 공인으로 열지 않습니다.
 
 ---
 
