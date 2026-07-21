@@ -9,10 +9,13 @@ services:
     image: mariadb:10.11
     container_name: kinx-mariadb
     command:
-      # Zabbix 7.0 공식 compose_databases.yaml 기준 3종. (복제용 log-bin/server-id는 ha 단계에서)
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_bin
       - --log_bin_trust_function_creators=1
+      - --server-id=1
+      - --log-bin
+      - --log-basename=mariadb-master
+      - --binlog-format=mixed
     environment:
       MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MARIADB_DATABASE: ${MYSQL_DATABASE}
@@ -71,7 +74,12 @@ services:
     container_name: kinx-grafana
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
-      GF_INSTALL_PLUGINS: alexanderzobnin-zabbix-app
+      GF_INSTALL_PLUGINS: alexanderzobnin-zabbix-app,grafana-opensearch-datasource
+      ZBX_GRAFANA_USER: ${ZBX_GRAFANA_USER:-}
+      ZBX_GRAFANA_PASSWORD: ${ZBX_GRAFANA_PASSWORD:-}
+      WAZUH_INDEXER_URL: ${WAZUH_INDEXER_URL:-}
+      WAZUH_INDEXER_USER: ${WAZUH_INDEXER_USER:-}
+      WAZUH_INDEXER_PASSWORD: ${WAZUH_INDEXER_PASSWORD:-}
     ports:
       - "3000:3000"
     volumes:
@@ -97,12 +105,34 @@ services:
       - lab_net
     restart: unless-stopped
 
-# 다음 단계에서 profiles 로 붙일 자리 (BUILD_GUIDE §다음 단계):
-#   [ha] mariadb-slave(server-id=2)+zabbix-server2  [chaos] 에이전트 노드+snmpsim
-#   [auto] n8n   [ai] ollama
+  mariadb-slave:
+    image: mariadb:10.11
+    container_name: kinx-mariadb-slave
+    profiles: ["ha"]
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_bin
+      - --log_bin_trust_function_creators=1
+      - --server-id=2
+      - --log-basename=mariadb-slave
+      - --read-only=1
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mariadb_slave_data:/var/lib/mysql
+    networks:
+      - lab_net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
 
 volumes:
   mariadb_data:
+  mariadb_slave_data:
   grafana_data:
   loki_data:
 

@@ -1,0 +1,34 @@
+{
+  "uid": "kinx-overview",
+  "title": "KINX 통합 관제",
+  "tags": ["kinx", "overview"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "## KINX 통합 관제\n메트릭(Zabbix) · 로그(Loki) · 보안(Wazuh)을 같은 타임라인에서 봅니다. 상세 패널은 chaos 프로파일 데이터 유입 후 추가합니다."
+      }
+    },
+    {
+      "id": 2,
+      "type": "logs",
+      "title": "로그 (Loki)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 3 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "loki", "uid": "loki" }, "expr": "{job=~\".+\"}" }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true, "dedupStrategy": "none", "enableLogDetails": true }
+    }
+  ]
+}
