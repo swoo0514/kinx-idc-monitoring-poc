@@ -6,7 +6,7 @@
 # 실행 위치: 관측 코어 VM의 lab/ 디렉토리(docker compose 접근 필요). 원리는 chaos/README.md.
 #
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../lab"   # chaos/ 어디서 실행해도 lab/ 로 이동(docker compose·.env 접근)
 [[ -f .env ]] || { echo "[!] lab/.env 없음"; exit 1; }
 set -a; . ./.env; set +a
 
