@@ -22,3 +22,5 @@ CLAUDE.md
 # Python 캐시
 __pycache__/
 *.pyc
+# 복제 감시 확인 결과 (실호스트명·공인IP 포함)
+repl_check_*.md

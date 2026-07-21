@@ -130,6 +130,22 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # slave 복제 지연을 표준 MySQL 템플릿으로 감시하기 위한 agent2 (메트릭 깊이 데모).
+  # 접속 정보(계정/DSN)는 conf 에 넣지 않고 Zabbix 호스트 매크로로 주입 → 크리덴셜 커밋 없음.
+  # 등록·템플릿 링크·매크로 절차는 BUILD_GUIDE §10.
+  zabbix-agent2:
+    image: zabbix/zabbix-agent2:alpine-7.0.27
+    container_name: kinx-zabbix-agent2
+    profiles: ["ha"]
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_HOSTNAME: lab-db-agent
+    depends_on:
+      - zabbix-server
+    networks:
+      - lab_net
+    restart: unless-stopped
+
 volumes:
   mariadb_data:
   mariadb_slave_data:
