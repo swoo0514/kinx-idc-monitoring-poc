@@ -28,7 +28,10 @@ datasources:
     access: proxy
     url: $WAZUH_INDEXER_URL
     jsonData:
-      flavor: opensearch
+      # Wazuh indexer는 Elasticsearch 7.10.2로 보고 → flavor=elasticsearch + version 명시
+      # (grafana-opensearch-datasource 공식 configure 문서 기준)
+      flavor: elasticsearch
+      version: "7.10.2"
       database: "wazuh-alerts-*"
       timeField: "@timestamp"
       tlsSkipVerify: true
