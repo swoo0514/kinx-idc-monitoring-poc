@@ -19,18 +19,25 @@ m mariadb -uroot -e "
   GRANT REPLICATION SLAVE ON *.* TO '${REPLICATION_USER}'@'%';
   FLUSH PRIVILEGES;"
 
-echo "== 2/5 마스터 스냅샷 덤프 (--gtid) =="
-m mariadb-dump -uroot --single-transaction --gtid --databases "$DB" > /tmp/kinx_master_dump.sql
-echo "   덤프 크기: $(wc -c < /tmp/kinx_master_dump.sql) bytes"
+echo "== 2/5 마스터 스냅샷 덤프 (--gtid --master-data) =="
+# --master-data=2 : 스냅샷 시점의 GTID 위치를 덤프에 (주석으로) 기록 — --gtid 단독으론 미포함.
+# --add-drop-database : 재실행(멱등) 시 슬레이브 DB를 깨끗이 재적재(중복 INSERT 방지).
+m mariadb-dump -uroot --single-transaction --gtid --master-data=2 --add-drop-database --databases "$DB" > /tmp/kinx_master_dump.sql
+GTID="$(grep -oE "gtid_slave_pos='[0-9-]+'" /tmp/kinx_master_dump.sql | grep -oE "[0-9]+-[0-9]+-[0-9]+" | head -1)"
+echo "   덤프 크기: $(wc -c < /tmp/kinx_master_dump.sql) bytes / 스냅샷 GTID: ${GTID:-추출실패}"
+if [[ -z "$GTID" ]]; then echo "[!] 덤프에서 GTID 추출 실패 — 덤프 옵션 확인"; exit 1; fi
 
 echo "== 3/5 슬레이브에 스냅샷 적재 =="
 s mariadb -uroot < /tmp/kinx_master_dump.sql
 rm -f /tmp/kinx_master_dump.sql
 
-echo "== 4/5 슬레이브 복제 연결 후 시작 (GTID slave_pos) =="
+echo "== 4/5 슬레이브 복제 연결 후 시작 (GTID slave_pos, 스냅샷 위치 명시) =="
+# 핵심: 스냅샷 시점 GTID(${GTID})를 gtid_slave_pos 로 명시 설정해야 그 지점부터 복제.
+# 이 SET 이 없으면 slave 가 0-0-0 부터 재생 → 스냅샷에 이미 있는 행 재삽입 → Duplicate 오류.
 s mariadb -uroot -e "
   STOP SLAVE;
   RESET SLAVE;
+  SET GLOBAL gtid_slave_pos='${GTID}';
   CHANGE MASTER TO
     MASTER_HOST='${MASTER}',
     MASTER_PORT=3306,
