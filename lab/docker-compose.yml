@@ -146,6 +146,21 @@ services:
       - lab_net
     restart: unless-stopped
 
+  # 알림 다이어트 데모용 가짜 SNMP 스위치 (numeric 모듈로 ifInErrors 카운터 증가).
+  # community 이름 = data 파일명(switch1 → switch1.snmprec). 설정 근거·검증은 BUILD_GUIDE.
+  snmpsim:
+    image: thola/snmpsim
+    container_name: kinx-snmpsim
+    profiles: ["chaos"]
+    command: snmpsim-command-responder --data-dir=/data --agent-udpv4-endpoint=0.0.0.0:1161
+    volumes:
+      - ./snmpsim/data:/data:ro
+    ports:
+      - "1161:1161/udp"
+    networks:
+      - lab_net
+    restart: unless-stopped
+
 volumes:
   mariadb_data:
   mariadb_slave_data:
