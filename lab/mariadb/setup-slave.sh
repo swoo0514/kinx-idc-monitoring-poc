@@ -6,15 +6,17 @@ cd "$(dirname "$0")/.."
 if [[ ! -f .env ]]; then echo "[!] lab/.env 가 없습니다. .env.example 참고해 생성하세요."; exit 1; fi
 set -a; . ./.env; set +a
 
-MASTER=mariadb
-SLAVE=mariadb-slave
-DB="${MYSQL_DATABASE:-zabbix}"
+# 인자로 master/slave 컨테이너·DB 지정 가능(고객사별 재사용). 없으면 기본 랩 DB.
+MASTER="${1:-mariadb}"
+SLAVE="${2:-mariadb-slave}"
+DB="${3:-${MYSQL_DATABASE:-zabbix}}"
 
 m() { docker compose exec -T -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$MASTER" "$@"; }
 s() { docker compose exec -T -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$SLAVE"  "$@"; }
 
-echo "== 1/5 마스터에 복제 계정 생성 (멱등) =="
+echo "== 1/5 마스터에 대상 DB + 복제 계정 생성 (멱등) =="
 m mariadb -uroot -e "
+  CREATE DATABASE IF NOT EXISTS \`${DB}\`;
   CREATE USER IF NOT EXISTS '${REPLICATION_USER}'@'%' IDENTIFIED BY '${REPLICATION_PASSWORD}';
   GRANT REPLICATION SLAVE ON *.* TO '${REPLICATION_USER}'@'%';
   FLUSH PRIVILEGES;"
