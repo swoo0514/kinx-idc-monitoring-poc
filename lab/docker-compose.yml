@@ -152,7 +152,8 @@ services:
     image: thola/snmpsim
     container_name: kinx-snmpsim
     profiles: ["chaos"]
-    command: snmpsim-command-responder --data-dir=/data --agent-udpv4-endpoint=0.0.0.0:1161
+    # 이미지 ENTRYPOINT 가 이미 responder 이므로 옵션만 전달(프로그램명 넣으면 인자로 오인).
+    command: ["--data-dir=/data", "--agent-udpv4-endpoint=0.0.0.0:1161"]
     volumes:
       - ./snmpsim/data:/data:ro
     ports:
