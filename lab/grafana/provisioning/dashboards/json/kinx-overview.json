@@ -225,6 +225,13 @@
               "mode": "off"
             }
           },
+          "links": [
+            {
+              "targetBlank": true,
+              "title": "Wazuh 대시보드에서 심층 조사",
+              "url": "https://WAZUH_DASHBOARD_HOST/app/threat-hunting#/overview/?tab=general&tabView=dashboard&_a=(filters:!(),query:(language:kuery,query:''))&_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-24h,to:now))"
+            }
+          ],
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -349,12 +356,12 @@
     "list": []
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-2d",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "browser",
   "title": "KINX 통합 관제",
   "uid": "kinx-overview",
-  "version": 4
+  "version": 1
 }
