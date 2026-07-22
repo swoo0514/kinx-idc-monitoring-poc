@@ -162,11 +162,67 @@ services:
       - lab_net
     restart: unless-stopped
 
+  # ── MSP 고객 A 스택 (profile: msp) — 웹 + DB(master-slave 복제) + 감시 에이전트 ──
+  # 온보딩·복제 셋업·감시 등록 절차는 BUILD_GUIDE §11.
+  customer-a-db-master:
+    image: mariadb:10.11
+    container_name: kinx-cust-a-db-master
+    profiles: ["msp"]
+    command:
+      - --server-id=3
+      - --log-bin
+      - --log-basename=cust-a-master
+      - --binlog-format=mixed
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - cust_a_master_data:/var/lib/mysql
+    networks:
+      - lab_net
+    restart: unless-stopped
+
+  customer-a-db-slave:
+    image: mariadb:10.11
+    container_name: kinx-cust-a-db-slave
+    profiles: ["msp"]
+    command:
+      - --server-id=4
+      - --log-basename=cust-a-slave
+      - --read-only=1
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - cust_a_slave_data:/var/lib/mysql
+    networks:
+      - lab_net
+    restart: unless-stopped
+
+  customer-a-web:
+    image: nginx:alpine
+    container_name: kinx-cust-a-web
+    profiles: ["msp"]
+    networks:
+      - lab_net
+    restart: unless-stopped
+
+  customer-a-agent:
+    image: zabbix/zabbix-agent2:alpine-7.0.27
+    container_name: kinx-cust-a-agent
+    profiles: ["msp"]
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_HOSTNAME: customer-a
+    networks:
+      - lab_net
+    restart: unless-stopped
+
 volumes:
   mariadb_data:
   mariadb_slave_data:
   grafana_data:
   loki_data:
+  cust_a_master_data:
+  cust_a_slave_data:
 
 networks:
   lab_net:
