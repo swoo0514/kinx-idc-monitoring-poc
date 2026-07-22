@@ -51,12 +51,21 @@ master에 대량 쓰기를 걸어 slave 복제 지연을 만듭니다.
 - 확인: Grafana Loki 패널 `sum(rate({job="varlogs"} |= "ERROR" [1m]))` 급등
 - 용도: 메트릭 깊이 2축(로그는 수집하는데 오류율을 지표로 안 봄)
 
+### `snmp_iface_error.sh` — 인터페이스 에러 노이즈 폭주 (알림 다이어트 Before)
+
+snmpsim 에러 데이터를 켰다 껐다 반복해 델타 트리거를 반복 발화시킵니다.
+
+- 사용: `./snmp_iface_error.sh [사이클=6] [체류초=70]`
+- 실행 위치: 관측 코어 VM의 `lab/`(docker compose 접근)
+- 원리: `switch1.error.snmprec`(`rate=3`)와 `switch1.clean.snmprec`(`rate=0`)를 번갈아 물리고 snmpsim 재기동 → `ifInErrors`가 증가/고정을 반복 → `change()>2` 트리거가 PROBLEM/OK 반복
+- 확인: Monitoring → Problems 에 반복 발화 누적
+- 용도: 알림 다이어트 Before(노이즈 폭주). After 4종 정비(recovery expression·의존성·이벤트 상관·maintenance)로 1건 수렴 대비
+
 ## 추가 예정
 
 | 스크립트 | 주입 내용 | 관제 반응 |
 | --- | --- | --- |
 | `disk_fill.sh` | 디스크 사용률 상승 (fallocate) | 디스크 임계치 트리거 |
 | `service_kill.sh` | 서비스 프로세스 종료 | proc.num 트리거 |
-| `snmp_iface_error` | snmpsim 인터페이스 에러 카운터 증가 | 알림 다이어트 데모(노이즈 재현) |
 
 각 스크립트는 대상·강도를 인자로 받아 재현 가능하게 작성하며, 어떤 관제 화면이 어떻게 반응하는지를 본 README에 명시합니다.
