@@ -31,3 +31,26 @@
       loop: "{{ customers | subelements('hosts') }}"
       loop_control:
         label: "{{ item.0.host_group }} / {{ item.1.name }}"
+
+    - name: 고객별 조회 user group 생성 (자기 그룹만 read = 격리)
+      community.zabbix.zabbix_usergroup:
+        name: "{{ item.host_group | regex_replace('^.*/', '') }}-view"
+        hostgroup_rights:
+          - host_group: "{{ item.host_group }}"
+            permission: read-only
+        state: present
+      loop: "{{ customers }}"
+      loop_control:
+        label: "{{ item.host_group }}"
+
+    - name: 고객별 조회 계정 생성 (자기 그룹만 보는 격리 계정)
+      community.zabbix.zabbix_user:
+        username: "{{ item.view_user }}"
+        passwd: "{{ lookup('env', 'ZBX_CUST_PASSWORD') }}"
+        usrgrps:
+          - "{{ item.host_group | regex_replace('^.*/', '') }}-view"
+        role_name: "User role"
+        state: present
+      loop: "{{ customers }}"
+      loop_control:
+        label: "{{ item.view_user }}"
