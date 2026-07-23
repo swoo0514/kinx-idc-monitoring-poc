@@ -39,3 +39,14 @@ datasources:
     basicAuthUser: $WAZUH_INDEXER_USER
     secureJsonData:
       basicAuthPassword: $WAZUH_INDEXER_PASSWORD
+    # correlation: Wazuh 이벤트의 호스트(agent.name, FQDN 정규화 전제) → 그 호스트의 Loki 로그.
+    # $$ 는 provisioning 환경변수 치환을 피하려는 이스케이프(런타임에 ${__value.raw} 로 복원).
+    correlations:
+      - targetUID: loki
+        label: "보안 이벤트 → 그 호스트 로그"
+        description: "Wazuh agent.name(FQDN)로 그 호스트의 Loki 로그를 Explore 분할 뷰로 조회"
+        type: query
+        config:
+          field: agent.name
+          target:
+            expr: '{host="$${__value.raw}"}'
