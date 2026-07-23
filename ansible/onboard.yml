@@ -1,29 +1,33 @@
 ---
-# MSP 고객 온보딩 — Zabbix 감시 정의를 API로 등록. 토큰은 env ZABBIX_API_TOKEN 에서 읽음.
-- name: Onboard MSP customer (Zabbix objects)
+# MSP 고객 온보딩 — customers.yml 목록을 읽어 Zabbix 감시 정의(호스트그룹·호스트)를 자동 등록.
+# 고객 추가 = customers.yml 에 항목 추가 후 재실행(멱등). 토큰은 env ZABBIX_API_TOKEN.
+- name: Onboard MSP customers (Zabbix objects)
   hosts: zabbix
   gather_facts: false
+  vars_files:
+    - customers.yml
   vars:
     ansible_zabbix_auth_key: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
   tasks:
-    - name: 고객 호스트그룹 생성
+    - name: 고객 호스트그룹 생성 (전 고객 일괄)
       community.zabbix.zabbix_group:
         state: present
-        host_groups:
-          - Customers/Customer-B
+        host_groups: "{{ customers | map(attribute='host_group') | list }}"
 
-    - name: 고객 호스트 등록
+    - name: 고객 호스트 등록 (고객×호스트 반복)
       community.zabbix.zabbix_host:
-        host_name: customer-b
+        host_name: "{{ item.1.name }}"
         host_groups:
-          - Customers/Customer-B
+          - "{{ item.0.host_group }}"
         status: enabled
         state: present
         interfaces:
           - type: 1
             main: 1
             useip: 0
-            dns: customer-b-agent
+            dns: "{{ item.1.interface_dns }}"
             port: "10050"
-        link_templates:
-          - Linux by Zabbix agent
+        link_templates: "{{ item.1.templates }}"
+      loop: "{{ customers | subelements('hosts') }}"
+      loop_control:
+        label: "{{ item.0.host_group }} / {{ item.1.name }}"

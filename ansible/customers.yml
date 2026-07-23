@@ -1,0 +1,10 @@
+# MSP 고객 정의 — 이 목록에 항목을 추가하고 onboard.yml 을 돌리면 고객이 자동 온보딩된다.
+# 권한은 상위 Customers 그룹에서 자동 상속되므로 여기서 권한을 지정할 필요가 없다.
+# (고객 A 는 DB 고객으로 손수 구성했으므로 이 자동화 목록 밖에 둔다 — 하드코딩 vs 코드 대비)
+customers:
+  - host_group: "Customers/Customer-B"
+    hosts:
+      - name: customer-b
+        interface_dns: customer-b-agent
+        templates:
+          - "Linux by Zabbix agent"
