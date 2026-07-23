@@ -8,3 +8,9 @@ customers:
         interface_dns: customer-b-agent
         templates:
           - "Linux by Zabbix agent"
+  - host_group: "Customers/Customer-C"
+    hosts:
+      - name: customer-c
+        interface_dns: customer-c-agent
+        templates:
+          - "Linux by Zabbix agent"

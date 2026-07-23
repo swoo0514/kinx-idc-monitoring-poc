@@ -229,6 +229,18 @@ services:
       - lab_net
     restart: unless-stopped
 
+  # ── MSP 고객 C (profile: msp) — OS 고객, customers.yml 온보딩 시연용 ──
+  customer-c-agent:
+    image: zabbix/zabbix-agent2:alpine-7.0.27
+    container_name: kinx-cust-c-agent
+    profiles: ["msp"]
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_HOSTNAME: customer-c
+    networks:
+      - lab_net
+    restart: unless-stopped
+
 volumes:
   mariadb_data:
   mariadb_slave_data:
