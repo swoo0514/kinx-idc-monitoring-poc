@@ -39,3 +39,20 @@ datasources:
     basicAuthUser: $WAZUH_INDEXER_USER
     secureJsonData:
       basicAuthPassword: $WAZUH_INDEXER_PASSWORD
+    # correlation: Wazuh agent.name(FQDN 정규화) → 그 호스트의 Loki 로그(Explore 분할 뷰).
+    # Grafana 11.6.16 makeCreateCorrelationCommand 검증 2건에 맞춘 형식(소스 확인):
+    #   - root `type` 생략 필수: 명시하면 string→CorrelationType 캐스팅 패닉.
+    #   - config.type: query 명시 필수: 생략 시 config.Type="" → ErrInvalidConfigType
+    #     ("correlation contains non default value in config.type"). 기본값 query 로 못 떨어뜨림.
+    # $$ 는 provisioning 환경변수 치환 회피(런타임에 ${__value.raw} 로 복원).
+    correlations:
+      - targetUID: loki
+        label: "보안 이벤트 → 해당 호스트 로그"
+        description: ""
+        config:
+          type: query
+          field: agent.name
+          target:
+            editorMode: code
+            expr: '{host="$${__value.raw}"}'
+            queryType: range
