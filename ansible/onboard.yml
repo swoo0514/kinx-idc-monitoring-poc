@@ -10,13 +10,13 @@
       community.zabbix.zabbix_group:
         state: present
         host_groups:
-          - Customer-B
+          - Customers/Customer-B
 
     - name: 고객 호스트 등록
       community.zabbix.zabbix_host:
         host_name: customer-b
         host_groups:
-          - Customer-B
+          - Customers/Customer-B
         status: enabled
         state: present
         interfaces:

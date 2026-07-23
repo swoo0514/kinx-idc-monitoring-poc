@@ -492,7 +492,7 @@
         "options": [],
         "query": {
           "application": "",
-          "group": "/^Customer-/",
+          "group": "/^Customers.Customer-/",
           "host": "",
           "item": "",
           "itemTag": "",
