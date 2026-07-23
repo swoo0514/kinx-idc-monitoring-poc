@@ -216,20 +216,8 @@ services:
       - lab_net
     restart: unless-stopped
 
-  # ── MSP 고객 B 스택 (profile: msp) — DB(단일) + 감시 에이전트 ──
-  # 감시 등록(MySQL 템플릿·매크로)은 ansible/onboard.yml 로 자동화.
-  customer-b-db:
-    image: mariadb:10.11
-    container_name: kinx-cust-b-db
-    profiles: ["msp"]
-    environment:
-      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-    volumes:
-      - cust_b_db_data:/var/lib/mysql
-    networks:
-      - lab_net
-    restart: unless-stopped
-
+  # ── MSP 고객 B 스택 (profile: msp) — OS 유형 고객: 감시 에이전트만(Linux 템플릿) ──
+  # A=DB 고객 / B=OS 고객 = 이질적 두 테넌트(유형별 대시보드 전략). 감시 등록은 ansible/onboard.yml.
   customer-b-agent:
     image: zabbix/zabbix-agent2:alpine-7.0.27
     container_name: kinx-cust-b-agent
@@ -248,7 +236,6 @@ volumes:
   loki_data:
   cust_a_master_data:
   cust_a_slave_data:
-  cust_b_db_data:
 
 networks:
   lab_net:
