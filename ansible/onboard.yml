@@ -14,7 +14,7 @@
 
     - name: 고객 호스트 등록
       community.zabbix.zabbix_host:
-        host_name: customer-b-web01
+        host_name: customer-b
         host_groups:
           - Customer-B
         status: enabled
