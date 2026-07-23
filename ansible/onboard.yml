@@ -19,3 +19,11 @@
           - Customer-B
         status: enabled
         state: present
+        interfaces:
+          - type: 1
+            main: 1
+            useip: 0
+            dns: customer-b-agent
+            port: "10050"
+        link_templates:
+          - Linux by Zabbix agent
