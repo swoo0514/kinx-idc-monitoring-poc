@@ -1,3 +1,5 @@
+# 하한만 지정 — VM 실측 파이썬 3.9 호환 (dev는 3.14였음). pip이 런타임에 맞는 최신을 고름.
 anthropic>=0.120.0
-fastapi>=0.140.0
-uvicorn>=0.51.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+httpx>=0.25.0
