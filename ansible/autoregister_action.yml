@@ -1,18 +1,14 @@
 ---
-# 서버측 autoregistration 액션 — deploy_agents.yml 이 심은 HostMetadata=linux-3agent-bundle 을
-# 매칭해, 새 에이전트가 접속하면 Zabbix가 자동으로 호스트 추가·그룹 배정·템플릿 링크한다.
-# 실측 진단(Discovered hosts 0 = 자동등록 미사용)을 메우는 "손등록 0" 구현.
-# onboard.yml 과 같은 Zabbix API 방식(httpapi). 모듈 파라미터는 community.zabbix 공식 문서 확인.
-# 상태 변경(서버 설정) → 사용자가 실행. 토큰은 env ZABBIX_API_TOKEN.
+# 서버측 autoregistration 액션 (deploy_agents.yml 의 HostMetadata 짝). 근거는 DEPLOY_GUIDE.md.
 - name: Autoregistration action (3-agent bundle)
   hosts: zabbix
   gather_facts: false
   vars:
     ansible_zabbix_auth_key: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
     host_metadata: "linux-3agent-bundle"   # deploy_agents.yml 의 HostMetadata 와 일치해야 함
-    autoreg_group: "Discovered hosts"       # 배정 그룹 (필요 시 전용 그룹으로 변경)
+    autoreg_group: "Discovered hosts"
     autoreg_templates:
-      - "Linux by Zabbix agent"             # 표준 Linux 템플릿 (agent2 활성 체크)
+      - "Linux by Zabbix agent"
   tasks:
     - name: 3종 번들 자동등록 액션 생성
       community.zabbix.zabbix_action:
