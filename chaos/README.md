@@ -11,6 +11,7 @@
 - **`ssh_bruteforce.sh`** — 노드의 22번 포트로 접근하는 외부 공격 시뮬이므로, **노드와 같은 사설망 안의 호스트**(예: 관측 코어 VM)에서 대상 IP를 인자로 실행합니다.
 - **`cpu_stress.sh`** — 노드 자신의 CPU를 태우는 것이므로, **SSH로 그 노드에 로그인해 실행**합니다. 작업자 PC에서 SSH 별칭으로 원격 실행하거나(`cpu_stress.sh node1`), 노드에서 직접 실행합니다.
 - **`repl_lag.sh`** — slave DB 복제를 다루므로, **관측 코어 VM의 `lab/` 디렉토리**(docker compose 접근)에서 실행합니다.
+- **`repl_lag_contention.sh`** — 슬레이브 VM(vm-target-002)의 디스크 I/O를 포화시키므로, **그 슬레이브 VM에서 직접** 실행합니다.
 - **`error_burst.sh`** — 노드 로그에 직접 쓰므로, **감시 노드에서 직접** 실행합니다.
 
 ## 스크립트
@@ -41,6 +42,16 @@ master에 대량 쓰기를 걸어 slave 복제 지연을 만듭니다.
 - 원리: master 대량 쓰기 → slave 단일 SQL 스레드가 재생을 못 따라감 → `Slave_SQL_Running=Yes`를 유지한 채 `Seconds_Behind_Master`만 급등
 - 확인: Grafana `KINX 복제 품질` 대시보드 — 상태 Up(1) 유지, 지연(초) 급등
 - 용도: 메트릭 깊이 1축(상태만 보면 정상, 지연을 봐야 밀림이 보임)
+
+### `repl_lag_contention.sh` — 복제 지연(자원 경합, 데모 C)
+
+슬레이브 VM의 디스크 I/O를 백업성 부하로 포화시켜 복제가 밀리게 합니다. `repl_lag.sh`(master 대량 쓰기)와 달리 **원인이 자원 경합**이라, 데모 C의 "복제 고장인가 자원 경합인가" 재프레이밍의 소재입니다.
+
+- 사용: `DURATION=180 MASTER_HOST=192.168.20.26 DEMO_WRITER_USER=... DEMO_WRITER_PASSWORD=... ./repl_lag_contention.sh`
+- 실행 위치: 슬레이브 VM(vm-target-002). 사전 구축은 `lab/mariadb/REPL_VM_GUIDE.md`
+- 원리: syslog 백업 마커(Loki 교차신호) + 디스크 I/O 포화(대용량 쓰기·로컬 덤프) + master 가벼운 쓰기(복제 스트림) → iowait↑ + `Seconds_Behind_Master`↑ 가 같은 호스트·시간창에
+- 확인: Zabbix(지연·iowait 급등) + Loki(백업 로그) + Wazuh(경보 없음=침해 배제) → 봇이 1개 인시던트로 병합
+- 용도: 데모 C(AI 트리아지·인시던트 병합) 핵심 시나리오
 
 ### `error_burst.sh` — 오류율(로그 기반) 급등
 

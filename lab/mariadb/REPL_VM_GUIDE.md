@@ -1,0 +1,107 @@
+# 데모 C 복제 슬레이브(vm-target-002) — 구축·chaos 가이드
+
+## 무엇을 만드나 / 왜 이 구조인가
+
+데모 C 시나리오는 **"복제 지연: DB 고장인가 자원 경합인가"**다. 이를 실측하려면 별도 VM
+(vm-target-002)에 **실제 MariaDB 슬레이브**를 세우고, 그 슬레이브의 디스크 I/O를 백업성
+부하로 포화시켜 **복제가 밀리는(Seconds_Behind_Master↑) 장면**을 만든다. 복제를 끊는 게
+아니라 **자원을 굶겨** 밀리게 하는 것이 핵심 — 그래야 봇이 "복제 고장 아님, 자원 경합"이라고
+재프레이밍하는 시연이 성립한다.
+
+기존 `setup-slave.sh`/`repl_lag.sh`는 **docker 랩 컨테이너(mariadb/mariadb-slave) 전용**이고
+지연 원인도 "master 대량 쓰기"라 이 시나리오와 다르다. 이 문서의 스크립트 3종은 **별도 VM +
+자원 경합** 버전이다.
+
+- master = docker-core 의 `kinx-mariadb`(server-id=1, log-bin, GTID). 사설 IP 192.0.2.10.
+- slave = vm-target-002(192.0.2.16, node2). MariaDB 10.11(master 와 버전 일치).
+- 복제 대상 = 작은 전용 DB `demo_repl`(zabbix DB 전체 복제 금지 — 슬레이브 비대·history 부담).
+
+## 포트 / 보안그룹 (질문 답)
+
+새로 열어야 하는 것은 두 개뿐이다.
+
+| 방향 | 포트 | 어디에 | 이유 |
+|---|---|---|---|
+| 인바운드 | **10050/tcp** | vm-target-002 SG (소스=Zabbix 서버 192.0.2.10 또는 서브넷) | Zabbix 서버가 agent 를 **passive 폴링**. 표준 Linux 템플릿 아이템에 필요 |
+| 인바운드 | **3306/tcp** | **core 호스트 SG** (소스=192.0.2.16) | 슬레이브가 master 로 복제 연결 |
+
+나머지는 **아웃바운드**라 IXcloud(OpenStack) 기본 egress 허용으로 대개 손댈 것 없다. vm-target-002
+가 **나가는** 방향(목적지는 이미 열려 있음 — node1 이 쓰는 포트들):
+`10051`(→Zabbix active·자동등록), `3100`(→Loki push), `1514/1515`(→Wazuh manager), `3306`(→master).
+
+주의: **10051·3306 을 vm-target-002 인바운드로 열 필요 없다.** 10051 은 서버 쪽 인바운드,
+3306 은 슬레이브가 나가는 연결이라 master(core) 쪽 인바운드다. core 호스트는 **공인 IP도
+가지므로** master 3306 은 반드시 사설 IP 에만 바인딩한다(아래 §1).
+
+## 1. master 노출 (core 호스트, 안전 바인딩)
+
+`lab/.env` 에 사설 IP 만 노출하도록 설정하고 master 를 재적용한다.
+
+```
+MASTER_BIND_IP=<master 사설 IP>   # 사설 IP 만. core 호스트의 공인 IP 절대 금지
+DEMO_REPL_DB=demo_repl
+DEMO_WRITER_USER=demowriter
+DEMO_WRITER_PASSWORD=<랩 임의 비번>
+```
+```bash
+cd lab && docker compose up -d mariadb    # 3306 이 192.0.2.10 에만 바인딩됨
+```
+compose 기본값은 `127.0.0.1:3306`(비노출)이라, MASTER_BIND_IP 를 안 채우면 외부에서 못 붙는다.
+
+## 2. master 준비 + 스냅샷 (core 호스트)
+
+```bash
+cd lab && ./mariadb/prep-master-for-vm-slave.sh
+scp /tmp/kinx_demo_dump.sql node2:/tmp/
+```
+`demo_repl` DB·`load_gen` 테이블·복제 계정(`repl`)·쓰기 계정(`demowriter`)을 멱등 생성하고,
+GTID 스냅샷을 덤프한다.
+
+## 3. 슬레이브 구축 (vm-target-002)
+
+먼저 3종 에이전트를 배포(`ansible/deploy_agents.yml`, DEPLOY_GUIDE)한 뒤:
+
+```bash
+ssh node2
+export MASTER_HOST=192.0.2.10
+export REPLICATION_USER=repl REPLICATION_PASSWORD=<lab .env 값>
+export DEMO_REPL_DB=demo_repl
+# lab/mariadb/setup-slave-vm.sh 를 VM 으로 복사해 실행
+bash setup-slave-vm.sh
+```
+MariaDB 10.11 설치(master 버전 일치), server-id=10·GTID 설정, 스냅샷 적재, `CHANGE MASTER`
+→ `START SLAVE`. 마지막에 IO=Yes/SQL=Yes 확인. 표준 MySQL 템플릿이 붙으면
+`mysql.seconds_behind_master`(초) 아이템으로 지연이 자동 감시된다(공식 템플릿 기본).
+
+## 4. chaos — 자원 경합 주입 (vm-target-002)
+
+```bash
+ssh node2
+export MASTER_HOST=192.0.2.10
+export DEMO_REPL_DB=demo_repl DEMO_WRITER_USER=demowriter DEMO_WRITER_PASSWORD=<값>
+DURATION=180 bash repl_lag_contention.sh
+```
+동작: ① syslog 에 "backup job started" 마커(Alloy→Loki 교차신호) ② 디스크 I/O 포화(대용량
+쓰기 + 로컬 덤프 반복) ③ master 에 가벼운 연속 쓰기(복제 스트림 유지). 결과: iowait↑ +
+Seconds_Behind_Master↑ 가 같은 호스트·같은 시간창에 = 봇 인시던트 병합의 입력.
+
+관측 확인:
+- Zabbix: `mysql.seconds_behind_master` 급등 + `system.cpu.util[,iowait]` 급등(같은 호스트).
+- Loki: `{host="vm-target-002.novalocal"}` 에 `kinx-chaos backup job started` 로그.
+- Wazuh: 관련 경보 없음 = 침해 배제(정직한 조연).
+- 봇: 세 신호를 1개 인시던트로 병합 → "복제 고장 아님, 자원 경합, 복제 리셋 금지" 회신.
+
+## 5. 트러블슈팅
+
+- **슬레이브 IO=No / connect 실패**: core SG 인바운드 3306(소스 192.0.2.16) 누락, 또는
+  master 가 `127.0.0.1` 바인딩(§1 MASTER_BIND_IP 미설정). `mysql -h 192.0.2.10 -urepl -p`
+  로 도달 확인.
+- **Duplicate entry / GTID 오류**: 스냅샷 GTID 미설정. setup-slave-vm.sh 가 덤프의
+  `gtid_slave_pos` 를 추출해 `SET GLOBAL` 하므로, 덤프가 `--gtid --master-data=2` 로 떠졌는지
+  확인(prep 스크립트가 처리).
+- **버전 스큐**: Rocky 9 기본 MariaDB 는 10.5 라 10.11 master 와 복제 시 문제 소지. 스크립트가
+  mariadb.org 저장소로 10.11 을 설치해 일치시킨다.
+- **lag 가 안 오름**: I/O 워커 수(`IO_WORKERS`)·지속(`DURATION`) 상향, 또는 master 쓰기가
+  실제로 도달하는지(demowriter 계정·3306) 확인. 슬레이브 디스크가 너무 빠르면 경합이 약함.
+- **에이전트 이름 불일치로 봇 logs:0**: 이 VM 은 deploy_agents.yml 로 FQDN 정규화되어 매핑
+  불필요(node1 과 다름). `hostname -f` = Zabbix Hostname = Loki host 라벨 = Wazuh agent.name.

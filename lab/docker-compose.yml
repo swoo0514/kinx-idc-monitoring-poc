@@ -23,6 +23,9 @@ services:
       MARIADB_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - mariadb_data:/var/lib/mysql
+    # 복제용(데모 C vm-target-002). 기본 localhost=비노출. .env MASTER_BIND_IP=사설IP 로만 노출(공인 금지)
+    ports:
+      - "${MASTER_BIND_IP:-127.0.0.1}:3306:3306"
     networks:
       - lab_net
     healthcheck:
