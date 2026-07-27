@@ -1,6 +1,7 @@
-"""컨텍스트 수집기 — Zabbix API 5종 병렬(읽기 전용 `.get`만). 상세는 GATEWAY_GUIDE.md §9.
+"""컨텍스트 수집기 — Zabbix(읽기전용 `.get`) + Loki 로그 + Wazuh 경보. 상세는 GATEWAY_GUIDE §9.
 
-환경변수: ZABBIX_URL, ZABBIX_TOKEN (조회 전용 계정).
+환경변수: ZABBIX_URL·ZABBIX_TOKEN(필수) / LOKI_URL·WAZUH_INDEXER_URL·WAZUH_INDEXER_USER·
+WAZUH_INDEXER_PASSWORD(선택 — 없으면 해당 소스 생략, 열화 진행).
 """
 
 import asyncio
@@ -14,6 +15,12 @@ from . import prejudge
 HISTORY_WINDOW_S = 3600
 HISTORY_LIMIT = 20
 TIMEOUT_S = 5   # 콜당 — 수집이 30초 예산을 안 갉게
+
+# 인시던트 시간창 — 로그·보안은 이 창에서만 (병합 대상 신호 정렬용)
+CORR_WINDOW_S = 900   # 15분
+LOKI_LIMIT = 40
+LOKI_LINE_MAX = 300   # 라인당 최대 문자 (토큰 억제)
+WAZUH_LIMIT = 20
 
 
 class ZabbixClient:
@@ -66,14 +73,79 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
                 "selectHostGroups": ["name"], "selectInterfaces": ["ip", "dns"]})
             host = got[0] if got else {}
 
+    # 병합용 교차 소스 — 호스트 식별자로 Loki 로그 + Wazuh 경보 (같은 시간창)
+    host_label = host.get("host") or (hosts[0].get("host") if hosts else "")
+    logs, security = await asyncio.gather(
+        _loki_logs(host_label, now),
+        _wazuh_alerts(host_label, now),
+    )
+
     past_clocks = [int(e["clock"]) for e in past if e.get("eventid") != str(event_id)]
     return {
         "event": cur_event[0] if cur_event else {},
         "trigger": trigger[0] if trigger else {},
         "host": host,
         "metrics": metrics,
+        "logs": logs,            # Loki (Alloy) — 백업/앱 로그 등
+        "security": security,    # Wazuh Indexer — 침해·변경 경보 (없으면 [] = 배제 신호)
         "prejudge": prejudge.judge(past_clocks, now=now),
     }
+
+
+async def _loki_logs(host_label: str, now: int) -> list:
+    """Loki 최근 로그. LOKI_URL 없거나 실패 시 [] (열화). 호스트 라벨은 FQDN 정규화 전제."""
+    url = os.environ.get("LOKI_URL", "").rstrip("/")
+    if not url or not host_label:
+        return []
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{url}/loki/api/v1/query_range", params={
+                "query": '{host=~"%s.*"}' % host_label,   # node1 vs node1.fqdn 관용
+                "start": str((now - CORR_WINDOW_S) * 1_000_000_000),
+                "end": str(now * 1_000_000_000),
+                "limit": LOKI_LIMIT, "direction": "backward"}, timeout=TIMEOUT_S)
+            r.raise_for_status()
+            out = []
+            for stream in r.json().get("data", {}).get("result", []):
+                for _ts, line in stream.get("values", []):
+                    out.append(line[:LOKI_LINE_MAX])
+            return out[:LOKI_LIMIT]
+    except Exception:
+        return []
+
+
+async def _wazuh_alerts(agent_name: str, now: int) -> list:
+    """Wazuh Indexer(OpenSearch) 최근 경보. 미설정·실패 시 [] (열화 = 침해 배제 신호로 해석)."""
+    url = os.environ.get("WAZUH_INDEXER_URL", "").rstrip("/")
+    user = os.environ.get("WAZUH_INDEXER_USER", "")
+    pw = os.environ.get("WAZUH_INDEXER_PASSWORD", "")
+    if not url or not agent_name:
+        return []
+    body = {
+        "size": WAZUH_LIMIT,
+        "sort": [{"@timestamp": {"order": "desc"}}],
+        "query": {"bool": {"must": [
+            {"wildcard": {"agent.name": f"*{agent_name}*"}},
+            {"range": {"@timestamp": {"gte": f"now-{CORR_WINDOW_S // 60}m"}}},
+        ]}},
+        "_source": ["@timestamp", "rule.level", "rule.description", "agent.name"],
+    }
+    try:
+        # 랩 Wazuh Indexer는 자체서명 TLS → verify=False (프로덕션은 사내 CA). basic auth.
+        async with httpx.AsyncClient(verify=False) as client:
+            r = await client.post(f"{url}/wazuh-alerts-*/_search",
+                                  json=body, auth=(user, pw), timeout=TIMEOUT_S)
+            r.raise_for_status()
+            out = []
+            for h in r.json().get("hits", {}).get("hits", []):
+                src = h.get("_source", {})
+                rule = src.get("rule", {}) or {}
+                out.append({"level": rule.get("level"),
+                            "desc": rule.get("description"),
+                            "ts": src.get("@timestamp")})
+            return out
+    except Exception:
+        return []
 
 
 async def _metrics_trend(zbx: ZabbixClient, client: httpx.AsyncClient,

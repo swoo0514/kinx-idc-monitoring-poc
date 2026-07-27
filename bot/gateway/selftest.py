@@ -98,17 +98,22 @@ def main():
         "trigger": {"description": "d", "expression": "last(/lab-web01/key)>90"},
         "host": {"host": "lab-web01", "interfaces": [{"ip": "192.0.2.5"}],
                  "hostgroups": [{"name": "Customer-A"}]},
-        "metrics": [], "prejudge": {"verdict": "신규", "statement": "s"},
+        "metrics": [],
+        "logs": ["lab-web01 sshd: login from 192.0.2.9 user admin"],   # Loki 라인
+        "security": [{"level": 10, "desc": "brute force on lab-web01", "ts": "t"}],
+        "prejudge": {"verdict": "신규", "statement": "s"},
         "secret_field": "MUST-NOT-LEAK",   # 화이트리스트 밖 필드
     }
     masked = masking.build_llm_context(ctx, "SEV2", mk)
     blob = json.dumps(masked, ensure_ascii=False)
     assert "lab-web01" not in blob, "hostname leaked"
     assert "192.0.2.5" not in blob, "ip leaked"
+    assert "192.0.2.9" not in blob, "log-line ip leaked"      # 로그 라인 IP 마스킹
     assert "Customer-A" not in blob, "customer group leaked"
     assert "MUST-NOT-LEAK" not in blob, "non-whitelisted field leaked"
+    assert masked["logs"] and masked["security"], "logs/security dropped"
     assert mk.unmask(mk.mask("lab-web01 at 192.0.2.5")) == "lab-web01 at 192.0.2.5"
-    masking_checks = 5
+    masking_checks = 7
 
     # 열화 모드 — LLM 어댑터 전멸 시 선판정만으로 회신 (외부 호출 0)
     for k in ("ANTHROPIC_API_KEY", "OLLAMA_URL"):

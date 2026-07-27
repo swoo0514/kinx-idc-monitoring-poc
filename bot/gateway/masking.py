@@ -76,6 +76,11 @@ def build_llm_context(context: dict, sev: str, masker: Masker) -> dict:
             }
             for it in context.get("metrics", []) or []
         ],
+        "logs": [m(line) for line in (context.get("logs") or [])],   # Loki — 라인 내 IP·호스트 마스킹
+        "security": [
+            {"level": s.get("level"), "desc": m(s.get("desc")), "ts": s.get("ts")}
+            for s in (context.get("security") or [])
+        ],
         "prejudge": {
             "verdict": (context.get("prejudge") or {}).get("verdict"),
             "statement": (context.get("prejudge") or {}).get("statement"),

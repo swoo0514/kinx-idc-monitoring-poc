@@ -118,6 +118,16 @@ Administration → Media types → Create: type=**Webhook**, script=`zabbix_medi
 ## 9. 컨텍스트 수집기 + 만성/신규 선판정 (`collector.py` / `prejudge.py`)
 
 triage 경로가 LLM을 부르기 전에 재료를 모으고 결정적 판정을 끝내는 계층.
+**2026-07-27: Loki 로그 + Wazuh 경보 조회 추가 — 봇이 세 시스템을 다 읽어 인시던트 병합.**
+
+### 교차 소스 (인시던트 병합용, 2026-07-27 신설)
+- **Loki**: `LOKI_URL` 설정 시 `/loki/api/v1/query_range`로 `{host=~"<host>.*"}` 최근 15분
+  로그 40줄(라인 300자 제한). 호스트 라벨은 FQDN 정규화 전제(demo A). 미설정·실패 시 [] (열화).
+- **Wazuh**: `WAZUH_INDEXER_URL`(+USER/PASSWORD) 설정 시 OpenSearch `wazuh-alerts-*/_search`로
+  `agent.name` 최근 15분 경보 20건. 랩은 자체서명 TLS라 `verify=False`(프로덕션은 사내 CA).
+  미설정·실패 시 [] = **"침해 배제" 신호로 해석**(없음도 정보).
+- 두 소스 모두 **선택적** — 없으면 Zabbix만으로 열화 진행(하위 호환). 로그 원문은 `masking.py`가
+  라인 단위로 가명화 후 전송(전송 명세표 §3 이행).
 
 ### Zabbix API 5종 (전부 읽기 전용 `.get` — 코드 가드로 강제)
 
