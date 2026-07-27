@@ -4,6 +4,7 @@ import hmac
 import logging
 import os
 import time
+from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -46,7 +47,7 @@ class ZabbixEvent(BaseModel):
     trigger_id: str = ""   # collector 조회 키. 없으면 수집 축소
     event_value: int = 1   # 1=problem, 0=recovery
     event_name: str = ""
-    nseverity: int = Field(ge=0, le=5)
+    nseverity: Optional[int] = None   # 매크로 미해석 시 null 허용 → 핸들러가 안전값 처리(422 회피)
     host: str = ""
     tags: list = []
     clock: str = ""
@@ -75,7 +76,12 @@ def webhook_zabbix(ev: ZabbixEvent, bg: BackgroundTasks, x_gateway_token: str = 
     if _duplicate((ev.source, ev.event_id, ev.event_value)):
         return {"status": "duplicate", "event_id": ev.event_id}
 
-    sev = severity.normalize(ev.source, ev.nseverity)
+    ns = ev.nseverity
+    if ns is None:
+        log.warning("event=%s nseverity 누락 — 미디어타입 {EVENT.NSEVERITY} 파라미터 확인. "
+                    "안전값(triage)로 처리", ev.event_id)
+        ns = 4   # 미상 → High 취급(SEV2, triage). severity.normalize 의 SEV2 페일세이프와 정합
+    sev = severity.normalize(ev.source, ns)
     decision = tag_router.decide(sev, ev.tags, ev.event_value)
     _dispatch(bg, ev.source, ev.event_id, ev.trigger_id, ev.host, ev.event_name, sev, decision)
     return {"status": "accepted", "sev": sev, **decision, "event_id": ev.event_id}
