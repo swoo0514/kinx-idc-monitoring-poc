@@ -77,28 +77,16 @@ ansible-playbook -i inventory.ini autoregister_action.yml   # ZABBIX_API_TOKEN e
 돌리면 접속 즉시 자동 등록·템플릿 링크된다. (액션 조건/오퍼레이션 파라미터는 community.zabbix
 zabbix_action 공식 문서 확인.)
 
-## DB 타깃 복제 지연 감시 (setup_mysql_monitoring.yml)
+## DB 복제 지연 감시 배선 — 랩은 수동, 자동화는 로드맵
 
-데모 C 의 핵심 지표(`mysql.seconds_behind_master`)를 Zabbix 가 보게 하는 배선. 손으로 SSH 들어가
-설정하지 않고 플레이북으로 코드화한다(agent 측). 두 작업:
+데모 C 지표(`mysql.seconds_behind_master`)를 Zabbix 가 보게 하는 배선(모니터링 계정 + agent2
+mysql 세션 + 템플릿 링크)은 **랩 1대·1회라 수동으로 한다** — Google SRE toil 기준상 "처음/두 번째
+하는 일은 toil 이 아니며 자동화 투자를 정당화하지 못한다". 절차는 lab/mariadb/REPL_VM_GUIDE.md.
 
-1. **모니터링 계정** — 타깃 로컬 MariaDB 에 `zbx_monitor`@'%' 생성 + 공식 템플릿 요구 권한
-   (`REPLICATION CLIENT, SLAVE MONITOR, PROCESS, SHOW DATABASES, SHOW VIEW`. `SLAVE MONITOR` 는
-   MariaDB 10.5.9+ 의 `SHOW SLAVE STATUS` 권한).
-2. **agent2 MySQL 플러그인 세션** — `/etc/zabbix/zabbix_agent2.d/mysql.conf` 에 명명 세션
-   (`Plugins.Mysql.Sessions.repl.Uri/User/Password`). 자격증명을 Zabbix DB 가 아닌 에이전트
-   설정에만 둔다.
-
-실행 (control 노드에서, 비번은 gitignored lab_vars.yml):
-```bash
-# lab_vars.yml 에 추가: mysql_monitor_password: "<랩 비번>"
-ansible-playbook -i inventory.local.ini -e @lab_vars.yml setup_mysql_monitoring.yml
-```
-
-**Zabbix 측 (서버 API — 현재 수동 1회 or 코드화 선택)**: 호스트에 "MySQL by Zabbix agent 2"
-템플릿 링크 + 매크로 `{$MYSQL.DSN}=repl`(세션명 일치) + 데모용 `{$MYSQL.REPL_LAG.MAX.WARN}=60`
-(기본 30m 은 높음). `community.zabbix.zabbix_host` 로 자동화 가능하나 컬렉션 버전 이슈 여지가
-있어, 데모에선 UI 1회가 확실. 링크 후 Replication LLD 가 slave 를 발견해 지연 아이템·트리거 생성.
+자동화 가치는 **반복 맥락에서만** 생긴다: 사내 동질 DB 군(서비스 slave 12대) 온보딩 표준. 그때
+만든다면 raw command 가 아니라 idempotent 전용 모듈(`community.mysql.mysql_user`) + 비밀은
+Ansible Vault 가 베스트 프랙티스. MSP 이질 고객 DB 는 매니저 프록시 Q3 판정과 같은 이유(환경
+제각각=자동화 저효용)로 파라미터화 출발점까지만. → 로드맵(현재 스코프 밖).
 
 ## 아직 남은 것 (다음)
 - **wazuh 재실행 멱등 한계**: 매니저 주소는 최초 설치 시에만 주입됨. 재배포로 매니저를 바꾸려면
