@@ -74,7 +74,8 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
             host = got[0] if got else {}
 
     # 병합용 교차 소스 — 호스트 식별자로 Loki 로그 + Wazuh 경보 (같은 시간창)
-    host_label = host.get("host") or (hosts[0].get("host") if hosts else "")
+    zbx_host = host.get("host") or (hosts[0].get("host") if hosts else "")
+    host_label = _resolve_label(zbx_host, host)   # Zabbix명 → Loki/Wazuh FQDN 라벨
     logs, security = await asyncio.gather(
         _loki_logs(host_label, now),
         _wazuh_alerts(host_label, now),
@@ -92,15 +93,32 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
     }
 
 
+def _resolve_label(zbx_host: str, host_obj: dict) -> str:
+    """Zabbix 호스트명 → Loki/Wazuh 라벨. 세 시스템이 이름을 달리 쓰고 공유 키가 없어 필요.
+    우선순위: HOST_LABEL_MAP(명시) → 인터페이스 dns(FQDN이면 자동) → Zabbix 호스트명.
+    프로덕션은 온보딩에서 FQDN 정규화(STRATEGY §4-7 ⭐) — 이 맵은 스톱갭."""
+    mapping = {}
+    for pair in os.environ.get("HOST_LABEL_MAP", "").split(","):
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            mapping[k.strip()] = v.strip()
+    if zbx_host in mapping:
+        return mapping[zbx_host]
+    for iface in (host_obj.get("interfaces") or []):
+        if iface.get("dns"):
+            return iface["dns"]
+    return zbx_host
+
+
 async def _loki_logs(host_label: str, now: int) -> list:
-    """Loki 최근 로그. LOKI_URL 없거나 실패 시 [] (열화). 호스트 라벨은 FQDN 정규화 전제."""
+    """Loki 최근 로그. LOKI_URL 없거나 실패 시 [] (열화)."""
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url or not host_label:
         return []
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(f"{url}/loki/api/v1/query_range", params={
-                "query": '{host=~"%s.*"}' % host_label,   # node1 vs node1.fqdn 관용
+                "query": '{host="%s"}' % host_label,   # 라벨 정확 일치 (맵이 FQDN 제공)
                 "start": str((now - CORR_WINDOW_S) * 1_000_000_000),
                 "end": str(now * 1_000_000_000),
                 "limit": LOKI_LIMIT, "direction": "backward"}, timeout=TIMEOUT_S)
