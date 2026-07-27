@@ -122,11 +122,106 @@ def main():
     assert reply["degraded"] and reply["provider"] == "none" and "신규" in reply["text"], reply
     degraded_checks = 1
 
+    incident_checks = _incident_checks()
+
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
-             + masking_checks + degraded_checks)
+             + masking_checks + degraded_checks + incident_checks)
     print(f"ALL OK ({total} checks)")
+
+
+def _incident_checks() -> int:
+    """인시던트 병합 — 순수 로직 + 비동기 버퍼(짧은 디바운스) + 마스킹 누수."""
+    import asyncio
+    import json
+    import os
+
+    from . import incident, llm, masking
+
+    # 분류
+    assert incident.classify("MySQL 복제 지연 512초") == "replication"
+    assert incident.classify("high iowait on data volume") == "cpu_io_pressure"
+    assert incident.classify("SSH 브루트포스 탐지") == "auth_security"
+    assert incident.classify("무슨무슨 알림") == "other"
+
+    # 브리지 — replication + cpu_io_pressure 는 같은 키, auth_security 는 분리
+    k_repl = incident.incident_key("h1", "replication")
+    k_io = incident.incident_key("h1", "cpu_io_pressure")
+    k_sec = incident.incident_key("h1", "auth_security")
+    assert k_repl == k_io, (k_repl, k_io)
+    assert k_sec != k_repl
+    assert incident.incident_key("h2", "replication") != k_repl   # 호스트 다르면 분리
+
+    # Incident 집계
+    def _a(cls, sev="SEV2", host="h1", t=0.0, trig="1"):
+        return incident.Alert(source="zabbix-internal", event_id="e", trigger_id=trig,
+                              host=host, alert_name=cls, sev=sev, incident_class=cls, recv=t)
+    inc = incident.Incident(key=k_repl, host="h1", alerts=[_a("replication")],
+                            opened_at=0.0, last_at=0.0)
+    inc.add(_a("cpu_io_pressure", sev="SEV1", t=3.0), 20)
+    assert inc.is_merged() and inc.dominant_sev() == "SEV1"
+    assert inc.classes() == {"replication", "cpu_io_pressure"}
+    assert len(inc.fingerprint()) == 12
+    assert "알려진 인과 조합" in inc.merge_reason()
+    capped = incident.Incident(key=k_repl, host="h1", alerts=[_a("replication")],
+                               opened_at=0.0, last_at=0.0)
+    assert capped.add(_a("replication"), 1) is False   # max_alerts 캡
+
+    # 비동기 버퍼 — 짧은 디바운스로 병합/분리/멀티호스트 검증
+    async def _run():
+        closed = []
+        mgr = incident.IncidentManager(
+            on_close=lambda i: closed.append(i) or asyncio.sleep(0),
+            debounce_s=0.05, max_window_s=5, priority_debounce_s=0.02, max_alerts=20)
+        mono = time.monotonic()
+        # h1: replication + iowait + cpu → 1건 (브리지)
+        await mgr.submit(_a("replication", host="h1", t=mono))
+        await mgr.submit(_a("cpu_io_pressure", host="h1", t=mono))
+        await mgr.submit(_a("cpu_io_pressure", host="h1", t=mono))
+        # h1: 보안 → 별개 인시던트
+        await mgr.submit(_a("auth_security", host="h1", t=mono))
+        # h2: replication → 별개 (호스트 다름)
+        await mgr.submit(_a("replication", host="h2", t=mono))
+        await asyncio.sleep(0.2)   # 디바운스 창 마감 대기
+        return closed
+
+    closed = asyncio.run(_run())
+    assert len(closed) == 3, [len(c.alerts) for c in closed]
+    resource = [c for c in closed if c.classes() & {"replication", "cpu_io_pressure"}
+                and c.host == "h1"][0]
+    assert len(resource.alerts) == 3, resource.alerts   # 3건이 1개로 병합
+    assert any(c.classes() == {"auth_security"} for c in closed)
+    assert any(c.host == "h2" for c in closed)
+
+    # 마스킹 — 인시던트 형태도 원문 식별자 누수 없음
+    mk = masking.Masker()
+    inc_ctx = {
+        "incident": {"host": "db-prod-01", "classes": ["replication", "cpu_io_pressure"],
+                     "alert_count": 2, "merge_reason": "동일 호스트 · 2건", "dominant_sev": "SEV2"},
+        "host": {"host": "db-prod-01", "interfaces": [{"ip": "192.0.2.7"}],
+                 "hostgroups": [{"name": "Customer-B"}]},
+        "alerts": [{"name": "복제 지연 on db-prod-01", "source": "zabbix-internal",
+                    "sev": "SEV2", "class": "replication",
+                    "trigger": {"description": "repl", "expression": "last(/db-prod-01/k)>60"},
+                    "metrics": [{"key": "mysql.repl", "units": "s", "lastvalue": "512"}],
+                    "prejudge": {"verdict": "신규", "statement": "s"}}],
+        "logs": ["db-prod-01 mysqld: replica lag from 192.0.2.9"],
+        "security": [],
+    }
+    masked = masking.build_llm_context(inc_ctx, "SEV2", mk)
+    blob = json.dumps(masked, ensure_ascii=False)
+    assert "db-prod-01" not in blob, "incident hostname leaked"
+    assert "192.0.2.7" not in blob and "192.0.2.9" not in blob, "incident ip leaked"
+    assert "Customer-B" not in blob, "incident group leaked"
+    assert masked["alerts"] and masked["alerts"][0]["metrics"], "incident alerts dropped"
+
+    # 열화 — 인시던트 컨텍스트에서도 코드 판정만으로 회신
+    for k in ("ANTHROPIC_API_KEY", "OLLAMA_URL"):
+        os.environ.pop(k, None)
+    r = llm.triage_reply(inc_ctx, "SEV2")
+    assert r["degraded"] and "병합" in r["text"], r
+    return 20
 
 
 if __name__ == "__main__":

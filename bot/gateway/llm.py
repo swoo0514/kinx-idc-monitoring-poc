@@ -82,8 +82,13 @@ class OllamaAdapter:
 
 
 def build_user_prompt(masked_ctx: dict) -> str:
-    return ("다음 알림 컨텍스트로 초동 분석을 회신하라.\n\n"
-            + json.dumps(masked_ctx, ensure_ascii=False, indent=1))
+    if "alerts" in masked_ctx and "incident" in masked_ctx:
+        head = ("다음은 코드가 하나의 인시던트로 병합한 복수 알림이다. 병합 근거는 "
+                "incident.merge_reason 에 있다. 개별 장애가 아니라 한 사건으로 보고, 축 간 "
+                "인과를 추정해 초동 분석을 회신하라.\n\n")
+    else:
+        head = "다음 알림 컨텍스트로 초동 분석을 회신하라.\n\n"
+    return head + json.dumps(masked_ctx, ensure_ascii=False, indent=1)
 
 
 def triage_reply(context: dict, sev: str) -> dict:
@@ -103,9 +108,14 @@ def triage_reply(context: dict, sev: str) -> dict:
         except Exception as e:  # 타임아웃·429·529 포함 — 전부 다음 어댑터로 폴백
             log.warning("llm adapter %s failed: %s", adapter.name, e)
 
-    pj = context.get("prejudge") or {}
-    text = ("(LLM 분석 불가 — 코드 판정만 회신)\n"
-            f"판정: {pj.get('verdict', '?')} — {pj.get('statement', '')}")
+    inc = context.get("incident")
+    if inc:
+        text = ("(LLM 분석 불가 — 코드 판정만 회신)\n"
+                f"{inc.get('alert_count', '?')}건 병합 사건 — {inc.get('merge_reason', '')}")
+    else:
+        pj = context.get("prejudge") or {}
+        text = ("(LLM 분석 불가 — 코드 판정만 회신)\n"
+                f"판정: {pj.get('verdict', '?')} — {pj.get('statement', '')}")
     return {"text": text, "provider": "none",
             "elapsed_s": round(time.monotonic() - t0, 2), "degraded": True}
 

@@ -48,48 +48,122 @@ class ZabbixClient:
         return body["result"]
 
 
-async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> dict:
-    # ①현재이벤트 ②트리거정의 ③메트릭추이 ④동일트리거 이력(선판정용) 병렬, ⑤host는 후행
-    now = int(time.time())
-    async with httpx.AsyncClient() as client:
-        cur_event, trigger, metrics, past, = await asyncio.gather(
-            zbx.call(client, "event.get", {
-                "eventids": event_id, "selectTags": "extend", "output": "extend"}),
-            zbx.call(client, "trigger.get", {
-                "triggerids": trigger_id, "output": "extend",
-                "expandExpression": True, "selectHosts": ["hostid", "host", "name"]}),
-            _metrics_trend(zbx, client, trigger_id, now),
-            zbx.call(client, "event.get", {
-                "objectids": trigger_id, "source": 0, "object": 0, "value": 1,
-                "time_from": now - prejudge.WINDOW_S, "time_till": now,
-                "output": ["eventid", "clock"], "sortfield": "clock", "sortorder": "DESC",
-                "limit": 200}),
-        )
-        host = {}
-        hosts = (trigger[0].get("hosts") if trigger else None) or []
-        if hosts:
-            got = await zbx.call(client, "host.get", {
-                "hostids": hosts[0]["hostid"], "output": ["hostid", "host", "name", "status"],
-                "selectHostGroups": ["name"], "selectInterfaces": ["ip", "dns"]})
-            host = got[0] if got else {}
-
-    # 병합용 교차 소스 — 호스트 식별자로 Loki 로그 + Wazuh 경보 (같은 시간창)
-    zbx_host = host.get("host") or (hosts[0].get("host") if hosts else "")
-    host_label = _resolve_label(zbx_host, host)   # Zabbix명 → Loki/Wazuh FQDN 라벨
-    logs, security = await asyncio.gather(
-        _loki_logs(host_label, now),
-        _wazuh_alerts(host_label, now),
+async def _zabbix_alert_context(zbx: ZabbixClient, client: httpx.AsyncClient,
+                                event_id: str, trigger_id: str, now: int) -> dict:
+    """트리거 1건의 Zabbix 컨텍스트(이벤트·트리거·호스트·메트릭·선판정). 로그·보안 제외."""
+    cur_event, trigger, metrics, past = await asyncio.gather(
+        zbx.call(client, "event.get", {
+            "eventids": event_id, "selectTags": "extend", "output": "extend"}),
+        zbx.call(client, "trigger.get", {
+            "triggerids": trigger_id, "output": "extend",
+            "expandExpression": True, "selectHosts": ["hostid", "host", "name"]}),
+        _metrics_trend(zbx, client, trigger_id, now),
+        zbx.call(client, "event.get", {
+            "objectids": trigger_id, "source": 0, "object": 0, "value": 1,
+            "time_from": now - prejudge.WINDOW_S, "time_till": now,
+            "output": ["eventid", "clock"], "sortfield": "clock", "sortorder": "DESC",
+            "limit": 200}),
     )
-
+    host = {}
+    hosts = (trigger[0].get("hosts") if trigger else None) or []
+    if hosts:
+        got = await zbx.call(client, "host.get", {
+            "hostids": hosts[0]["hostid"], "output": ["hostid", "host", "name", "status"],
+            "selectHostGroups": ["name"], "selectInterfaces": ["ip", "dns"]})
+        host = got[0] if got else {}
+    if not host.get("host") and hosts:
+        host = {**host, "host": hosts[0].get("host", "")}
     past_clocks = [int(e["clock"]) for e in past if e.get("eventid") != str(event_id)]
     return {
         "event": cur_event[0] if cur_event else {},
         "trigger": trigger[0] if trigger else {},
         "host": host,
         "metrics": metrics,
+        "prejudge": prejudge.judge(past_clocks, now=now),
+    }
+
+
+async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> dict:
+    """단건 알림 컨텍스트 — Zabbix + Loki 로그 + Wazuh 경보 (같은 시간창)."""
+    now = int(time.time())
+    async with httpx.AsyncClient() as client:
+        base = await _zabbix_alert_context(zbx, client, event_id, trigger_id, now)
+
+    zbx_host = base["host"].get("host") or ""
+    host_label = _resolve_label(zbx_host, base["host"])   # Zabbix명 → Loki/Wazuh FQDN 라벨
+    logs, security = await asyncio.gather(
+        _loki_logs(host_label, now),
+        _wazuh_alerts(host_label, now),
+    )
+    return {
+        **base,
         "logs": logs,            # Loki (Alloy) — 백업/앱 로그 등
         "security": security,    # Wazuh Indexer — 침해·변경 경보 (없으면 [] = 배제 신호)
-        "prejudge": prejudge.judge(past_clocks, now=now),
+    }
+
+
+async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
+    """병합 인시던트 컨텍스트 — 알림별 Zabbix 조각 + 호스트 단위 로그·보안 1회.
+
+    incident.alerts 는 같은 호스트(키에 host 포함). Zabbix 알림은 트리거별로 병렬 수집하고,
+    Loki 로그·Wazuh 경보는 호스트 1회만 조회해 중복 호출을 막는다. trigger_id 없는 알림
+    (Wazuh 등)은 이름·심각도만 실어 보낸다.
+    """
+    now = int(time.time())
+    zbx_alerts = [a for a in incident.alerts if a.trigger_id]
+    per = []
+    if zbx_alerts:
+        async with httpx.AsyncClient() as client:
+            per = await asyncio.gather(*[
+                _zabbix_alert_context(zbx, client, a.event_id, a.trigger_id, now)
+                for a in zbx_alerts
+            ], return_exceptions=True)
+
+    host_obj = {}
+    for r in per:
+        if isinstance(r, dict) and (r.get("host") or {}).get("host"):
+            host_obj = r["host"]
+            break
+    zbx_host = host_obj.get("host") or incident.host
+    host_label = _resolve_label(zbx_host, host_obj) if host_obj else incident.host
+
+    logs, security = await asyncio.gather(
+        _loki_logs(host_label, now),
+        _wazuh_alerts(host_label, now),
+    )
+
+    alerts_ctx = []
+    for a, r in zip(zbx_alerts, per):
+        if not isinstance(r, dict):
+            alerts_ctx.append({"name": a.alert_name, "source": a.source, "sev": a.sev,
+                               "class": a.incident_class, "error": "collect_failed"})
+            continue
+        ev = r.get("event") or {}
+        alerts_ctx.append({
+            "name": ev.get("name") or a.alert_name,
+            "source": a.source, "sev": a.sev, "class": a.incident_class,
+            "trigger": r.get("trigger", {}),
+            "metrics": r.get("metrics", []),
+            "prejudge": r.get("prejudge", {}),
+        })
+    for a in incident.alerts:
+        if not a.trigger_id:   # Wazuh 등 트리거 없는 알림
+            alerts_ctx.append({"name": a.alert_name, "source": a.source, "sev": a.sev,
+                               "class": a.incident_class, "prejudge": {}})
+
+    return {
+        "incident": {
+            "host": zbx_host,
+            "classes": sorted(incident.classes()),
+            "alert_count": len(incident.alerts),
+            "merge_reason": incident.merge_reason(),
+            "fingerprint": incident.fingerprint(),
+            "dominant_sev": incident.dominant_sev(),
+        },
+        "host": host_obj,
+        "alerts": alerts_ctx,
+        "logs": logs,
+        "security": security,
     }
 
 

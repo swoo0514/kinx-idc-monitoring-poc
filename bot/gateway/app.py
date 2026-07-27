@@ -8,6 +8,7 @@ import time
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from . import incident
 from . import router as tag_router
 from . import severity
 from . import triage
@@ -16,6 +17,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("gateway")
 
 app = FastAPI(title="kinx-poc alert gateway", version="0.1.0")
+
+# triage 경로 알림은 (host, class) 버퍼에 모여 디바운스 창 마감 시 병합 트리아지 1회 (§14)
+_incidents = incident.IncidentManager(on_close=triage.run_incident)
 
 IDEMPOTENCY_TTL_S = 3600
 _seen: dict = {}  # (source, event_id, event_value) -> monotonic time. 프로덕션은 Redis (가이드 §10)
@@ -92,9 +96,13 @@ def webhook_wazuh(ev: WazuhEvent, bg: BackgroundTasks, x_gateway_token: str = He
 
 
 def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision):
-    # triage는 백그라운드로 — 웹훅은 즉시 200 (발송측 타임아웃 회피). remediate(n8n)는 데모 B.
+    # 웹훅은 즉시 200 (발송측 타임아웃 회피). triage는 인시던트 버퍼로, remediate(n8n)는 데모 B.
     route = decision["route"]
     log.info("event=%s source=%s host=%s sev=%s route=%s playbook=%s",
              event_id, source, host, sev, route, decision["playbook"])
     if route == "triage":
-        bg.add_task(triage.run, event_id, trigger_id, sev, host, alert_name)
+        alert = incident.Alert(
+            source=source, event_id=event_id, trigger_id=trigger_id, host=host,
+            alert_name=alert_name, sev=sev,
+            incident_class=incident.classify(alert_name), recv=time.monotonic())
+        bg.add_task(_incidents.submit, alert)

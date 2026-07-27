@@ -41,8 +41,20 @@ class Masker:
         return text
 
 
+def _register_host(host: dict, masker: Masker):
+    masker.register("host", host.get("host"))
+    masker.register("host", host.get("name"))
+    for iface in host.get("interfaces", []) or []:
+        masker.register("ip", iface.get("ip"))
+        masker.register("host", iface.get("dns"))
+    for g in host.get("hostgroups", []) or []:
+        masker.register("group", g.get("name"))
+
+
 def build_llm_context(context: dict, sev: str, masker: Masker) -> dict:
     """마스킹된 전송용 dict 생성. 이 함수가 화이트리스트 자체 — 없는 필드는 전송 안 됨."""
+    if "alerts" in context and "incident" in context:
+        return _build_incident_context(context, sev, masker)
     host = context.get("host", {}) or {}
     masker.register("host", host.get("host"))
     masker.register("host", host.get("name"))
@@ -85,4 +97,47 @@ def build_llm_context(context: dict, sev: str, masker: Masker) -> dict:
             "verdict": (context.get("prejudge") or {}).get("verdict"),
             "statement": (context.get("prejudge") or {}).get("statement"),
         },
+    }
+
+
+def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
+    """병합 인시던트 전송용 dict. 알림 배열 + 호스트 단위 로그·보안."""
+    host = context.get("host", {}) or {}
+    _register_host(host, masker)
+    m = masker.mask
+    inc = context.get("incident", {}) or {}
+
+    alerts = []
+    for a in context.get("alerts", []) or []:
+        trig = a.get("trigger", {}) or {}
+        pj = a.get("prejudge", {}) or {}
+        alerts.append({
+            "name": m(a.get("name")),
+            "source": a.get("source"),
+            "sev": a.get("sev"),
+            "class": a.get("class"),
+            "trigger_desc": m(trig.get("description")),
+            "trigger_expr": m(trig.get("expression")),
+            "metrics": [
+                {"key": m(it.get("key")), "units": it.get("units"),
+                 "lastvalue": it.get("lastvalue"), "recent": it.get("recent", [])}
+                for it in a.get("metrics", []) or []
+            ],
+            "prejudge": {"verdict": pj.get("verdict"), "statement": pj.get("statement")},
+        })
+
+    return {
+        "incident": {
+            "host": m(inc.get("host", "")),
+            "classes": inc.get("classes", []),
+            "alert_count": inc.get("alert_count"),
+            "merge_reason": inc.get("merge_reason"),
+            "dominant_sev": inc.get("dominant_sev", sev),
+        },
+        "alerts": alerts,
+        "logs": [m(line) for line in (context.get("logs") or [])],
+        "security": [
+            {"level": s.get("level"), "desc": m(s.get("desc")), "ts": s.get("ts")}
+            for s in (context.get("security") or [])
+        ],
     }

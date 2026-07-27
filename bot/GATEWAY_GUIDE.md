@@ -238,3 +238,65 @@ triage 경로의 분석 계층. 전송 규칙의 원본은 **private/docs/llm_da
 3. 조회 전용 계정 토큰을 `ZABBIX_TOKEN`으로, Slack 크리덴셜 설정.
 4. 장애 주입(chaos: 디스크 채움/error_burst) → 트리거 발화 → 미디어타입 → 게이트웨이 →
    Slack에 초동 분석 게시까지 실측. 스톱워치로 30초 확인(발표 리허설).
+
+## 14. 인시던트 병합 (`incident.py`)
+
+### 무엇을 푸는가
+
+봇의 기존 한계는 **알림 1건당 트리아지 1회**였다. 복제 지연 사건에서 복제 지연·iowait·CPU
+세 알림이 몇십 초 안에 들어오면, 봇은 세 번 따로 분석하고 Slack 스레드도 3개를 만든다 —
+"알림 요약기"에 머물고 **사건(incident) 단위 추론**을 못 한다. §14는 같은 호스트·같은
+시간창의 알림들을 코드가 하나의 인시던트로 묶고, 창이 닫히면 **통합 트리아지 1회**를
+돌린다. 이것이 모니터링 성숙도의 도약(단일 지표 경보 → 시스템 내 상관 → **시스템 간 상관**)
+이자 데모 C의 핵심이다. Wazuh 룰은 자기 데이터 안에서만 상관하지만, 이 병합은 Zabbix
+메트릭·Loki 로그·Wazuh 경보를 시간축에서 함께 본다.
+
+### 병합 키와 브리지 (`(host, incident_class)`)
+
+- **분류**: `classify(alert_name, item_key)` 가 알림을 `replication` / `cpu_io_pressure` /
+  `auth_security` / `disk_space` / `service_down` / `service_latency` / `network` / `other`
+  중 하나로 결정적 매핑(키워드 규칙). 값이 없으면 `other`.
+- **키**: `incident_key(host, class)` = `(host, bridge_id(class))`. 같은 키의 알림은 한 사건.
+- **브리지 룰**: 서로 다른 class라도 `BRIDGE_GROUPS` 조합이면 같은 키로 병합. 현재 조합은
+  `{replication, cpu_io_pressure}` — 복제 지연이 자원 경합(iowait/CPU)과 같은 사건일 수 있다는
+  인과 후보. `host`만으로 묶지 않고 class를 넣는 이유: 동일 호스트의 **서로 다른 사건**
+  (예: 복제 지연 vs 보안 브루트포스)이 한 창에 뭉치는 것을 막는다. `auth_security`는 브리지에
+  없어 항상 독립 인시던트 — Wazuh 보안 신호는 별도 사건으로 보는 정직한 분리.
+
+### 디바운스와 창 마감 (`IncidentManager`)
+
+- 첫 알림이 인시던트를 열고, 알림이 올 때마다 디바운스 타이머를 재설정한다. 창 마감 조건은
+  **마지막 알림 후 `debounce_s`(기본 90초) 무알림**, 또는 **`max_window_s`(기본 300초) 초과**.
+- **우선순위 우회**: dominant SEV1 이면 `priority_debounce_s`(기본 15초)로 짧게 대기 —
+  P1 성격 알림이 90초를 기다리지 않게.
+- **안전장치**: `max_alerts`(기본 20) 초과분은 버리고 창을 늘리지 않아 알림 폭주에도 마감됨.
+  `fingerprint()` = `(host, bridge, classes)` 해시로 재발 비교, `merge_reason()` = "동일
+  호스트 · Ns 관측창 · N건 · 유형 [...] · 알려진 인과 조합" 을 Slack·LLM 컨텍스트에 노출.
+
+### KPI 재정의 — "인시던트 확정 후 30초"
+
+병합은 "여러 알림이 도착할 시간"을 기다려야 하므로 "첫 알림 후 30초"와 상충한다. 그래서
+스톱워치 기준을 **"인시던트 확정(창 마감) 후 30초 내 통합 초동 분석 회신"** 으로 바꾼다.
+측정 대상을 알림에서 사건으로 옮긴 것(KPI 완화가 아니라 대상 교체) — 상관 시스템은 개별
+알림 시각이 아니라 그룹핑된 사건 단위로 다룬다.
+
+### 코드가 결정, LLM은 설명
+
+병합 여부·경계는 전부 코드(`incident.py`)가 결정한다. LLM은 이미 묶인 사건을 받아 축 간
+인과를 **설명**만 한다 — 만성/신규 선판정과 같은 환각 방지 원칙. 통합 트리아지는
+`triage.run_incident(incident)`: `collector.collect_incident_context`(알림별 Zabbix 조각 +
+호스트 단위 Loki·Wazuh 1회) → `llm.triage_reply`(인시던트 형태 감지, 병합 프롬프트) →
+`slack.post_triage`("N건이 1개 사건" 헤드라인). LLM·Slack 블로킹 호출은 `asyncio.to_thread`
+로 감싸 타이머 루프를 막지 않는다.
+
+### 배선 (`app.py`)
+
+triage 경로 알림은 `triage.run`을 직접 부르지 않고 `IncidentManager.submit(Alert)`로
+버퍼에 넣는다(모듈 전역 `_incidents`, `on_close=triage.run_incident`). 단건 알림도 N=1
+인시던트로 동일하게 흐른다. 튜닝 환경변수: `INCIDENT_DEBOUNCE_S` / `INCIDENT_MAX_WINDOW_S` /
+`INCIDENT_PRIORITY_DEBOUNCE_S` / `INCIDENT_MAX_ALERTS`.
+
+### 검증
+
+`python -m gateway.selftest` — 분류·브리지 키·집계·마스킹 누수는 순수 로직으로, 병합/분리/
+멀티호스트 동작은 짧은 디바운스(0.05s) 비동기 버퍼로 검증(2026-07-27, 62 checks 통과).
