@@ -121,5 +121,15 @@ Seconds_Behind_Master↑ 가 같은 호스트·같은 시간창에 = 봇 인시�
   선설치하도록 반영됨(구 버전 스크립트면 이 명령을 수동 실행).
 - **lag 가 안 오름**: I/O 워커 수(`IO_WORKERS`)·지속(`DURATION`) 상향, 또는 master 쓰기가
   실제로 도달하는지(demowriter 계정·3306) 확인. 슬레이브 디스크가 너무 빠르면 경합이 약함.
+- **`Access denied for user 'repl'`**: master 에 repl 계정이 예전(docker HA `setup-slave.sh`)에
+  이미 있으면 `CREATE USER IF NOT EXISTS` 가 비번을 안 바꿔 .env 값과 어긋난다. prep 스크립트가
+  `ALTER USER` 로 항상 맞추도록 반영됨 — 구 버전이면 master 에서
+  `ALTER USER 'repl'@'%' IDENTIFIED BY '<.env REPLICATION_PASSWORD>'; FLUSH PRIVILEGES;` 후
+  슬레이브에서 `STOP SLAVE; CHANGE MASTER TO MASTER_PASSWORD='...'; START SLAVE;`.
+- **`nothing provides liburing.so.2` / `mysql-selinux >= 1.0.14`**: Rocky 9.0 고정 저장소가 너무
+  낡음(liburing 0.7·구 selinux-policy). 현재 Rocky 9 저장소에서 당긴다:
+  `sudo dnf install -y --nogpgcheck --repofrompath=r9app,https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/ --repofrompath=r9base,https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/ MariaDB-server MariaDB-client`
+  (selinux-policy 가 el9 최신으로 한 단계 오를 수 있음 — 랩 허용). 이 버전 갭 자체가 실환경
+  도입 리스크 실측 산출물.
 - **에이전트 이름 불일치로 봇 logs:0**: 이 VM 은 deploy_agents.yml 로 FQDN 정규화되어 매핑
   불필요(node1 과 다름). `hostname -f` = Zabbix Hostname = Loki host 라벨 = Wazuh agent.name.
