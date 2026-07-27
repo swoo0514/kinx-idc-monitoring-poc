@@ -30,6 +30,7 @@
         src: mysql_session.conf.j2
         dest: /etc/zabbix/zabbix_agent2.d/mysql.conf
         owner: root
+        group: zabbix          # agent2 는 zabbix 유저로 기동 → 그룹 읽기 필요(0640, world 비공개 유지)
         mode: "0640"
       no_log: true
       notify: restart zabbix-agent2
