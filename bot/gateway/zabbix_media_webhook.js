@@ -5,6 +5,7 @@ var params = JSON.parse(value);
 var payload = {
     source: params.source,
     event_id: params.event_id,
+    trigger_id: params.trigger_id,
     event_value: parseInt(params.event_value) || 1,
     event_name: params.event_name,
     nseverity: parseInt(params.nseverity),
