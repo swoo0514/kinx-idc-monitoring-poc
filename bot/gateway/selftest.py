@@ -194,6 +194,18 @@ def _incident_checks() -> int:
     assert any(c.classes() == {"auth_security"} for c in closed)
     assert any(c.host == "h2" for c in closed)
 
+    # 발동조건 게이트 — 교차 상관 있을 때만 LLM
+    def _inc(alerts, host="h1", key=("h1", "replication")):
+        return incident.Incident(key=key, host=host, alerts=alerts, opened_at=0.0, last_at=0.0)
+    merged = _inc([_a("replication"), _a("cpu_io_pressure")])
+    single = _inc([_a("disk_space", sev="SEV2")], key=("h1", "disk_space"))
+    single_p1 = _inc([_a("disk_space", sev="SEV1")], key=("h1", "disk_space"))
+    assert incident.should_triage(merged, {"logs": [], "security": []})[0] is True      # 병합
+    assert incident.should_triage(single_p1, {"logs": [], "security": []})[0] is True    # SEV1
+    assert incident.should_triage(single, {"logs": ["x"], "security": []})[0] is True    # 단일+로그
+    assert incident.should_triage(single, {"logs": [], "security": []})[0] is False      # 단일·무신호
+    gate_checks = 4
+
     # 마스킹 — 인시던트 형태도 원문 식별자 누수 없음
     mk = masking.Masker()
     inc_ctx = {
@@ -221,7 +233,7 @@ def _incident_checks() -> int:
         os.environ.pop(k, None)
     r = llm.triage_reply(inc_ctx, "SEV2")
     assert r["degraded"] and "병합" in r["text"], r
-    return 20
+    return 20 + gate_checks
 
 
 if __name__ == "__main__":

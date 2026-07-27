@@ -14,6 +14,21 @@ from dataclasses import dataclass, field
 
 log = logging.getLogger("gateway.incident")
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
 # 알림명·아이템키 → incident_class. 위에서부터 먼저 걸리는 것. (근거: demo_c_scenario.md)
 CLASS_RULES = [
     ("replication", ["복제", "replication", "repl", "slave", "seconds_behind"]),
@@ -113,6 +128,26 @@ class Incident:
                 f"유형 {classes}{combo}")
 
 
+GATE_MIN_CROSS = _env_int("INCIDENT_GATE_MIN_CROSS", 1)
+
+
+def should_triage(incident, context: dict, min_cross: int = None) -> tuple:
+    """LLM 트리아지 발동 여부 + 사유. 교차 상관할 게 있을 때만 값비싼 LLM을 부른다.
+
+    context = collect_incident_context 결과(로그·보안 포함). 반환 (bool, 사유).
+    발동: SEV1 / 병합(2건+) / 단일이라도 같은 창에 교차 소스(로그·보안) 존재. 그 외 스킵.
+    """
+    min_cross = GATE_MIN_CROSS if min_cross is None else min_cross
+    if incident.dominant_sev() == "SEV1":
+        return True, "SEV1 — 위중, 무조건 발동"
+    if incident.is_merged():
+        return True, f"{len(incident.alerts)}건 병합 — 교차 축 존재"
+    cross = sum(1 for k in ("logs", "security") if context.get(k))
+    if cross >= min_cross:
+        return True, f"단일 알림 + 교차 소스 {cross}종(로그/보안)"
+    return False, "단일 축·교차 신호 없음 — LLM 스킵"
+
+
 class IncidentManager:
     """알림을 (host, class) 버퍼에 모아, 디바운스 창이 닫히면 on_close(incident) 1회 호출.
 
@@ -170,17 +205,3 @@ class IncidentManager:
             await self._on_close(inc)
         except Exception as e:   # 콜백 실패가 루프를 죽이지 않게
             log.warning("on_close failed for incident %s: %s", key, e)
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, default))
-    except ValueError:
-        return default
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, default))
-    except ValueError:
-        return default

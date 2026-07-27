@@ -296,7 +296,23 @@ triage 경로 알림은 `triage.run`을 직접 부르지 않고 `IncidentManager
 인시던트로 동일하게 흐른다. 튜닝 환경변수: `INCIDENT_DEBOUNCE_S` / `INCIDENT_MAX_WINDOW_S` /
 `INCIDENT_PRIORITY_DEBOUNCE_S` / `INCIDENT_MAX_ALERTS`.
 
+### 발동조건 게이트 (`should_triage`)
+
+병합 인시던트라고 무조건 LLM을 부르지 않는다. 데모 C의 가치는 **교차 상관**이라, 엮을 게
+없는 단일 축 알림에 LLM을 부르면 (a) 비용·지연 낭비 (b) "상관 없음" 맹탕 회신으로 신뢰도
+저하 (c) "AI가 아무 때나 떠든다"는 인상을 준다. `should_triage(incident, context)` 가 수집
+직후·LLM 호출 직전에 발동 여부를 결정한다:
+
+- **발동**: dominant SEV1(위중) / 병합 2건 이상(여러 축 엮임) / 단일 알림이라도 같은 창에
+  교차 소스(Loki 로그 또는 Wazuh 보안) 존재.
+- **스킵**: 단일 축 + 교차 신호 없음 → LLM·Slack 카드 생략(`gated_out: True` 반환). 원 알림은
+  팀 기존 Zabbix Slack 경로로 그대로 보이므로 사라지는 게 아니다 — 봇의 **AI 분석 카드만**
+  안 붙는다. 임계값 `INCIDENT_GATE_MIN_CROSS`(기본 1 = 로그·보안 중 1종이면 발동).
+
+원리는 만성/신규·병합과 동일 — 판정은 코드가, LLM은 정말 필요할 때만. 발표 방어: "봇이 아무
+알림에나 반응하냐?" → "교차 신호가 있을 때만 발동하도록 코드가 먼저 거른다".
+
 ### 검증
 
-`python -m gateway.selftest` — 분류·브리지 키·집계·마스킹 누수는 순수 로직으로, 병합/분리/
-멀티호스트 동작은 짧은 디바운스(0.05s) 비동기 버퍼로 검증(2026-07-27, 62 checks 통과).
+`python -m gateway.selftest` — 분류·브리지 키·집계·게이트·마스킹 누수는 순수 로직으로,
+병합/분리/멀티호스트 동작은 짧은 디바운스(0.05s) 비동기 버퍼로 검증(2026-07-27, 66 checks 통과).

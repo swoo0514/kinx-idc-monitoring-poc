@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 
-from . import collector, llm, slack
+from . import collector, incident as incident_mod, llm, slack
 
 log = logging.getLogger("gateway.triage")
 
@@ -69,6 +69,15 @@ async def run_incident(inc) -> dict:
             "logs": [], "security": [],
         }
     timings["collect_s"] = round(time.monotonic() - t0, 2)
+
+    # 발동조건 게이트 — 교차 상관할 게 있을 때만 LLM 호출 (§14 발동조건 게이트)
+    fire, reason = incident_mod.should_triage(inc, context)
+    if not fire:
+        timings["total_s"] = round(time.monotonic() - t0, 2)
+        log.info("gate skip fp=%s alerts=%d reason=%s timings=%s",
+                 inc.fingerprint(), len(inc.alerts), reason, timings)
+        return {"fingerprint": inc.fingerprint(), "alert_count": len(inc.alerts),
+                "gated_out": True, "reason": reason, "timings": timings}
 
     t1 = time.monotonic()
     reply = await asyncio.to_thread(llm.triage_reply, context, sev)
