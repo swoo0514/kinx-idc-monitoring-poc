@@ -131,5 +131,11 @@ Seconds_Behind_Master↑ 가 같은 호스트·같은 시간창에 = 봇 인시�
   `sudo dnf install -y --nogpgcheck --repofrompath=r9app,https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/ --repofrompath=r9base,https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/ MariaDB-server MariaDB-client`
   (selinux-policy 가 el9 최신으로 한 단계 오를 수 있음 — 랩 허용). 이 버전 갭 자체가 실환경
   도입 리스크 실측 산출물.
+- **`Table 'zabbix.history' doesn't exist` (SQL_Errno 1146)**: 마스터엔 Zabbix 라이브 `zabbix`
+  DB 도 돌고 binlog 은 전체라, 슬레이브가 `zabbix.%` 쓰기까지 받아 막힌다. 슬레이브 설정에
+  `replicate-wild-do-table=demo_repl.%` 를 넣어 **demo_repl 만 복제**(스크립트 반영). 이미 막혔으면
+  `/etc/my.cnf.d/zz-slave.cnf` 에 그 줄 추가 → `systemctl restart mariadb` → `START SLAVE`
+  (relay log 의 zabbix 이벤트도 적용 시점에 걸러져 넘어감). 복제 스트림은 chaos 의 demo_repl
+  쓰기만 흐르게 되어 오히려 통제됨.
 - **에이전트 이름 불일치로 봇 logs:0**: 이 VM 은 deploy_agents.yml 로 FQDN 정규화되어 매핑
   불필요(node1 과 다름). `hostname -f` = Zabbix Hostname = Loki host 라벨 = Wazuh agent.name.
