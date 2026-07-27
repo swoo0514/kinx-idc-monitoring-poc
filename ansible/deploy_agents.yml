@@ -52,6 +52,13 @@
     - name: alloy 설치
       ansible.builtin.dnf: { name: alloy, state: present }
 
+    - name: alloy 유저 저널 읽기 권한 (adm·systemd-journal — 공식 요구)
+      ansible.builtin.user:
+        name: alloy
+        groups: adm,systemd-journal
+        append: true
+      notify: restart alloy
+
     - name: config.alloy 배포
       ansible.builtin.template:
         src: alloy_config.alloy.j2

@@ -1,13 +1,11 @@
-local.file_match "system" {
-  path_targets = [
-    {__path__ = "/var/log/messages", job = "varlogs", host = "{{ agent_identity }}"},
-    {__path__ = "/var/log/secure",   job = "secure",  host = "{{ agent_identity }}"},
-  ]
-}
-
-loki.source.file "system" {
-  targets    = local.file_match.system.targets
+// 시스템 로그는 파일(/var/log/*) 대신 systemd 저널에서 읽는다 — 비root alloy 유저가
+// root:root 0600 로그 파일을 못 읽는 문제 회피(공식 권장). alloy 를 adm·systemd-journal 그룹에.
+loki.source.journal "system" {
   forward_to = [loki.write.default.receiver]
+  labels     = {
+    job  = "systemd-journal",
+    host = "{{ agent_identity }}",
+  }
 }
 
 loki.write "default" {
