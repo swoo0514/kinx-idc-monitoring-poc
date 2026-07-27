@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# vm-target-002(슬레이브)에서 실행. 데모 C: "복제 고장이 아니라 자원 경합" 재현.
-# 슬레이브 디스크 I/O를 백업성 부하로 포화 → SQL 스레드가 못 따라감 → Seconds_Behind_Master 급등.
-# 동시에 master 에 가벼운 쓰기(복제 스트림 유지) + syslog 백업 마커(Loki 교차신호). 근거는
-# private/docs/demo_c_scenario.md, 절차는 lab/mariadb/REPL_VM_GUIDE.md.
+# vm-target-002(슬레이브)에서 실행. 데모 C: "복제 고장이 아니라 자원 경합/과부하" 재현.
+# lag 의 동력은 슬레이브 IO 가 아니라 master 쓰기량 = 슬레이브 단일 SQL 스레드가 대량 쓰기를
+# 못 따라잡아 Seconds_Behind_Master 누적. 여기에 디스크 I/O 포화(백업성 dd)로 재생을 더 늦추고
+# iowait 신호를 만든다 + syslog 백업 마커(Loki 교차신호). "야간 배치가 DB를 덮쳐 IO 포화 +
+# 복제 백로그"라는 현실적 시나리오(복제 자체는 정상). 근거 private/docs/demo_c_scenario.md,
+# 절차 lab/mariadb/REPL_VM_GUIDE.md.
 set -uo pipefail
 
 DURATION="${DURATION:-180}"          # 부하 지속(초)
@@ -45,14 +47,23 @@ done
   done ) &
 pids+=("$!")
 
-# 3) master 에 가벼운 연속 쓰기 — 슬레이브가 뒤처질 복제 스트림 유지
+# 3) master 대량 연속 쓰기 — lag 의 진짜 동력. load_gen 을 ~200k 행으로 시드한 뒤,
+#    큰 INSERT...SELECT(MD5(RAND) → row 기반, 슬레이브가 행별 재생) + 같은 크기 DELETE 로
+#    테이블은 유계 유지(디스크 안 채움)하며 쉼 없이 쓴다. 단일 SQL 스레드가 못 따라가 lag 누적.
+m() { mariadb -h "$MASTER_HOST" -u "$WUSER" -p"$WPW" "$DB" "$@" 2>/dev/null; }
+BATCH="${BATCH:-200000}"
+echo "[chaos] load_gen 시드(~${BATCH} 행)..."
+m -e "INSERT INTO load_gen(a,b) VALUES (MD5(RAND()),MD5(RAND()))" || true
+for _ in $(seq 1 20); do
+  n="$(m -N -e "SELECT COUNT(*) FROM load_gen" || echo 0)"
+  [ "${n:-0}" -ge "$BATCH" ] && break
+  m -e "INSERT INTO load_gen(a,b) SELECT MD5(RAND()),MD5(RAND()) FROM load_gen LIMIT ${BATCH}" || true
+done
+echo "[chaos] 시드 완료($(m -N -e 'SELECT COUNT(*) FROM load_gen' || echo '?') 행). 대량 쓰기 시작."
 ( end=$((SECONDS+DURATION))
   while [ $SECONDS -lt $end ]; do
-    mariadb -h "$MASTER_HOST" -u "$WUSER" -p"$WPW" "$DB" \
-      -e "INSERT INTO load_gen(a,b) SELECT MD5(RAND()),MD5(RAND()) FROM seq_1_to_2000;" 2>/dev/null \
-      || mariadb -h "$MASTER_HOST" -u "$WUSER" -p"$WPW" "$DB" \
-           -e "INSERT INTO load_gen(a,b) VALUES (MD5(RAND()),MD5(RAND()));" 2>/dev/null || true
-    sleep 1
+    m -e "INSERT INTO load_gen(a,b) SELECT MD5(RAND()),MD5(RAND()) FROM load_gen LIMIT ${BATCH};
+          DELETE FROM load_gen ORDER BY id LIMIT ${BATCH};" || true
   done ) &
 pids+=("$!")
 
