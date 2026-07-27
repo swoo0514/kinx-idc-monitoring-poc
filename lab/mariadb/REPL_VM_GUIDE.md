@@ -116,6 +116,9 @@ Seconds_Behind_Master↑ 가 같은 호스트·같은 시간창에 = 봇 인시�
   확인(prep 스크립트가 처리).
 - **버전 스큐**: Rocky 9 기본 MariaDB 는 10.5 라 10.11 master 와 복제 시 문제 소지. 스크립트가
   mariadb.org 저장소로 10.11 을 설치해 일치시킨다.
+- **`nothing provides liburing.so.2`**: MariaDB 10.11 이 io_uring 라이브러리를 요구하는데 최소
+  이미지에 없음. `sudo dnf install -y liburing`(안 되면 `--releasever=9`) 후 재시도. 스크립트가
+  선설치하도록 반영됨(구 버전 스크립트면 이 명령을 수동 실행).
 - **lag 가 안 오름**: I/O 워커 수(`IO_WORKERS`)·지속(`DURATION`) 상향, 또는 master 쓰기가
   실제로 도달하는지(demowriter 계정·3306) 확인. 슬레이브 디스크가 너무 빠르면 경합이 약함.
 - **에이전트 이름 불일치로 봇 logs:0**: 이 VM 은 deploy_agents.yml 로 FQDN 정규화되어 매핑

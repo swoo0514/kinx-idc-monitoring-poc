@@ -13,6 +13,8 @@ SERVER_ID="${SERVER_ID:-10}"
 
 echo "== 1/5 MariaDB 10.11 설치 (master 와 버전 일치 — 스큐 방지) =="
 if ! rpm -q MariaDB-server >/dev/null 2>&1 && ! rpm -q mariadb-server >/dev/null 2>&1; then
+  # MariaDB 10.11 은 liburing.so.2 요구(io_uring). Rocky 9 최소 이미지엔 없어 선설치.
+  sudo dnf install -y liburing || sudo dnf install -y liburing --releasever=9
   curl -LsS https://r.mariadb.com/downloads/mariadb_repo_setup | sudo bash -s -- --mariadb-server-version=10.11
   sudo dnf install -y MariaDB-server MariaDB-client
 fi
