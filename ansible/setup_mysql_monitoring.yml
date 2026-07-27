@@ -15,14 +15,19 @@
         name: python3-PyMySQL
         state: present
 
-    - name: zbx_monitor 모니터링 계정 (idempotent, 공식 템플릿 요구 권한)
+    # agent2 가 로컬 접속 → 서버가 localhost(이름해석 시) 또는 127.0.0.1 로 봄. '%' 는 localhost 를
+    # 커버 못 하므로(MySQL 특별취급) 둘 다 생성.
+    - name: zbx_monitor 모니터링 계정 (로컬 접속용, idempotent, 공식 템플릿 요구 권한)
       community.mysql.mysql_user:
         name: "{{ mysql_monitor_user }}"
-        host: "%"
+        host: "{{ item }}"
         password: "{{ mysql_monitor_password }}"
         priv: "*.*:REPLICATION CLIENT,SLAVE MONITOR,PROCESS,SHOW DATABASES,SHOW VIEW"
         state: present
         login_unix_socket: "{{ mariadb_socket }}"
+      loop:
+        - localhost
+        - 127.0.0.1
       no_log: true
 
     - name: agent2 MySQL 플러그인 세션 (자격증명은 에이전트 설정에만)
