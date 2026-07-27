@@ -24,6 +24,9 @@ sudo tee /etc/my.cnf.d/zz-slave.cnf >/dev/null <<EOF
 [mariadb]
 server-id=${SERVER_ID}
 gtid-strict-mode=1
+# 계정 관리 DDL(마스터의 CREATE/ALTER USER 등)은 슬레이브에 그 계정이 없어 적용 실패 →
+# mysql 스키마는 복제 대상에서 제외 (demo_repl 데이터만 복제하면 충분)
+replicate-wild-ignore-table=mysql.%
 EOF
 sudo systemctl enable --now mariadb
 sudo systemctl restart mariadb
