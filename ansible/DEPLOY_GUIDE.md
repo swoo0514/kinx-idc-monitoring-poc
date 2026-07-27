@@ -99,8 +99,17 @@ ansible-playbook -i inventory.local.ini -e @lab_vars.yml setup_mysql_monitoring.
 모듈이 PyMySQL·priv 이름(`SLAVE MONITOR` 등 MariaDB 전용)을 실행 시 검증한다 — 실패하면 그게
 검증이 일하는 것, 고쳐서 재실행.
 
-**Zabbix 측(서버 API)**: 호스트에 "MySQL by Zabbix agent 2" 템플릿 링크 + 매크로
-`{$MYSQL.DSN}=repl` + 데모용 `{$MYSQL.REPL_LAG.MAX.WARN}=60`. UI 1회 or `zabbix_host` 코드화.
+**Zabbix 측(서버 API) — link_mysql_template.yml**: 호스트에 "MySQL by Zabbix agent 2" 템플릿
+링크 + 매크로 `{$MYSQL.DSN}=repl`·`{$MYSQL.REPL_LAG.MAX.WARN}=60`. UI 로 먼저 링크하면 이 경로가
+검증 안 되므로 플레이북 실행이 곧 링크+검증. `link_templates` 는 기존 "Linux by Zabbix agent" 도
+함께 나열해 언링크를 막는다. 호스트명은 agent_identity(FQDN)와 동일.
+```bash
+export ZABBIX_API_TOKEN='<랩 토큰>'
+ansible-playbook -i inventory.ini -e mysql_target_host=<FQDN> link_mysql_template.yml
+```
+링크 후 Replication LLD 가 slave 를 발견해 `Seconds Behind Master` 아이템 + "Replication lag is
+too high" 트리거 생성. (community.zabbix + 낮은 ansible-core 궁합 이슈 시 zabbix_action 처럼
+파라미터 보정.)
 
 MSP 이질 고객 DB 는 매니저 프록시 Q3 판정과 같은 이유(환경 제각각=자동화 저효용)로 이 플레이북을
 그대로 밀지 말고 파라미터화 출발점으로.

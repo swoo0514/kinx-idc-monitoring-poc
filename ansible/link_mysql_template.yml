@@ -1,0 +1,26 @@
+---
+# 복제 지연 감시 Zabbix 측 — MySQL 템플릿 링크 + 매크로. setup_mysql_monitoring.yml(agent 측)의 짝.
+# 실행이 곧 검증: UI 로 먼저 링크하면 이 링크 경로가 검증 안 됨. 근거는 DEPLOY_GUIDE.md.
+- name: Link MySQL template + macros (Zabbix side)
+  hosts: zabbix
+  gather_facts: false
+  vars:
+    ansible_zabbix_auth_key: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+    # mysql_target_host: Zabbix 호스트명(=agent_identity FQDN). -e 또는 lab_vars.yml 로 주입
+    mysql_host_groups:
+      - "Discovered hosts"          # autoregister 가 넣은 그룹 (다르면 조정)
+    mysql_link_templates:
+      - "Linux by Zabbix agent"     # autoregister 가 이미 링크 — 함께 둬야 언링크 안 됨
+      - "MySQL by Zabbix agent 2"
+  tasks:
+    - name: 호스트에 MySQL 템플릿 링크 + DSN/lag 매크로
+      community.zabbix.zabbix_host:
+        host_name: "{{ mysql_target_host }}"
+        host_groups: "{{ mysql_host_groups }}"
+        link_templates: "{{ mysql_link_templates }}"
+        macros:
+          - macro: "{$MYSQL.DSN}"
+            value: "repl"
+          - macro: "{$MYSQL.REPL_LAG.MAX.WARN}"
+            value: "60"
+        state: present
