@@ -62,12 +62,22 @@
 - 봇 `collect_context`가 그 호스트 이벤트로 logs/security를 **HOST_LABEL_MAP 없이** 수집 —
   정규화가 됐으므로.
 
-## 아직 남은 것 (다음)
+## 서버측 autoregistration 액션 (autoregister_action.yml)
 
-- **서버측 autoregistration 액션**: agent가 `HostMetadata=linux-3agent-bundle`을 보내면, Zabbix
-  서버가 이를 매칭해 호스트 추가·템플릿 링크·그룹 배정하는 **액션**이 있어야 완성. 이는 Zabbix
-  API 작업(community.zabbix, 기존 onboard.yml 방식)이라 별도 플레이북으로 추가 예정. 그 전엔
-  호스트가 "Discovered hosts"에 뜨되 템플릿 미링크 상태.
+agent가 보낸 `HostMetadata=linux-3agent-bundle`을 매칭해 호스트 추가·그룹 배정·템플릿 링크를
+자동화하는 액션. deploy_agents.yml(agent 측)과 짝이며, 이게 있어야 "손등록 0"이 완성된다.
+onboard.yml 과 같은 Zabbix API 방식이라 별도 실행:
+
+```bash
+cd ansible
+ansible-playbook -i inventory.ini autoregister_action.yml   # ZABBIX_API_TOKEN env 필요
+```
+
+`host_metadata` 값은 deploy_agents.yml의 것과 반드시 일치. 이후 새 VM에 deploy_agents.yml을
+돌리면 접속 즉시 자동 등록·템플릿 링크된다. (액션 조건/오퍼레이션 파라미터는 community.zabbix
+zabbix_action 공식 문서 확인.)
+
+## 아직 남은 것 (다음)
 - **wazuh 재실행 멱등 한계**: 매니저 주소는 최초 설치 시에만 주입됨. 재배포로 매니저를 바꾸려면
   ossec.conf 템플릿화 필요(현재는 최초 설치 정상 동작 우선).
 - **MariaDB 복제**: 데모 C(복제 지연) 대상이 되려면 이 VM에 slave를 얹어야 함(별도 단계).
