@@ -114,6 +114,21 @@ too high" 트리거 생성. (community.zabbix + 낮은 ansible-core 궁합 이�
 MSP 이질 고객 DB 는 매니저 프록시 Q3 판정과 같은 이유(환경 제각각=자동화 저효용)로 이 플레이북을
 그대로 밀지 말고 파라미터화 출발점으로.
 
+## 확장 시 디렉토리 리팩터링 방향 (현재 스코프 밖 — 기록용)
+
+현재 `ansible/` 는 flat 플레이북 모음이다(데모 대상 1대·플레이북 4개 규모엔 적절 — 지금
+roles 로 갈아엎는 건 over-engineering). 호스트·티어·재사용이 늘면 **Ansible 공식 권장
+레이아웃**으로 refactor:
+
+- `roles/` — 기능별(예: `agents`, `db_monitoring`). 재사용 로직은 flat 플레이북이 아니라 role.
+- `group_vars/` · `host_vars/` — **OS·고객사·DB 차이는 폴더가 아니라 변수로 흡수.**
+- 환경별 인벤토리(production/staging) 분리.
+
+핵심 — **OS/고객사/DB별 폴더로 나누지 않는다.** 공식 조직 원리는 "기능(role)별 조직 + 변종은
+`group_vars`/`host_vars`/인벤토리 그룹으로 흡수"다. 예: Rocky vs Ubuntu 는 role 안
+`ansible_os_family` 분기 또는 OS 그룹 `group_vars`, 고객사별은 `host_vars`+인벤토리 그룹.
+근거: docs.ansible.com/ansible/latest/tips_tricks/sample_setup.html
+
 ## 아직 남은 것 (다음)
 - **wazuh 재실행 멱등 한계**: 매니저 주소는 최초 설치 시에만 주입됨. 재배포로 매니저를 바꾸려면
   ossec.conf 템플릿화 필요(현재는 최초 설치 정상 동작 우선).
