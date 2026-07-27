@@ -87,13 +87,52 @@ async def host_map(trigger_id):
         print(f"  {cand!r} -> {await _loki_count(cand)}")
 
 
+def show_env():
+    for k in ["ZABBIX_URL", "ZABBIX_TOKEN", "LOKI_URL", "WAZUH_INDEXER_URL",
+              "WAZUH_INDEXER_USER", "HOST_LABEL_MAP"]:
+        v = os.environ.get(k, "")
+        # 값은 안 찍음(비밀 보호) — 설정 여부와 HOST_LABEL_MAP만 표시
+        if k == "HOST_LABEL_MAP":
+            print(f"  {k} = {v!r}")
+        else:
+            print(f"  {k} = {'(설정됨)' if v else '(비어있음)'}")
+
+
+async def loki_probe(label, hours):
+    """지정 라벨의 로그를 넓은 창(기본 24h)으로 조회 — 에러 안 삼키고 그대로 노출."""
+    url = os.environ.get("LOKI_URL", "").rstrip("/")
+    if not url:
+        print("LOKI_URL 미설정")
+        return
+    now = int(time.time())
+    span = int(hours) * 3600
+    async with httpx.AsyncClient() as c:
+        r = await c.get(f"{url}/loki/api/v1/query_range", params={
+            "query": '{host="%s"}' % label,
+            "start": str((now - span) * 1_000_000_000),
+            "end": str(now * 1_000_000_000), "limit": 5, "direction": "backward"}, timeout=5)
+        print("HTTP", r.status_code)
+        streams = r.json().get("data", {}).get("result", [])
+        n = sum(len(s.get("values", [])) for s in streams)
+        print(f'query={{host="{label}"}} 최근{hours}h -> {n} lines')
+        for s in streams:
+            for ts, line in s.get("values", [])[:3]:
+                print("  ", line[:160])
+
+
 def main():
-    if len(sys.argv) >= 2 and sys.argv[1] == "problems":
+    a = sys.argv
+    if len(a) >= 2 and a[1] == "problems":
         asyncio.run(problems())
-    elif len(sys.argv) >= 3 and sys.argv[1] == "map":
-        asyncio.run(host_map(sys.argv[2]))
+    elif len(a) >= 3 and a[1] == "map":
+        asyncio.run(host_map(a[2]))
+    elif len(a) >= 2 and a[1] == "env":
+        show_env()
+    elif len(a) >= 3 and a[1] == "loki":
+        asyncio.run(loki_probe(a[2], a[3] if len(a) >= 4 else 24))
     else:
         print(__doc__)
+        print("추가: env | loki <label> [hours]")
 
 
 if __name__ == "__main__":
