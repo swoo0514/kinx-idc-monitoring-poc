@@ -77,16 +77,33 @@ ansible-playbook -i inventory.ini autoregister_action.yml   # ZABBIX_API_TOKEN e
 돌리면 접속 즉시 자동 등록·템플릿 링크된다. (액션 조건/오퍼레이션 파라미터는 community.zabbix
 zabbix_action 공식 문서 확인.)
 
-## DB 복제 지연 감시 배선 — 랩은 수동, 자동화는 로드맵
+## DB 복제 지연 감시 배선 (setup_mysql_monitoring.yml)
 
-데모 C 지표(`mysql.seconds_behind_master`)를 Zabbix 가 보게 하는 배선(모니터링 계정 + agent2
-mysql 세션 + 템플릿 링크)은 **랩 1대·1회라 수동으로 한다** — Google SRE toil 기준상 "처음/두 번째
-하는 일은 toil 이 아니며 자동화 투자를 정당화하지 못한다". 절차는 lab/mariadb/REPL_VM_GUIDE.md.
+데모 C 지표(`mysql.seconds_behind_master`)를 Zabbix 가 보게 하는 agent 측 배선(모니터링 계정 +
+agent2 mysql 세션). 사내 동질 DB 군(서비스 slave 12대) 온보딩의 **첫 인스턴스**이므로 코드화한다
+(1회성이 아니라 반복 패턴의 시작 + "누구나 30분 재현" 산출물 요구).
 
-자동화 가치는 **반복 맥락에서만** 생긴다: 사내 동질 DB 군(서비스 slave 12대) 온보딩 표준. 그때
-만든다면 raw command 가 아니라 idempotent 전용 모듈(`community.mysql.mysql_user`) + 비밀은
-Ansible Vault 가 베스트 프랙티스. MSP 이질 고객 DB 는 매니저 프록시 Q3 판정과 같은 이유(환경
-제각각=자동화 저효용)로 파라미터화 출발점까지만. → 로드맵(현재 스코프 밖).
+**핵심 — 손으로 먼저 만들지 않는다:** 손으로 계정을 만들면 이후 플레이북은 idempotent no-op 이
+되어 "계정 생성" 경로가 영영 검증되지 않는다(미검증 산출물). 따라서 **깨끗한 호스트에 플레이북을
+실행하는 그 행위가 곧 셋업이자 검증**이다.
+
+베스트 프랙티스 준수: raw command 대신 idempotent 전용 모듈 `community.mysql.mysql_user`,
+비밀은 랩=gitignored lab_vars.yml / 프로덕션=Ansible Vault.
+
+```bash
+# control 노드(core). 컬렉션 1회 설치
+ansible-galaxy collection install community.mysql
+# lab_vars.yml 에 mysql_monitor_password 추가
+ansible-playbook -i inventory.local.ini -e @lab_vars.yml setup_mysql_monitoring.yml
+```
+모듈이 PyMySQL·priv 이름(`SLAVE MONITOR` 등 MariaDB 전용)을 실행 시 검증한다 — 실패하면 그게
+검증이 일하는 것, 고쳐서 재실행.
+
+**Zabbix 측(서버 API)**: 호스트에 "MySQL by Zabbix agent 2" 템플릿 링크 + 매크로
+`{$MYSQL.DSN}=repl` + 데모용 `{$MYSQL.REPL_LAG.MAX.WARN}=60`. UI 1회 or `zabbix_host` 코드화.
+
+MSP 이질 고객 DB 는 매니저 프록시 Q3 판정과 같은 이유(환경 제각각=자동화 저효용)로 이 플레이북을
+그대로 밀지 말고 파라미터화 출발점으로.
 
 ## 아직 남은 것 (다음)
 - **wazuh 재실행 멱등 한계**: 매니저 주소는 최초 설치 시에만 주입됨. 재배포로 매니저를 바꾸려면

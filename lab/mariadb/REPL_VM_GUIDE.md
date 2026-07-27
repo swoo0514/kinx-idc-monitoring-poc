@@ -87,35 +87,26 @@ bash setup-slave-vm.sh
 MariaDB 10.11 설치(master 버전 일치), server-id=10·GTID 설정, 스냅샷 적재, `CHANGE MASTER`
 → `START SLAVE`. 마지막에 IO=Yes/SQL=Yes 확인.
 
-## 3-1. 복제 지연 감시 배선 (Zabbix, 수동 — 랩 1회성)
+## 3-1. 복제 지연 감시 배선 (agent 측 = 플레이북, Zabbix 측 = UI)
 
-`mysql.seconds_behind_master` 를 Zabbix 가 보게 하는 배선. **랩 1대·1회라 수동으로 한다**
-(SRE toil 기준: 처음 하는 일은 자동화 대상 아님). 반복 온보딩이면 그때 전용 모듈로 코드화 —
-DEPLOY_GUIDE "DB 복제 지연 감시 배선" 절 참조.
+`mysql.seconds_behind_master` 를 Zabbix 가 보게 하는 배선. agent 측(계정 + 세션)은
+**깨끗한 호스트에 플레이북을 실행 = 셋업이자 검증**(손 생성 금지 — 그러면 플레이북 계정
+생성 경로가 검증 안 됨). 상세·근거는 ansible/DEPLOY_GUIDE.md "DB 복제 지연 감시 배선".
 
-**① 슬레이브에 모니터링 계정** (타깃에서 — 공식 "MySQL by Zabbix agent 2" 템플릿 요구 권한):
 ```bash
-sudo mariadb -e "
-  CREATE USER IF NOT EXISTS 'zbx_monitor'@'%' IDENTIFIED BY '<랩 모니터링 비번>';
-  GRANT REPLICATION CLIENT, SLAVE MONITOR, PROCESS, SHOW DATABASES, SHOW VIEW ON *.* TO 'zbx_monitor'@'%';
-  FLUSH PRIVILEGES;"
+# control 노드(core)
+ansible-galaxy collection install community.mysql       # 1회
+# lab_vars.yml 에 mysql_monitor_password 추가
+ansible-playbook -i inventory.local.ini -e @lab_vars.yml setup_mysql_monitoring.yml
 ```
-(`SLAVE MONITOR` 은 MariaDB 10.5.9+ 의 `SHOW SLAVE STATUS` 권한.)
+플레이북이 하는 일(검증 대상): ① `zbx_monitor`@'%' 계정 + 공식 권한
+(`REPLICATION CLIENT, SLAVE MONITOR, PROCESS, SHOW DATABASES, SHOW VIEW` — `SLAVE MONITOR` 는
+MariaDB 10.5.9+ 의 `SHOW SLAVE STATUS` 권한) ② agent2 mysql 세션(`repl`) ③ agent 재시작.
 
-**② agent2 MySQL 플러그인 세션** (타깃, agent 설정에만 자격증명 보관):
-```bash
-sudo tee /etc/zabbix/zabbix_agent2.d/mysql.conf >/dev/null <<'EOF'
-Plugins.Mysql.Sessions.repl.Uri=tcp://127.0.0.1:3306
-Plugins.Mysql.Sessions.repl.User=zbx_monitor
-Plugins.Mysql.Sessions.repl.Password=<위와 동일 비번>
-EOF
-sudo systemctl restart zabbix-agent2
-```
-
-**③ Zabbix UI** — 호스트에 "MySQL by Zabbix agent 2" 템플릿 링크 + 매크로
-`{$MYSQL.DSN}=repl`(세션명 일치) + 데모용 `{$MYSQL.REPL_LAG.MAX.WARN}=60`(기본 30m 은 높음).
-링크 후 Replication LLD 가 slave 를 발견해 `Seconds Behind Master` 아이템 + "Replication lag
-is too high" 트리거 생성. `Latest data` 에서 값 확인.
+**Zabbix UI** — 호스트에 "MySQL by Zabbix agent 2" 템플릿 링크 + 매크로 `{$MYSQL.DSN}=repl`
+(세션명 일치) + 데모용 `{$MYSQL.REPL_LAG.MAX.WARN}=60`(기본 30m 은 높음). 링크 후 Replication
+LLD 가 slave 를 발견해 `Seconds Behind Master` 아이템 + "Replication lag is too high" 트리거
+생성. `Latest data` 에서 값 확인.
 
 ## 4. chaos — 자원 경합 주입 (vm-target-002)
 

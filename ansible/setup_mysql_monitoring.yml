@@ -1,0 +1,39 @@
+---
+# 복제 지연 감시 배선 (agent 측) — 사내 동질 DB 군 온보딩의 첫 인스턴스. 설계·검증은 DEPLOY_GUIDE.md.
+# 실행이 곧 검증: 깨끗한 호스트에 돌려 계정 생성 경로를 실제로 증명한다(손 생성 금지).
+- name: MySQL monitoring wiring (agent side)
+  hosts: targets
+  become: true
+  vars:
+    mysql_session_name: repl
+    mysql_monitor_user: zbx_monitor
+    mariadb_socket: /var/lib/mysql/mysql.sock
+    # mysql_monitor_password: gitignored lab_vars.yml (프로덕션은 Ansible Vault)
+  tasks:
+    - name: mysql_user 모듈 의존 PyMySQL 설치
+      ansible.builtin.dnf:
+        name: python3-PyMySQL
+        state: present
+
+    - name: zbx_monitor 모니터링 계정 (idempotent, 공식 템플릿 요구 권한)
+      community.mysql.mysql_user:
+        name: "{{ mysql_monitor_user }}"
+        host: "%"
+        password: "{{ mysql_monitor_password }}"
+        priv: "*.*:REPLICATION CLIENT,SLAVE MONITOR,PROCESS,SHOW DATABASES,SHOW VIEW"
+        state: present
+        login_unix_socket: "{{ mariadb_socket }}"
+      no_log: true
+
+    - name: agent2 MySQL 플러그인 세션 (자격증명은 에이전트 설정에만)
+      ansible.builtin.template:
+        src: mysql_session.conf.j2
+        dest: /etc/zabbix/zabbix_agent2.d/mysql.conf
+        owner: root
+        mode: "0640"
+      no_log: true
+      notify: restart zabbix-agent2
+
+  handlers:
+    - name: restart zabbix-agent2
+      ansible.builtin.systemd: { name: zabbix-agent2, state: restarted }
