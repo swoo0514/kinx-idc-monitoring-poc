@@ -16,6 +16,7 @@
         event_source: "auto_registration"
         state: present
         status: enabled
+        esc_period: "1h"   # autoregistration 엔 미사용이나 일부 모듈 버전이 요구
         conditions:
           - type: "host_metadata"
             operator: "like"
