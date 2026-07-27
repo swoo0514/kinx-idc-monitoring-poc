@@ -46,18 +46,31 @@ DEMO_WRITER_USER=demowriter
 DEMO_WRITER_PASSWORD=<랩 임의 비번>
 ```
 ```bash
-cd lab && docker compose up -d mariadb    # 3306 이 192.0.2.10 에만 바인딩됨
+# core 호스트의 리포 lab/ 디렉토리에서 (이미 lab/ 이면 cd 생략)
+docker compose up -d mariadb    # 3306 이 MASTER_BIND_IP 인터페이스에만 바인딩됨
 ```
 compose 기본값은 `127.0.0.1:3306`(비노출)이라, MASTER_BIND_IP 를 안 채우면 외부에서 못 붙는다.
 
 ## 2. master 준비 + 스냅샷 (core 호스트)
 
 ```bash
-cd lab && ./mariadb/prep-master-for-vm-slave.sh
-scp /tmp/kinx_demo_dump.sql node2:/tmp/
+# core 호스트의 리포 lab/ 에서 (스크립트가 알아서 lab/ 로 이동하므로 어디서 실행해도 됨)
+./mariadb/prep-master-for-vm-slave.sh
 ```
 `demo_repl` DB·`load_gen` 테이블·복제 계정(`repl`)·쓰기 계정(`demowriter`)을 멱등 생성하고,
-GTID 스냅샷을 덤프한다.
+GTID 스냅샷을 core 의 `/tmp/kinx_demo_dump.sql` 로 덤프한다.
+
+그 덤프를 슬레이브 VM 으로 전송한다. `node2` 는 **작업자 PC 의 ~/.ssh/config 별칭**이라 core
+에서는 못 쓴다 — 다음 중 하나로:
+
+```bash
+# (A) 작업자 PC 에서 2-hop (별칭 둘 다 아는 곳)
+scp core:/tmp/kinx_demo_dump.sql ./kinx_demo_dump.sql
+scp ./kinx_demo_dump.sql node2:/tmp/
+
+# (B) core 에서 슬레이브 사설 IP 로 직접 (같은 /24, 에이전트 포워딩으로 키 전달)
+#   작업자 PC: ssh -A core   → core: scp /tmp/kinx_demo_dump.sql rocky@<슬레이브 사설 IP>:/tmp/
+```
 
 ## 3. 슬레이브 구축 (vm-target-002)
 
