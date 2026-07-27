@@ -1,0 +1,19 @@
+// host 라벨 = agent_identity(FQDN) — Zabbix Hostname·Wazuh agent명과 동일하게 정규화.
+// 세 시스템이 같은 식별자를 쓰므로 봇 상관분석에 HOST_LABEL_MAP 불필요.
+local.file_match "system" {
+  path_targets = [
+    {__path__ = "/var/log/messages", job = "varlogs", host = "{{ agent_identity }}"},
+    {__path__ = "/var/log/secure",   job = "secure",  host = "{{ agent_identity }}"},
+  ]
+}
+
+loki.source.file "system" {
+  targets    = local.file_match.system.targets
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "{{ loki_push_url }}"
+  }
+}

@@ -1,0 +1,107 @@
+---
+# 3종 에이전트 번들 배포 (MaC 배포 절반). 새 Rocky 9 호스트에 zabbix-agent2 + Alloy +
+# wazuh-agent 를 한 번에 설치·설정하고, 세 시스템 호스트 식별자를 agent_identity(FQDN)로
+# 통일(정규화)해 봇 상관분석의 전제를 충족한다. 팀 기존 Ansible 위에 얹는 태스크 계층 —
+# 3종 번들·autoregistration 준비·구버전 정리(멱등)가 추가분. 절차·근거는 ansible/DEPLOY_GUIDE.md.
+# 대상: inventory [targets] (SSH). 상태 변경 → 사용자가 실행. config 값은 node1 실측 정답지.
+- name: Deploy 3-agent bundle (zabbix-agent2 + Alloy + wazuh-agent)
+  hosts: targets
+  become: true
+  vars:
+    # 아래 IP는 문서용 placeholder(RFC5737). 실 랩 값은 커밋하지 않는다 —
+    # gitignored ansible/lab_vars.yml 에 넣고 `-e @lab_vars.yml` 로 오버라이드
+    # (실 값은 node1 실측 정답지, DEPLOY_GUIDE 참조).
+    zabbix_server: "192.0.2.10"
+    loki_push_url: "http://192.0.2.10:3100/loki/api/v1/push"
+    wazuh_manager: "192.0.2.13"
+    host_metadata: "linux-3agent-bundle"   # 서버측 autoregistration 액션 매칭 키
+    zabbix_release_rpm: "https://repo.zabbix.com/zabbix/7.0/rhel/9/x86_64/zabbix-release-latest-7.0.el9.noarch.rpm"
+    # agent_identity: 호스트별 inventory 변수로 FQDN 지정. 미지정 시 시스템 FQDN 사용.
+
+  tasks:
+    - name: agent_identity 기본값 = 시스템 FQDN
+      ansible.builtin.set_fact:
+        agent_identity: "{{ agent_identity | default(ansible_facts.fqdn) }}"
+
+    # ── 멱등 정리: 구버전 zabbix-agent(v1)가 10050 선점 시 제거 (랩 실측 충돌) ──
+    - name: 구버전 zabbix-agent(v1) 제거
+      ansible.builtin.dnf:
+        name: zabbix-agent
+        state: absent
+
+    # ── Zabbix agent2 ──
+    - name: Zabbix 저장소 설치
+      ansible.builtin.dnf:
+        name: "{{ zabbix_release_rpm }}"
+        state: present
+        disable_gpg_check: true
+
+    - name: zabbix-agent2 설치
+      ansible.builtin.dnf: { name: zabbix-agent2, state: present }
+
+    - name: zabbix_agent2.conf 배포
+      ansible.builtin.template:
+        src: zabbix_agent2.conf.j2
+        dest: /etc/zabbix/zabbix_agent2.conf
+        owner: root
+        mode: "0644"
+      notify: restart zabbix-agent2
+
+    # ── Grafana Alloy ──
+    - name: Grafana GPG 키 import
+      ansible.builtin.rpm_key: { key: https://rpm.grafana.com/gpg.key, state: present }
+
+    - name: Grafana 저장소
+      ansible.builtin.yum_repository:
+        name: grafana
+        description: grafana
+        baseurl: https://rpm.grafana.com
+        gpgcheck: true
+        gpgkey: https://rpm.grafana.com/gpg.key
+
+    - name: alloy 설치
+      ansible.builtin.dnf: { name: alloy, state: present }
+
+    - name: config.alloy 배포
+      ansible.builtin.template:
+        src: alloy_config.alloy.j2
+        dest: /etc/alloy/config.alloy
+        owner: alloy
+        mode: "0644"
+      notify: restart alloy
+
+    # ── Wazuh agent ──
+    - name: Wazuh GPG 키 import
+      ansible.builtin.rpm_key: { key: https://packages.wazuh.com/key/GPG-KEY-WAZUH, state: present }
+
+    - name: Wazuh 저장소 (el9 = priority)
+      ansible.builtin.yum_repository:
+        name: wazuh
+        description: EL-$releasever - Wazuh
+        baseurl: https://packages.wazuh.com/4.x/yum/
+        gpgcheck: true
+        gpgkey: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+        priority: "1"
+
+    # 매니저·에이전트명은 최초 설치 시 post-install 스크립트가 env로 ossec.conf에 씀.
+    # 재실행(이미 설치됨)은 config 재설정 안 함 — 멱등 한계, 가이드에 명시.
+    - name: wazuh-agent 설치 (매니저·FQDN 에이전트명 주입)
+      ansible.builtin.dnf: { name: wazuh-agent, state: present }
+      environment:
+        WAZUH_MANAGER: "{{ wazuh_manager }}"
+        WAZUH_AGENT_NAME: "{{ agent_identity }}"
+
+    # ── 3종 서비스 기동 ──
+    - name: 3종 서비스 enable + start
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop: [zabbix-agent2, alloy, wazuh-agent]
+
+  handlers:
+    - name: restart zabbix-agent2
+      ansible.builtin.systemd: { name: zabbix-agent2, state: restarted }
+    - name: restart alloy
+      ansible.builtin.systemd: { name: alloy, state: restarted }
