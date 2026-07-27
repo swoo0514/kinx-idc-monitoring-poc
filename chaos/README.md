@@ -47,7 +47,7 @@ master에 대량 쓰기를 걸어 slave 복제 지연을 만듭니다.
 
 슬레이브 VM의 디스크 I/O를 백업성 부하로 포화시켜 복제가 밀리게 합니다. `repl_lag.sh`(master 대량 쓰기)와 달리 **원인이 자원 경합**이라, 데모 C의 "복제 고장인가 자원 경합인가" 재프레이밍의 소재입니다.
 
-- 사용: `DURATION=180 MASTER_HOST=192.168.20.26 DEMO_WRITER_USER=... DEMO_WRITER_PASSWORD=... ./repl_lag_contention.sh`
+- 사용: `DURATION=180 MASTER_HOST=<master 사설 IP> DEMO_WRITER_USER=... DEMO_WRITER_PASSWORD=... ./repl_lag_contention.sh`
 - 실행 위치: 슬레이브 VM(vm-target-002). 사전 구축은 `lab/mariadb/REPL_VM_GUIDE.md`
 - 원리: syslog 백업 마커(Loki 교차신호) + 디스크 I/O 포화(대용량 쓰기·로컬 덤프) + master 가벼운 쓰기(복제 스트림) → iowait↑ + `Seconds_Behind_Master`↑ 가 같은 호스트·시간창에
 - 확인: Zabbix(지연·iowait 급등) + Loki(백업 로그) + Wazuh(경보 없음=침해 배제) → 봇이 1개 인시던트로 병합
