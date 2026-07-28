@@ -1,26 +1,26 @@
-"""HolmesGPT 온디맨드 심층조사 어댑터 — 읽기 전용, 자동 조건부(read=auto 규칙).
+"""HolmesGPT 온디맨드 심층조사 어댑터 — HTTP API(/api/chat) 호출, 읽기 전용·자동 조건부.
 
-게이트웨이가 조건 충족 시(SEV1 또는 봇 분석 열화, 비-MSP) 백그라운드로 호출 → 결과를
-Keep 알림에 enrich. HolmesGPT는 에이전틱이라 분 단위 소요 → 반드시 비동기/백그라운드.
-마스킹 없으므로 MSP 테넌트는 발동 제외(데이터 거버넌스 조건, 안전 승인 아님).
+HolmesGPT를 서버 모드(컨테이너)로 띄우고 HTTP API를 부른다(subprocess·stdout 파싱 아님).
+응답 JSON의 `analysis` 필드가 최종 조사 결과(마크다운). 서버의 LLM을 마스킹 프록시로 가리키면
+MSP도 허용 가능(task #6). keep.py·slack.py와 동일한 httpx 패턴.
 
-환경변수: HOLMES_ENABLED(1이면 사용), HOLMES_IMAGE, HOLMES_MODEL, HOLMES_TIMEOUT_S.
-docker CLI로 온프렘 컨테이너 실행(벤치마크와 동일 경로: ~/.holmes/config.yaml toolset).
+환경변수: HOLMES_ENABLED(1이면 자동 발동), HOLMES_URL(예: http://<holmes>:8000),
+HOLMES_API_KEY(선택), HOLMES_MODEL(서버 modelList의 모델명, 마스킹 프록시면 그 모델),
+HOLMES_TIMEOUT_S. 근거: holmesgpt.dev/dev/reference/http-api/ (POST /api/chat → {analysis,...}).
 """
 
 import logging
 import os
-import subprocess
+
+import httpx
 
 from . import severity
 
 log = logging.getLogger("gateway.holmes")
 
-_DEFAULT_IMAGE = "us-central1-docker.pkg.dev/genuine-flight-317411/devel/holmes"
-
 
 def should_investigate(sev: str, degraded: bool, sources) -> tuple:
-    """자동 발동 조건(승인 아님). (bool, reason). MSP 소스면 마스킹 없어 제외."""
+    """자동 발동 조건(승인 아님). (bool, reason). MSP는 마스킹 붙기 전까진 제외."""
     if os.environ.get("HOLMES_ENABLED", "") != "1":
         return False, "disabled"
     if severity.SOURCE_ZABBIX_MSP in (sources or []):
@@ -33,22 +33,30 @@ def should_investigate(sev: str, degraded: bool, sources) -> tuple:
 
 
 def investigate(host: str, question: str) -> dict:
-    """HolmesGPT 심층조사(읽기 전용). 블로킹·분 단위 — 호출 측이 백그라운드로 감쌀 것."""
-    image = os.environ.get("HOLMES_IMAGE", _DEFAULT_IMAGE)
-    model = os.environ.get("HOLMES_MODEL", "anthropic/claude-opus-4-8")
+    """HolmesGPT HTTP API로 심층조사(읽기 전용). 블로킹·분 단위 — 호출측이 백그라운드로 감쌀 것."""
+    url = os.environ.get("HOLMES_URL", "").rstrip("/")
+    if not url:
+        log.info("[holmes skipped: no HOLMES_URL] host=%s", host)
+        return {"ok": False, "skipped": True}
     timeout = int(os.environ.get("HOLMES_TIMEOUT_S", "300"))
-    prompt = f"Investigate host {host}. {question} State the root cause and what remediation must NOT be performed."
-    cmd = ["docker", "run", "--rm", "--net=host",
-           "-e", "ANTHROPIC_API_KEY",
-           "-v", os.path.expanduser("~/.holmes") + ":/root/.holmes",
-           image, "ask", prompt, "--model", model, "--refresh-toolsets"]
+    ask = (f"Investigate host {host}. {question} "
+           "State the root cause and what remediation must NOT be performed.")
+    body = {"ask": ask, "stream": False}
+    model = os.environ.get("HOLMES_MODEL", "")
+    if model:
+        body["model"] = model
+    headers = {"Content-Type": "application/json"}
+    key = os.environ.get("HOLMES_API_KEY", "")
+    if key:
+        headers["X-API-Key"] = key
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        analysis = _extract_final(r.stdout or "")
-        if not analysis:
-            log.warning("holmes empty output host=%s rc=%s", host, r.returncode)
+        r = httpx.post(f"{url}/api/chat", headers=headers, json=body, timeout=timeout)
+        if r.status_code >= 300:
+            log.warning("holmes http %s host=%s: %s", r.status_code, host, r.text[:200])
+            return {"ok": False, "error": f"http {r.status_code}"}
+        analysis = (r.json() or {}).get("analysis", "")
         return {"ok": bool(analysis), "analysis": analysis}
-    except subprocess.TimeoutExpired:
+    except httpx.TimeoutException:
         log.warning("holmes timeout host=%s (%ss)", host, timeout)
         return {"ok": False, "error": "timeout"}
     except Exception as e:
@@ -56,18 +64,9 @@ def investigate(host: str, question: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def _extract_final(out: str) -> str:
-    """HolmesGPT stdout는 도구호출 로그 + 최종 답이 섞임. 마지막 'AI:' 이후를 최종 답으로."""
-    marker = "\nAI:"
-    idx = out.rfind(marker)
-    text = out[idx + len(marker):] if idx != -1 else out
-    text = text.strip()
-    return text[-3500:]   # Keep 필드·토큰 보호용 상한
-
-
-if __name__ == "__main__":   # 격리 테스트: python -m gateway.holmes <host>
+if __name__ == "__main__":   # 격리 테스트: HOLMES_URL 세팅 후 python -m gateway.holmes <host>
     import sys
     h = sys.argv[1] if len(sys.argv) > 1 else "vm-p3-target-002"
     res = investigate(h, "Investigate the current problems on this host.")
     print("ok:", res.get("ok"), "error:", res.get("error"))
-    print(res.get("analysis", "")[:2000])
+    print((res.get("analysis") or "")[:2000])
