@@ -12,15 +12,30 @@ API = "https://slack.com/api/chat.postMessage"
 _SEV_EMOJI = {"SEV1": "🔴", "SEV2": "🟠", "SEV3": "🟡", "SEV4": "🔵", "NONE": "⚪"}
 
 
+def _grafana_link(host: str) -> str:
+    """Slack 카드→Grafana 딥링크. GRAFANA_URL 설정 시만. 그 호스트·최근 창으로 필터(데모 A 재사용)."""
+    base = os.environ.get("GRAFANA_URL", "").rstrip("/")
+    dash = os.environ.get("GRAFANA_DASHBOARD", "kinx-overview")
+    if not base or not host:
+        return ""
+    return f"{base}/d/{dash}?var-host={host}&from=now-30m&to=now"
+
+
 def _blocks(alert_name: str, sev: str, host: str, verdict: str, body: str) -> list:
     head = f"{_SEV_EMOJI.get(sev, '⚪')} [{sev}] {alert_name}"
     context = f"host: {host}  ·  판정: {verdict}"
-    return [
+    blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": head[:150], "emoji": True}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": context}]},
         {"type": "divider"},
         {"type": "section", "text": {"type": "mrkdwn", "text": body[:2900]}},  # Slack section 한도
     ]
+    link = _grafana_link(host)
+    if link:
+        blocks.append({"type": "context", "elements": [
+            {"type": "mrkdwn",
+             "text": f"📊 <{link}|Grafana에서 이 호스트 원본(지표·로그·보안) 열기>"}]})
+    return blocks
 
 
 def post_triage(alert_name: str, sev: str, host: str, verdict: str, body: str,
