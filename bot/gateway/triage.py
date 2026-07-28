@@ -117,7 +117,8 @@ async def run_incident(inc) -> dict:
     # 결과는 별개 알림이 아니라 (1)Slack 원래 스레드 답글 (2)Keep 같은 알림 Note enrich 로.
     # 3.5분 수준이라 30초 예산과 분리, fire-and-forget. 승인 아님(읽기 전용).
     fire_h, reason_h = holmes.should_investigate(sev, reply["degraded"],
-                                                 [a.source for a in inc.alerts])
+                                                 [a.source for a in inc.alerts],
+                                                 merged=inc.is_merged())
     if fire_h:
         log.info("holmes deep-dive scheduled fp=%s reason=%s", fp, reason_h)
         _spawn_bg(_deep_investigate(inc.host, headline, sev, fp, posted.get("ts")))

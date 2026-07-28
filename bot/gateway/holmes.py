@@ -20,10 +20,11 @@ from . import severity
 log = logging.getLogger("gateway.holmes")
 
 
-def should_investigate(sev: str, degraded: bool, sources) -> tuple:
+def should_investigate(sev: str, degraded: bool, sources, merged: bool = False) -> tuple:
     """자동 발동 조건(승인 아님, read=auto 규칙). (bool, reason).
     MSP는 마스킹 프록시(HOLMES_MASKED=1)가 붙어 있을 때만 허용 — 없으면 원문 유출이라 제외.
-    (마스킹 실측·한계는 masking_track.md. 홈즈 서버 LLM을 마스킹 프록시로 가리키고 이 플래그 on.)"""
+    (마스킹 실측·한계는 masking_track.md. 홈즈 서버 LLM을 마스킹 프록시로 가리키고 이 플래그 on.)
+    발동 기준: SEV1 / 봇 열화 / 병합된 교차신호 인시던트(상관할 게 있으니 심층조사 가치)."""
     if os.environ.get("HOLMES_ENABLED", "") != "1":
         return False, "disabled"
     masked = os.environ.get("HOLMES_MASKED", "") == "1"
@@ -33,6 +34,8 @@ def should_investigate(sev: str, degraded: bool, sources) -> tuple:
         return True, "sev1"
     if degraded:
         return True, "bot-degraded"
+    if merged:
+        return True, "merged-incident"
     return False, "criteria-not-met"
 
 
