@@ -5,8 +5,9 @@ HolmesGPT를 서버 모드(컨테이너)로 띄우고 HTTP API를 부른다(subp
 MSP도 허용 가능(task #6). keep.py·slack.py와 동일한 httpx 패턴.
 
 환경변수: HOLMES_ENABLED(1이면 자동 발동), HOLMES_URL(예: http://<holmes>:8000),
-HOLMES_API_KEY(선택), HOLMES_MODEL(서버 modelList의 모델명, 마스킹 프록시면 그 모델),
-HOLMES_TIMEOUT_S. 근거: holmesgpt.dev/dev/reference/http-api/ (POST /api/chat → {analysis,...}).
+HOLMES_API_KEY(선택), HOLMES_MODEL(서버 modelList의 모델명, 마스킹 프록시면 그 모델 예: masked-claude),
+HOLMES_MASKED(1이면 홈즈 서버 LLM이 마스킹 프록시 경유 → MSP도 심층조사 허용), HOLMES_TIMEOUT_S.
+근거: holmesgpt.dev/dev/reference/http-api/ (POST /api/chat → {analysis,...}). 마스킹 트랙: masking_track.md.
 """
 
 import logging
@@ -20,10 +21,13 @@ log = logging.getLogger("gateway.holmes")
 
 
 def should_investigate(sev: str, degraded: bool, sources) -> tuple:
-    """자동 발동 조건(승인 아님). (bool, reason). MSP는 마스킹 붙기 전까진 제외."""
+    """자동 발동 조건(승인 아님, read=auto 규칙). (bool, reason).
+    MSP는 마스킹 프록시(HOLMES_MASKED=1)가 붙어 있을 때만 허용 — 없으면 원문 유출이라 제외.
+    (마스킹 실측·한계는 masking_track.md. 홈즈 서버 LLM을 마스킹 프록시로 가리키고 이 플래그 on.)"""
     if os.environ.get("HOLMES_ENABLED", "") != "1":
         return False, "disabled"
-    if severity.SOURCE_ZABBIX_MSP in (sources or []):
+    masked = os.environ.get("HOLMES_MASKED", "") == "1"
+    if severity.SOURCE_ZABBIX_MSP in (sources or []) and not masked:
         return False, "msp-tenant(no-masking)"
     if sev == severity.SEV1:
         return True, "sev1"
