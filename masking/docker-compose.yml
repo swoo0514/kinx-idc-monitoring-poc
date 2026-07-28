@@ -1,0 +1,28 @@
+# 마스킹 이그레스 프록시 — HolmesGPT/외부LLM 앞단에서 PII·식별자 마스킹(가역).
+# 체인: 클라이언트(HolmesGPT) →(OpenAI호환) litellm:4000 → Presidio 마스킹 → Anthropic
+#        → Presidio 역치환(output_parse_pii) → 클라이언트. 설정·검증은 masking/MASKING_GUIDE.md.
+# 기동: ANTHROPIC_API_KEY 환경변수 후 `docker compose up -d`. LiteLLM은 OpenAI-호환 경로라
+# Anthropic 네이티브 역치환 이슈 우회 검증용.
+services:
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    restart: unless-stopped
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    restart: unless-stopped
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PRESIDIO_ANALYZER_API_BASE=http://presidio-analyzer:3000
+      - PRESIDIO_ANONYMIZER_API_BASE=http://presidio-anonymizer:3000
+      - LITELLM_MASTER_KEY=sk-masking-lab
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
+    depends_on:
+      - presidio-analyzer
+      - presidio-anonymizer

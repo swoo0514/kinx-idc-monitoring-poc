@@ -1,0 +1,24 @@
+# LiteLLM 프록시 — Anthropic 뒤에 Presidio 마스킹 가드레일. HolmesGPT는 openai/masked-opus 로 호출.
+# output_parse_pii: 응답에서 마스킹 토큰을 원본으로 역치환(에이전틱 tool-call 루프 견디는지가 검증점).
+# 기본 엔티티(IP·PERSON)로 파이프라인 먼저 증명 → KINX 커스텀(사설IP대역·고객사명·DB명)은 Presidio
+# recognizer로 추가(task #5). 근거: docs.litellm.ai/docs/proxy/guardrails/pii_masking_v2.
+model_list:
+  - model_name: masked-opus
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+guardrails:
+  - guardrail_name: "presidio-mask"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      default_on: true
+      output_parse_pii: true
+      presidio_filter_scope: both
+      presidio_score_thresholds:
+        ALL: 0.5
+      pii_entities_config:
+        IP_ADDRESS: "MASK"
+        PERSON: "MASK"
+        LOCATION: "MASK"
