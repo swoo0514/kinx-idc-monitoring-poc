@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 
-from . import collector, incident as incident_mod, keep, llm, slack
+from . import collector, holmes, incident as incident_mod, keep, llm, slack
 
 log = logging.getLogger("gateway.triage")
 
@@ -94,6 +94,14 @@ async def run_incident(inc) -> dict:
     timings["slack_s"] = round(time.monotonic() - t2, 2)
     await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"], verdict)
 
+    # 심층조사 자동 발동(read=auto 규칙): SEV1/봇 열화 + 비-MSP → 백그라운드 HolmesGPT → Keep enrich.
+    # 3.5분 수준이라 30초 예산과 분리, fire-and-forget. 승인 아님(읽기 전용).
+    fire_h, reason_h = holmes.should_investigate(sev, reply["degraded"],
+                                                 [a.source for a in inc.alerts])
+    if fire_h:
+        log.info("holmes deep-dive scheduled fp=%s reason=%s", inc.fingerprint(), reason_h)
+        asyncio.create_task(_deep_investigate(inc.host, headline, sev))
+
     timings["total_s"] = round(time.monotonic() - t0, 2)
     log.info("incident triage done fp=%s alerts=%d provider=%s degraded=%s timings=%s",
              inc.fingerprint(), n, reply["provider"], reply["degraded"], timings)
@@ -101,3 +109,20 @@ async def run_incident(inc) -> dict:
             "provider": reply["provider"], "degraded": reply["degraded"],
             "timings": timings, "slack_ok": bool(posted.get("ok")),
             "thread_ts": posted.get("ts")}
+
+
+async def _deep_investigate(host: str, incident_summary: str, sev: str) -> None:
+    """백그라운드 HolmesGPT 심층조사 → 결과를 Keep 알림(source=holmesgpt)으로 enrich.
+    블로킹 subprocess는 to_thread로 감싸 이벤트 루프 비차단. 실패해도 조용히 종료."""
+    t0 = time.monotonic()
+    res = await asyncio.to_thread(holmes.investigate, host,
+                                  f"Incident: {incident_summary}.")
+    took = round(time.monotonic() - t0, 1)
+    if res.get("ok"):
+        await asyncio.to_thread(keep.push_alert, f"[심층조사] {host} — HolmesGPT",
+                                sev, host, res["analysis"],
+                                prejudge="deep-dive", source="holmesgpt")
+        log.info("holmes deep-dive done host=%s took=%ss", host, took)
+    else:
+        log.warning("holmes deep-dive no result host=%s took=%ss err=%s",
+                    host, took, res.get("error"))

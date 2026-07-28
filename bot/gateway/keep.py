@@ -17,15 +17,16 @@ _SEV = {"SEV1": "critical", "SEV2": "high", "SEV3": "warning", "SEV4": "info", "
 
 
 def push_alert(name: str, sev: str, host: str, analysis: str,
-               prejudge: str = "", service: str = "") -> dict:
-    """분석 담은 알림을 Keep에 전송. 실패해도 예외를 던지지 않음(봇 흐름 보호)."""
+               prejudge: str = "", service: str = "", source: str = "kinx-bot") -> dict:
+    """분석 담은 알림을 Keep에 전송. 실패해도 예외를 던지지 않음(봇 흐름 보호).
+    source: 빠른 봇 분석=kinx-bot / HolmesGPT 심층조사=holmesgpt 로 구분."""
     url = os.environ.get("KEEP_URL", "").rstrip("/")
     if not url:
         log.info("[keep skipped: no KEEP_URL] %s", name)
         return {"ok": False, "skipped": True}
     key = os.environ.get("KEEP_API_KEY", "") or "keep-noauth"
     payload = {"name": name, "status": "firing", "severity": _SEV.get(sev, "warning"),
-               "source": ["kinx-bot"], "host": host, "service": service,
+               "source": [source], "host": host, "service": service,
                "analysis": analysis, "prejudge": prejudge}
     try:
         r = httpx.post(f"{url}/alerts/event/keep",
