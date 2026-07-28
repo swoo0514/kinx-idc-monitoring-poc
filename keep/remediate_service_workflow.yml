@@ -1,10 +1,12 @@
-# Keep 워크플로 — 알림/수동 트리거 → SSH로 core(ansible control node) → ansible-playbook 실행.
-# "Keep(분석·저장·승인 UI) → Ansible 자동화"의 마지막 고리. 설정·업로드는 keep/KEEP_GUIDE.md.
-# 채울 값 3개: <CORE_REPO_PATH>(core의 리포 경로), target_host, service_name.
-# SSH provider는 Keep UI에서 먼저 만들고 이름을 core-ansible 로 (host=192.168.20.26, user=rocky, pkey=p3키).
+# Keep 워크플로 — 알림에서 사람이 "Run Workflow"(=승인) → SSH로 core(ansible control) →
+# ansible-playbook 서비스 재기동. "Keep = 알림저장·UI + 승인 + Ansible 실행" 데모 B(HITL 자가치유).
+# 배선·프로비저닝은 keep/KEEP_GUIDE.md. 코드로 재현: KEEP_WORKFLOWS_DIRECTORY 로 이 파일을 provision.
+# 전제: Keep UI에 SSH provider(host=core, user=rocky, pkey=p3키)를 이름 core-ansible 로 생성.
+# 실측 확정 경로: core repo=/home/rocky/kinx-idc-monitoring-poc, 인벤토리=inventory.local.ini.
+# <TARGET_HOST>·<SERVICE_NAME>은 랩값으로 채운다(예: vm-p3-target-002 / chronyd).
 workflow:
   id: remediate-service-via-ansible
-  description: Keep→SSH(core)→ansible-playbook 서비스 재기동 (데모 B 자동화 고리)
+  description: Keep manual-approval to run ansible remediate_service playbook on core
   triggers:
     - type: manual
   steps:
@@ -13,8 +15,4 @@ workflow:
         type: ssh
         config: "{{ providers.core-ansible }}"
         with:
-          command: >-
-            source ~/ansible-venv/bin/activate &&
-            cd <CORE_REPO_PATH>/ansible &&
-            ansible-playbook -i inventory.ini remediate_service.yml
-            -e target_host=<TARGET_HOST> -e service_name=<SERVICE_NAME>
+          command: "source ~/ansible-venv/bin/activate && cd /home/rocky/kinx-idc-monitoring-poc/ansible && ansible-playbook -i inventory.local.ini remediate_service.yml -e target_host=<TARGET_HOST> -e service_name=<SERVICE_NAME>"
