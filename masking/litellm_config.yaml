@@ -21,9 +21,10 @@ guardrails:
       default_on: true
       output_parse_pii: true
       presidio_filter_scope: both
-      presidio_score_thresholds:
-        ALL: 0.5
+      # KINX 커스텀 인식기(호스트명·DB명·고객사명). PERSON/LOCATION은 기술텍스트 오탐이 심해 제외.
+      presidio_ad_hoc_recognizers: "/app/kinx_recognizers.json"
       pii_entities_config:
         IP_ADDRESS: "MASK"
-        PERSON: "MASK"
-        LOCATION: "MASK"
+        KINX_HOST: "MASK"
+        KINX_DB: "MASK"
+        KINX_CUSTOMER: "MASK"

@@ -22,6 +22,7 @@ services:
       - LITELLM_MASTER_KEY=sk-masking-lab
     volumes:
       - ./litellm_config.yaml:/app/config.yaml
+      - ./kinx_recognizers.json:/app/kinx_recognizers.json
     command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
     depends_on:
       - presidio-analyzer

@@ -1,0 +1,24 @@
+[
+  {
+    "supported_language": "en",
+    "supported_entity": "KINX_HOST",
+    "patterns": [
+      {"name": "novalocal_fqdn", "regex": "\\b[a-z0-9][a-z0-9.-]*\\.novalocal\\b", "score": 0.95},
+      {"name": "lab_host", "regex": "\\b(?:vm-[a-z0-9-]+|node[0-9]+|kinx-[a-z0-9-]+|lab-[a-z0-9-]+)\\b", "score": 0.85}
+    ]
+  },
+  {
+    "supported_language": "en",
+    "supported_entity": "KINX_DB",
+    "patterns": [
+      {"name": "known_db", "regex": "\\b(?:demo_repl|kinx_demo)\\b", "score": 0.9}
+    ]
+  },
+  {
+    "supported_language": "en",
+    "supported_entity": "KINX_CUSTOMER",
+    "patterns": [
+      {"name": "customer_slug", "regex": "\\bcustomer-[a-z0-9]+\\b", "score": 0.9}
+    ]
+  }
+]
