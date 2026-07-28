@@ -2,6 +2,11 @@
 # output_parse_pii: 응답에서 마스킹 토큰을 원본으로 역치환(에이전틱 tool-call 루프 견디는지가 검증점).
 # 기본 엔티티(IP·PERSON)로 파이프라인 먼저 증명 → KINX 커스텀(사설IP대역·고객사명·DB명)은 Presidio
 # recognizer로 추가(task #5). 근거: docs.litellm.ai/docs/proxy/guardrails/pii_masking_v2.
+litellm_settings:
+  # HolmesGPT가 보내는 temperature≈0 등 claude-opus-4-8 미지원 파라미터를 드롭
+  # (OpenAI호환→LiteLLM→Anthropic 경로에서 생기는 파라미터 호환 이슈).
+  drop_params: true
+
 model_list:
   - model_name: masked-opus
     litellm_params:
