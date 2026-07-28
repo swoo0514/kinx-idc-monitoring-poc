@@ -8,9 +8,9 @@ litellm_settings:
   drop_params: true
 
 model_list:
-  - model_name: masked-opus
+  - model_name: masked-claude          # 모델 중립 이름 — 아래 model만 갈면 스왑 (HolmesGPT는 이 이름 호출)
     litellm_params:
-      model: anthropic/claude-opus-4-8
+      model: anthropic/claude-sonnet-4-6   # opus 대비 저렴. 필요시 claude-sonnet-5/claude-opus-4-8로 스왑
       api_key: os.environ/ANTHROPIC_API_KEY
 
 guardrails:
