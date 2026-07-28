@@ -177,7 +177,7 @@
               "type": "raw_data"
             }
           ],
-          "query": "rule.level:>=10",
+          "query": "rule.level:>=10 AND agent.name:\"$host\"",
           "queryType": "lucene",
           "refId": "A",
           "timeField": "@timestamp"
@@ -369,6 +369,75 @@
     },
     {
       "datasource": {
+        "type": "alexanderzobnin-zabbix-datasource",
+        "uid": "zabbix"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "id": 10,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "application": { "filter": "" },
+          "countTriggersBy": "",
+          "datasource": {
+            "type": "alexanderzobnin-zabbix-datasource",
+            "uid": "zabbix"
+          },
+          "evaltype": "0",
+          "functions": [],
+          "group": { "filter": "/.*/" },
+          "host": { "filter": "/$host/" },
+          "item": { "filter": "/Seconds Behind Master/" },
+          "itemTag": { "filter": "" },
+          "macro": { "filter": "" },
+          "options": {
+            "count": false,
+            "disableDataAlignment": false,
+            "showDisabledItems": false,
+            "skipEmptyValues": false,
+            "useTrends": "default",
+            "useZabbixValueMapping": false
+          },
+          "proxy": { "filter": "" },
+          "queryType": "0",
+          "refId": "A",
+          "resultFormat": "time_series",
+          "schema": 12,
+          "table": { "skipEmptyValues": false },
+          "tags": { "filter": "" },
+          "textFilter": "",
+          "trigger": { "filter": "" }
+        }
+      ],
+      "title": "메트릭 (Zabbix) — $host 복제 지연(초, Seconds Behind Master)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
         "type": "grafana-opensearch-datasource",
         "uid": "wazuh"
       },
@@ -479,7 +548,7 @@
               "type": "count"
             }
           ],
-          "query": "rule.level:>=10 ",
+          "query": "rule.level:>=10 AND agent.name:\"$host\"",
           "queryType": "lucene",
           "refId": "A",
           "timeField": "@timestamp"
