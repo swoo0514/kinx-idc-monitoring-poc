@@ -1,0 +1,45 @@
+---
+# 서비스 재기동 자가치유 (데모 B). 설계·승인 배선은 GATEWAY_GUIDE / REMEDIATE_GUIDE.
+# 안전 원칙: 승인(HITL)을 통과한 대상 1대의 지정 서비스만 재기동한다. 조치 후 active 재검증까지
+# 하고(승인 버튼이 아니라 이 재검증이 진짜 안전판), 살아나지 않으면 실패로 리턴해 사람이 개입.
+# target_host·service_name 은 승인된 결정에서 온다(n8n/게이트웨이가 -e 로 주입).
+- name: Remediate a down service (safe, HITL-approved, single service)
+  hosts: "{{ target_host | default('targets') }}"
+  become: true
+  vars:
+    # service_name 은 필수. 지정 없으면 아무 것도 안 하고 실패시켜 오작동 방지.
+    settle_seconds: 5
+  tasks:
+    - name: service_name 지정 확인 (미지정이면 중단)
+      ansible.builtin.assert:
+        that:
+          - service_name is defined
+          - service_name | length > 0
+        fail_msg: "service_name 이 필요합니다 (예: -e service_name=nginx)."
+
+    - name: 재기동 전 상태
+      ansible.builtin.command: "systemctl is-active {{ service_name }}"
+      register: before
+      changed_when: false
+      failed_when: false
+
+    - name: 서비스 재기동
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: restarted
+
+    - name: 안정화 대기
+      ansible.builtin.pause:
+        seconds: "{{ settle_seconds }}"
+
+    - name: 재기동 후 상태 재검증 (진짜 안전판 — 살아났나)
+      ansible.builtin.command: "systemctl is-active {{ service_name }}"
+      register: after
+      changed_when: false
+      failed_when: after.stdout != "active"
+
+    - name: 조치 결과 요약 (게이트웨이가 이 stdout 을 승인 스레드로 회신)
+      ansible.builtin.debug:
+        msg:
+          - "host: {{ inventory_hostname }}  service: {{ service_name }}"
+          - "before: {{ before.stdout | default('unknown') }}  ->  after: {{ after.stdout }}"

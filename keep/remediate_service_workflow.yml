@@ -1,0 +1,20 @@
+# Keep 워크플로 — 알림/수동 트리거 → SSH로 core(ansible control node) → ansible-playbook 실행.
+# "Keep(분석·저장·승인 UI) → Ansible 자동화"의 마지막 고리. 설정·업로드는 keep/KEEP_GUIDE.md.
+# 채울 값 3개: <CORE_REPO_PATH>(core의 리포 경로), target_host, service_name.
+# SSH provider는 Keep UI에서 먼저 만들고 이름을 core-ansible 로 (host=192.168.20.26, user=rocky, pkey=p3키).
+workflow:
+  id: remediate-service-via-ansible
+  description: Keep→SSH(core)→ansible-playbook 서비스 재기동 (데모 B 자동화 고리)
+  triggers:
+    - type: manual
+  steps:
+    - name: run-ansible-remediation
+      provider:
+        type: ssh
+        config: "{{ providers.core-ansible }}"
+        with:
+          command: >-
+            source ~/ansible-venv/bin/activate &&
+            cd <CORE_REPO_PATH>/ansible &&
+            ansible-playbook -i inventory.ini remediate_service.yml
+            -e target_host=<TARGET_HOST> -e service_name=<SERVICE_NAME>
