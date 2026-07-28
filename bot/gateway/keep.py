@@ -17,8 +17,10 @@ _SEV = {"SEV1": "critical", "SEV2": "high", "SEV3": "warning", "SEV4": "info", "
 
 
 def push_alert(name: str, sev: str, host: str, analysis: str,
-               prejudge: str = "", service: str = "", source: str = "kinx-bot") -> dict:
+               prejudge: str = "", service: str = "", source: str = "kinx-bot",
+               fingerprint: str = "") -> dict:
     """분석 담은 알림을 Keep에 전송. 실패해도 예외를 던지지 않음(봇 흐름 보호).
+    fingerprint 지정 시 Keep이 그 값으로 디듑 → 같은 사건은 한 행에 모임(홈즈 enrich 대상).
     source: 빠른 봇 분석=kinx-bot / HolmesGPT 심층조사=holmesgpt 로 구분."""
     url = os.environ.get("KEEP_URL", "").rstrip("/")
     if not url:
@@ -28,6 +30,8 @@ def push_alert(name: str, sev: str, host: str, analysis: str,
     payload = {"name": name, "status": "firing", "severity": _SEV.get(sev, "warning"),
                "source": [source], "host": host, "service": service,
                "analysis": analysis, "prejudge": prejudge}
+    if fingerprint:
+        payload["fingerprint"] = fingerprint
     try:
         r = httpx.post(f"{url}/alerts/event/keep",
                        headers={"Content-Type": "application/json", "x-api-key": key},
@@ -38,4 +42,25 @@ def push_alert(name: str, sev: str, host: str, analysis: str,
         return {"ok": ok, "status": r.status_code}
     except Exception as e:
         log.warning("keep push exception: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
+def enrich_note(fingerprint: str, note: str) -> dict:
+    """홈즈 심층분석을 원래 알림(fingerprint)의 Note로 첨부 — 별개 알림 생성 대신.
+    Keep 한 화면에서 사건 1행 + Note에 심층분석. 실패해도 예외를 던지지 않음.
+    엔드포인트: POST /alerts/enrich/note {fingerprint, note} (Keep openapi 실측)."""
+    url = os.environ.get("KEEP_URL", "").rstrip("/")
+    if not url or not fingerprint:
+        return {"ok": False, "skipped": True}
+    key = os.environ.get("KEEP_API_KEY", "") or "keep-noauth"
+    try:
+        r = httpx.post(f"{url}/alerts/enrich/note",
+                       headers={"Content-Type": "application/json", "x-api-key": key},
+                       json={"fingerprint": fingerprint, "note": note}, timeout=10)
+        ok = r.status_code < 300
+        if not ok:
+            log.warning("keep enrich_note failed: %s %s", r.status_code, r.text[:200])
+        return {"ok": ok, "status": r.status_code}
+    except Exception as e:
+        log.warning("keep enrich_note exception: %s", e)
         return {"ok": False, "error": str(e)}

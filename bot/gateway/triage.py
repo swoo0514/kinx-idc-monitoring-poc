@@ -104,19 +104,23 @@ async def run_incident(inc) -> dict:
     headline = (f"{n}건이 1개 사건 · {inc.host}" if inc.is_merged()
                 else inc.alerts[0].alert_name)
     verdict = f"{n}건 병합" if inc.is_merged() else "단일"
+    fp = inc.fingerprint()
     t2 = time.monotonic()
     posted = await asyncio.to_thread(slack.post_triage, headline, sev, inc.host,
                                      verdict, reply["text"])
     timings["slack_s"] = round(time.monotonic() - t2, 2)
-    await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"], verdict)
+    # 봇 알림은 사건 fingerprint로 고정 → 홈즈 심층분석이 같은 행에 enrich (별개 알림 방지)
+    await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"],
+                            verdict, fingerprint=fp)
 
-    # 심층조사 자동 발동(read=auto 규칙): SEV1/봇 열화 + 비-MSP → 백그라운드 HolmesGPT → Keep enrich.
+    # 심층조사 자동 발동(read=auto 규칙): SEV1/봇 열화 + 비-MSP → 백그라운드 HolmesGPT.
+    # 결과는 별개 알림이 아니라 (1)Slack 원래 스레드 답글 (2)Keep 같은 알림 Note enrich 로.
     # 3.5분 수준이라 30초 예산과 분리, fire-and-forget. 승인 아님(읽기 전용).
     fire_h, reason_h = holmes.should_investigate(sev, reply["degraded"],
                                                  [a.source for a in inc.alerts])
     if fire_h:
-        log.info("holmes deep-dive scheduled fp=%s reason=%s", inc.fingerprint(), reason_h)
-        _spawn_bg(_deep_investigate(inc.host, headline, sev))
+        log.info("holmes deep-dive scheduled fp=%s reason=%s", fp, reason_h)
+        _spawn_bg(_deep_investigate(inc.host, headline, sev, fp, posted.get("ts")))
 
     timings["total_s"] = round(time.monotonic() - t0, 2)
     log.info("incident triage done fp=%s alerts=%d provider=%s degraded=%s timings=%s",
@@ -127,18 +131,24 @@ async def run_incident(inc) -> dict:
             "thread_ts": posted.get("ts")}
 
 
-async def _deep_investigate(host: str, incident_summary: str, sev: str) -> None:
-    """백그라운드 HolmesGPT 심층조사 → 결과를 Keep 알림(source=holmesgpt)으로 enrich.
-    블로킹 subprocess는 to_thread로 감싸 이벤트 루프 비차단. 실패해도 조용히 종료."""
+async def _deep_investigate(host: str, incident_summary: str, sev: str,
+                            fingerprint: str = "", thread_ts: str = None) -> None:
+    """백그라운드 HolmesGPT 심층조사 → (1)Slack 원래 알림 스레드 답글(읽기) (2)Keep 같은
+    알림 Note enrich(실행 화면). 별개 알림을 만들지 않아 피드에 사건 1행 유지.
+    블로킹 호출은 to_thread로 감싸 이벤트 루프 비차단. 실패해도 조용히 종료."""
     t0 = time.monotonic()
     res = await asyncio.to_thread(holmes.investigate, host,
                                   f"Incident: {incident_summary}.")
     took = round(time.monotonic() - t0, 1)
-    if res.get("ok"):
-        await asyncio.to_thread(keep.push_alert, f"[심층조사] {host} — HolmesGPT",
-                                sev, host, res["analysis"],
-                                prejudge="deep-dive", source="holmesgpt")
-        log.info("holmes deep-dive done host=%s took=%ss", host, took)
-    else:
+    if not res.get("ok"):
         log.warning("holmes deep-dive no result host=%s took=%ss err=%s",
                     host, took, res.get("error"))
+        return
+    analysis = res["analysis"]
+    # (1) 읽기: 봇 초동분석이 올라간 Slack 스레드에 심층분석 답글
+    await asyncio.to_thread(slack.post_triage, f"[심층조사] {host} — HolmesGPT",
+                            sev, host, "심층조사", analysis, thread_ts)
+    # (2) 실행 화면: 원래 Keep 알림에 Note로 첨부(fingerprint 매칭). 별개 알림 아님.
+    if fingerprint:
+        await asyncio.to_thread(keep.enrich_note, fingerprint, analysis)
+    log.info("holmes deep-dive done host=%s took=%ss (slack thread + keep note)", host, took)
