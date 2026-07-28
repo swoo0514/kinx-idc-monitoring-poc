@@ -323,10 +323,10 @@
           "evaltype": "0",
           "functions": [],
           "group": {
-            "filter": "Linux servers"
+            "filter": "/.*/"
           },
           "host": {
-            "filter": "node1"
+            "filter": "/$host/"
           },
           "item": {
             "filter": "CPU utilization"
@@ -364,7 +364,7 @@
           }
         }
       ],
-      "title": "메트릭 (Zabbix) - node1 cpu util.",
+      "title": "메트릭 (Zabbix) — $host CPU 사용률",
       "type": "timeseries"
     },
     {
