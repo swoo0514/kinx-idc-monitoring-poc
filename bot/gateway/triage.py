@@ -8,6 +8,22 @@ from . import collector, holmes, incident as incident_mod, keep, llm, slack
 
 log = logging.getLogger("gateway.triage")
 
+# fire-and-forget 백그라운드 태스크 — 강참조 유지(GC 중도소멸 방지) + 완료 시 정리·예외로깅.
+# 근거: docs.python.org asyncio.create_task "save a reference ... may be garbage collected".
+_bg_tasks: set = set()
+
+
+def _spawn_bg(coro) -> None:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _bg_tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            log.warning("background task crashed: %s", t.exception())
+
+    task.add_done_callback(_done)
+
 
 async def run(event_id: str, trigger_id: str, sev: str,
               host_display: str = "", alert_name: str = "") -> dict:
@@ -100,7 +116,7 @@ async def run_incident(inc) -> dict:
                                                  [a.source for a in inc.alerts])
     if fire_h:
         log.info("holmes deep-dive scheduled fp=%s reason=%s", inc.fingerprint(), reason_h)
-        asyncio.create_task(_deep_investigate(inc.host, headline, sev))
+        _spawn_bg(_deep_investigate(inc.host, headline, sev))
 
     timings["total_s"] = round(time.monotonic() - t0, 2)
     log.info("incident triage done fp=%s alerts=%d provider=%s degraded=%s timings=%s",
