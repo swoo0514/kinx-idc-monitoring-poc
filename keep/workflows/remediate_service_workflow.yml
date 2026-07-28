@@ -4,6 +4,7 @@
 # 전제: Keep UI에 SSH provider(host=core, user=rocky, pkey=p3키)를 이름 core-ansible 로 생성.
 workflow:
   id: remediate-service-via-ansible
+  name: Remediate service via Ansible
   description: Keep manual-approval to run ansible remediate_service playbook on core
   triggers:
     - type: manual
