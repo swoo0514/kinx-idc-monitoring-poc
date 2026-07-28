@@ -411,7 +411,7 @@
           "functions": [],
           "group": { "filter": "/.*/" },
           "host": { "filter": "/$host/" },
-          "item": { "filter": "/Seconds Behind Master/" },
+          "item": { "filter": "/.*Seconds Behind Master.*/" },
           "itemTag": { "filter": "" },
           "macro": { "filter": "" },
           "options": {
