@@ -1,0 +1,40 @@
+"""Keep push 어댑터 — 봇 분석을 Keep 알림(enrichment)으로 전송.
+
+환경변수: KEEP_URL(예: http://<keep>:8080), KEEP_API_KEY(no-auth 모드는 아무 값이나 통과).
+KEEP_URL 없으면 skip(열화) — Keep 미배선 환경에서도 봇은 그대로 동작.
+Keep generic webhook(/alerts/event/keep)로 네이티브 형식 알림 전송, analysis/prejudge를
+커스텀 필드로 실어 운영자가 Keep 한 화면에서 분석을 보고 Run Workflow(승인)로 조치.
+Keep은 온프렘 저장소라 실 호스트 전송 무방(외부 LLM 마스킹 경계와 별개)."""
+
+import logging
+import os
+
+import httpx
+
+log = logging.getLogger("gateway.keep")
+
+_SEV = {"SEV1": "critical", "SEV2": "high", "SEV3": "warning", "SEV4": "info", "NONE": "low"}
+
+
+def push_alert(name: str, sev: str, host: str, analysis: str,
+               prejudge: str = "", service: str = "") -> dict:
+    """분석 담은 알림을 Keep에 전송. 실패해도 예외를 던지지 않음(봇 흐름 보호)."""
+    url = os.environ.get("KEEP_URL", "").rstrip("/")
+    if not url:
+        log.info("[keep skipped: no KEEP_URL] %s", name)
+        return {"ok": False, "skipped": True}
+    key = os.environ.get("KEEP_API_KEY", "") or "keep-noauth"
+    payload = {"name": name, "status": "firing", "severity": _SEV.get(sev, "warning"),
+               "source": ["kinx-bot"], "host": host, "service": service,
+               "analysis": analysis, "prejudge": prejudge}
+    try:
+        r = httpx.post(f"{url}/alerts/event/keep",
+                       headers={"Content-Type": "application/json", "x-api-key": key},
+                       json=payload, timeout=10)
+        ok = r.status_code < 300
+        if not ok:
+            log.warning("keep push failed: %s %s", r.status_code, r.text[:200])
+        return {"ok": ok, "status": r.status_code}
+    except Exception as e:
+        log.warning("keep push exception: %s", e)
+        return {"ok": False, "error": str(e)}

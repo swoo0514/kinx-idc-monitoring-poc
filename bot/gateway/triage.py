@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 
-from . import collector, incident as incident_mod, llm, slack
+from . import collector, incident as incident_mod, keep, llm, slack
 
 log = logging.getLogger("gateway.triage")
 
@@ -35,6 +35,7 @@ async def run(event_id: str, trigger_id: str, sev: str,
     t2 = time.monotonic()
     posted = slack.post_triage(name, sev, host, verdict, reply["text"])
     timings["slack_s"] = round(time.monotonic() - t2, 2)
+    keep.push_alert(name, sev, host, reply["text"], prejudge=str(verdict))
 
     timings["total_s"] = round(time.monotonic() - t0, 2)
     log.info("triage done event=%s provider=%s degraded=%s timings=%s",
@@ -91,6 +92,7 @@ async def run_incident(inc) -> dict:
     posted = await asyncio.to_thread(slack.post_triage, headline, sev, inc.host,
                                      verdict, reply["text"])
     timings["slack_s"] = round(time.monotonic() - t2, 2)
+    await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"], verdict)
 
     timings["total_s"] = round(time.monotonic() - t0, 2)
     log.info("incident triage done fp=%s alerts=%d provider=%s degraded=%s timings=%s",
