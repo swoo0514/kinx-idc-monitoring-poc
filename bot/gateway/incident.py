@@ -246,6 +246,9 @@ class IncidentManager:
         self.max_alerts = _env_int("INCIDENT_MAX_ALERTS", 20) if max_alerts is None else max_alerts
         self._open: dict = {}
         self._timers: dict = {}
+        # 키마다 잠금. 첫 알림의 원시 카드 게시가 끝나야 후속 알림이 그 스레드에 답글을 단다.
+        # 없으면 거의 동시에 온 알림이 앵커가 비어 있는 것을 보고 그냥 버려진다(2026-07-29 실측).
+        self._locks: dict = {}
 
     async def submit(self, a: Alert):
         key = incident_key(a.host, a.incident_class)
@@ -263,14 +266,16 @@ class IncidentManager:
                             key, self.max_alerts, a.alert_name)
                 return
         self._schedule(key, inc)
-        await self._signal(a, inc, new)
+        if self._on_signal:
+            # 같은 키의 게시를 한 줄로 세운다. 첫 카드가 올라가 anchor_ts 가 채워진 뒤에
+            # 후속 알림이 그 스레드에 답글을 단다.
+            async with self._locks.setdefault(key, asyncio.Lock()):
+                await self._signal(a, inc, new)
 
     async def _signal(self, a: Alert, inc: Incident, new: bool):
         """원시 신호 게시(P1-A). 실패해도 병합·트리아지 흐름에 영향 없음."""
-        if not self._on_signal:
-            return
         if not new and not inc.anchor_ts:
-            return   # 앵커가 없으면 후속 신호는 생략 — 최상위 카드가 늘어나는 것을 막는다
+            return   # 첫 카드 게시가 실패한 경우 — 최상위 카드가 늘어나는 것을 막는다
         try:
             ts = await self._on_signal(a, None if new else inc.anchor_ts)
         except Exception as e:
@@ -298,6 +303,7 @@ class IncidentManager:
             return
         inc = self._open.pop(key, None)
         self._timers.pop(key, None)
+        self._locks.pop(key, None)
         if inc is None:
             return
         try:

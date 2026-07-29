@@ -266,6 +266,8 @@ def _fastpath_checks() -> int:
     calls = []
 
     async def on_signal(alert, thread_ts):
+        # 실제 Slack 게시는 수백 ms 걸린다. 그 사이 다음 알림이 도착하는 상황을 흉내낸다.
+        await asyncio.sleep(0.05)
         calls.append((alert.incident_class, thread_ts))
         return "ts-anchor"
 
@@ -281,13 +283,15 @@ def _fastpath_checks() -> int:
             on_signal=on_signal, debounce_s=0.05, max_window_s=5,
             priority_debounce_s=0.02, max_alerts=20)
         mono = time.monotonic()
-        await mgr.submit(_a("replication", t=mono))
-        await mgr.submit(_a("cpu_io_pressure", t=mono))   # 브리지 → 같은 키 → 답글
-        await asyncio.sleep(0.2)
+        # 랩 실측처럼 거의 동시에 도착시킨다. 잠금이 없으면 두 번째 알림이 앵커가 빈 것을
+        # 보고 그냥 버려져 답글이 사라진다(2026-07-29 실측으로 발견).
+        await asyncio.gather(mgr.submit(_a("replication", t=mono)),
+                             mgr.submit(_a("cpu_io_pressure", t=mono)))
+        await asyncio.sleep(0.3)
         return closed
 
     closed = asyncio.run(_run())
-    assert len(calls) == 2, calls
+    assert len(calls) == 2, f"동시 도착 시 후속 신호가 버려짐: {calls}"
     assert calls[0][1] is None, "첫 신호는 최상위 카드여야"
     assert calls[1][1] == "ts-anchor", "후속 신호는 앵커 스레드 답글이어야"
     assert len(closed) == 1 and closed[0].anchor_ts == "ts-anchor", closed
