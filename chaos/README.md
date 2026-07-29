@@ -13,7 +13,7 @@
 - **`repl_lag.sh`** — slave DB 복제를 다루므로, **관측 코어 VM의 `lab/` 디렉토리**(docker compose 접근)에서 실행합니다.
 - **`repl_lag_contention.sh`** — 슬레이브 VM(vm-target-002)의 디스크 I/O를 포화시키므로, **그 슬레이브 VM에서 직접** 실행합니다.
 - **`error_burst.sh`** — 노드 로그에 직접 쓰므로, **감시 노드에서 직접** 실행합니다.
-- **`service_down.sh`** — 대상 노드의 서비스를 정지시키므로, **SSH로 접근 가능한 곳**에서 대상을 인자로 실행합니다(`service_down.sh vm-p3-target-002 chronyd`).
+- **`service_down.sh`** — 대상 노드의 서비스를 정지시키므로, **작업자 PC에서 SSH 별칭으로** 실행합니다(`service_down.sh vm-target-002 chronyd`). 관측 코어 VM에는 SSH 별칭이 없어 이름을 못 찾습니다. 이 대상은 이름이 셋이라 헷갈리기 쉽습니다 — SSH 별칭 `vm-target-002` / Zabbix·Loki·Wazuh·Ansible 인벤토리 `vm-p3-target-002.novalocal` / IP `192.168.20.16`.
 
 ## 스크립트
 

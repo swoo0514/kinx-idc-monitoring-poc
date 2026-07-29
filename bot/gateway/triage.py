@@ -81,7 +81,8 @@ def _push_gated(inc, context: dict, reason: str) -> dict:
             f"교차 신호가 없어 LLM 을 호출하지 않았다. 판정과 유형만 기록한다.")
     return keep.push_alert(inc.alerts[0].alert_name or "(알림명 없음)",
                            inc.dominant_sev(), inc.host, note,
-                           prejudge=verdict, fingerprint=inc.fingerprint())
+                           prejudge=verdict, fingerprint=inc.fingerprint(),
+                           classes=classes, alert_count=len(inc.alerts))
 
 
 async def run_incident(inc) -> dict:
@@ -132,17 +133,23 @@ async def run_incident(inc) -> dict:
     n = len(inc.alerts)
     headline = (f"{n}건이 1개 사건 · {inc.host}" if inc.is_merged()
                 else inc.alerts[0].alert_name)
-    verdict = f"{n}건 병합" if inc.is_merged() else "단일"
+    merge_note = f"{n}건 병합" if inc.is_merged() else "단일"
+    # Keep 에 실어 보낼 판정은 만성/재발/신규다. Keep 에서 이 값으로 필터해 "반복 최다"를
+    # 뽑는 것이 자동화 후보 랭킹의 재료다(전략 방향 2). 병합 요약은 별도 필드로 보낸다.
+    chronic = incident_mod.dominant_verdict(context) or "미상"
+    classes = ", ".join(sorted(inc.classes()))
     fp = inc.fingerprint()
     t2 = time.monotonic()
     # 분석은 원시 신호(P1-A) 스레드의 답글로 붙는다. 앵커가 없으면 최상위 게시로 자연 열화.
     anchor = getattr(inc, "anchor_ts", "") or None
     posted = await asyncio.to_thread(slack.post_triage, headline, sev, inc.host,
-                                     verdict, reply["text"], anchor, context.get("sources"))
+                                     f"{merge_note} · {chronic}", reply["text"], anchor,
+                                     context.get("sources"))
     timings["slack_s"] = round(time.monotonic() - t2, 2)
     # 봇 알림은 사건 fingerprint로 고정 → 홈즈 심층분석이 같은 행에 enrich (별개 알림 방지)
     await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"],
-                            verdict, fingerprint=fp)
+                            chronic, fingerprint=fp, classes=classes,
+                            alert_count=n, merge=merge_note)
 
     # 심층조사 자동 발동(read=auto 규칙): SEV1/봇 열화 + 비-MSP → 백그라운드 HolmesGPT.
     # 결과는 별개 알림이 아니라 (1)Slack 원래 스레드 답글 (2)Keep 같은 알림 Note enrich 로.

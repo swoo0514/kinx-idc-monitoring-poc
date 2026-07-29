@@ -87,7 +87,7 @@ def investigate(host: str, question: str) -> dict:
 
 if __name__ == "__main__":   # 격리 테스트: HOLMES_URL 세팅 후 python -m gateway.holmes <host>
     import sys
-    h = sys.argv[1] if len(sys.argv) > 1 else "vm-p3-target-002"
+    h = sys.argv[1] if len(sys.argv) > 1 else "vm-p3-target-002.novalocal"
     res = investigate(h, "Investigate the current problems on this host.")
     print("ok:", res.get("ok"), "error:", res.get("error"))
     print((res.get("analysis") or "")[:2000])

@@ -1,0 +1,33 @@
+# Keep 워크플로 — 반복(만성)으로 판정된 사건에 "자동화 후보" 표시만 남긴다.
+#
+# 전략 방향 2의 "반복 → 자동화 후보" 폐루프에서 빠져 있던 조각이다. 반복 식별의 지능은 우리
+# prejudge 층이 갖고(90일 빈도로 만성/재발/신규 결정), 저장·필터·UI 는 Keep 이 맡는 분업이다.
+# 상용 AIOps(BigPanda·PagerDuty 등)가 차별화 기능으로 파는 "무엇을 자동화할지 추천"을 얇은
+# 층으로 값싸게 갖는 것이 이 PoC 의 강점 주장이고, 이 파일이 그 주장의 실체다.
+#
+# **조치는 하지 않는다.** 표시만 남기고 실행은 사람이 remediate 워크플로를 Run 해서 한다.
+# LLM 분석 텍스트를 자동으로 절차서·조치로 굳히지 않는다는 원칙과 같은 선이다.
+#
+# 쓰는 법: Keep UI 에서 automation_candidate = yes 로 필터하고 classes 로 묶어 보면
+# "어떤 유형이 반복 최다인가" = 자동화 1순위가 나온다.
+#
+# 근거(공식): docs.keephq.dev/workflows/syntax/enrichment — actions 의 enrich_alert 로
+# 트리거 알림에 필드를 추가한다. 조건은 `if:` 템플릿 식.
+workflow:
+  id: mark-automation-candidate
+  name: Mark automation candidate (chronic)
+  description: 만성 판정 사건에 자동화 후보 표시. 조치는 하지 않는다.
+  triggers:
+    - type: alert
+  actions:
+    - name: mark-candidate
+      # 게이트웨이가 실어 보내는 prejudge 는 만성/재발/신규 판정이다(병합 건수가 아니다).
+      if: "'{{ alert.prejudge }}' == '만성'"
+      provider:
+        type: mock
+        with:
+          enrich_alert:
+            - key: automation_candidate
+              value: "yes"
+            - key: candidate_reason
+              value: "만성 반복 — 유형 {{ alert.classes }} · 근본 정비 또는 자동화 검토 대상"

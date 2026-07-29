@@ -18,13 +18,20 @@ _SEV = {"SEV1": "critical", "SEV2": "high", "SEV3": "warning", "SEV4": "info", "
 
 def push_alert(name: str, sev: str, host: str, analysis: str,
                prejudge: str = "", service: str = "", source: str = "kinx-bot",
-               fingerprint: str = "", playbook: str = "") -> dict:
+               fingerprint: str = "", playbook: str = "",
+               classes: str = "", alert_count: int = 0, merge: str = "") -> dict:
     """분석 담은 알림을 Keep에 전송. 실패해도 예외를 던지지 않음(봇 흐름 보호).
     fingerprint 지정 시 Keep이 그 값으로 디듑 → 같은 사건은 한 행에 모임(홈즈 enrich 대상).
     source: 빠른 봇 분석=kinx-bot / HolmesGPT 심층조사=holmesgpt 로 구분.
     playbook: 조치 후보의 플레이북 논리명(데모 B). Keep 워크플로가 `{{ alert.playbook }}` 로
     읽어 실행 대상을 고른다 — host·service 도 같은 방식으로 참조하므로 별도 필드가 필요 없다.
-    (근거: Keep 공식 문서 workflows/syntax/context — 임의 알림 속성을 템플릿으로 참조 가능)"""
+    (근거: Keep 공식 문서 workflows/syntax/context — 임의 알림 속성을 템플릿으로 참조 가능)
+
+    prejudge·classes·alert_count 는 "반복 → 자동화 후보" 폐루프의 재료다(전략 방향 2).
+    prejudge 에는 반드시 **만성/재발/신규 판정**이 들어가야 한다. Keep 에서 이 값으로 필터·facet
+    해서 "무엇이 반복 최다인가"를 보고, 그것이 자동화 1순위가 된다. 병합 건수 같은 다른 값을
+    넣으면 필터가 통째로 무의미해진다(2026-07-29 이 자리에 "2건 병합"이 들어가고 있었다).
+    merge 는 병합 요약을 따로 담는 필드다."""
     url = os.environ.get("KEEP_URL", "").rstrip("/")
     if not url:
         log.info("[keep skipped: no KEEP_URL] %s", name)
@@ -37,6 +44,12 @@ def push_alert(name: str, sev: str, host: str, analysis: str,
         payload["fingerprint"] = fingerprint
     if playbook:
         payload["playbook"] = playbook
+    if classes:
+        payload["classes"] = classes
+    if alert_count:
+        payload["alert_count"] = alert_count
+    if merge:
+        payload["merge"] = merge
     try:
         r = httpx.post(f"{url}/alerts/event/keep",
                        headers={"Content-Type": "application/json", "x-api-key": key},
