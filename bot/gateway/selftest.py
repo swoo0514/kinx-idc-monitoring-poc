@@ -153,11 +153,13 @@ def main():
 
     incident_checks = _incident_checks()
     source_checks = _source_status_checks()
+    remediation_checks = _remediation_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
-             + masking_checks + degraded_checks + incident_checks + source_checks)
+             + masking_checks + degraded_checks + incident_checks + source_checks
+             + remediation_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -227,6 +229,32 @@ def _source_status_checks() -> int:
     return 11
 
 
+def _remediation_checks() -> int:
+    """P0-1 — 조치 후보가 Keep 승인 큐로 가는 경로(데모 B). 외부 호출 0(KEEP_URL 없으면 skip)."""
+    import os
+
+    from . import app as gw_app
+    from . import keep, router
+
+    saved = os.environ.pop("KEEP_URL", None)
+    try:
+        # 태그 조회는 공개 헬퍼 — remediate 분기가 service 태그를 읽는다
+        tags = [{"tag": "automate", "value": "service_restart"},
+                {"tag": "service", "value": "nginx"}]
+        assert router.tag_value(tags, "service") == "nginx"
+        assert router.tag_value(tags, "없는태그") is None
+
+        # 조치 후보 등록이 예외 없이 끝나고, KEEP_URL 미설정이면 조용히 skip 된다
+        gw_app._queue_remediation("h1", "Nginx process is not running", "SEV2",
+                                  "service_restart", "nginx")
+        assert keep.push_alert("n", "SEV2", "h1", "a", playbook="service_restart") == \
+            {"ok": False, "skipped": True}
+    finally:
+        if saved is not None:
+            os.environ["KEEP_URL"] = saved
+    return 4
+
+
 def _incident_checks() -> int:
     """인시던트 병합 — 순수 로직 + 비동기 버퍼(짧은 디바운스) + 마스킹 누수."""
     import asyncio
@@ -240,9 +268,19 @@ def _incident_checks() -> int:
         got = incident.classify(name)
         assert got == expected, f"classify({name!r}) -> {got}, expected {expected}"
 
-    # memory_pressure 는 아직 어떤 브리지에도 속하지 않는다(자원 경합 묶음 편입은 P0-3 판단).
+    # memory_pressure 는 어떤 브리지에도 속하지 않는다 — 자원 경합(swap→iowait)과 OOM→서비스
+    # 정지 양쪽에 인과 후보가 걸치는데 그룹은 겹칠 수 없고, 실측 근거도 아직 없다(P0-3 판정).
     assert (incident.incident_key("h1", "memory_pressure")
             != incident.incident_key("h1", "cpu_io_pressure"))
+    assert (incident.incident_key("h1", "memory_pressure")
+            != incident.incident_key("h1", "service_down"))
+
+    # 브리지 그룹은 서로 겹치면 안 된다 — 겹치면 뒤 그룹이 死코드가 되므로 import 때 막는다
+    try:
+        incident._validate_bridges([frozenset({"a", "b"}), frozenset({"b", "c"})])
+        raise AssertionError("겹치는 브리지 그룹을 검출하지 못했다")
+    except ValueError:
+        pass
 
     # 브리지 — replication + cpu_io_pressure 는 같은 키, auth_security 는 분리
     k_repl = incident.incident_key("h1", "replication")
@@ -251,6 +289,12 @@ def _incident_checks() -> int:
     assert k_repl == k_io, (k_repl, k_io)
     assert k_sec != k_repl
     assert incident.incident_key("h2", "replication") != k_repl   # 호스트 다르면 분리
+
+    # 브리지 2번 그룹 — 디스크 포화 + 서비스 정지 = 한 사건 (데모 B), 1번 그룹과는 분리
+    k_disk = incident.incident_key("h1", "disk_space")
+    k_svc = incident.incident_key("h1", "service_down")
+    assert k_disk == k_svc, (k_disk, k_svc)
+    assert k_disk != k_repl, "두 브리지 그룹이 같은 키로 뭉쳤다"
 
     # Incident 집계
     def _a(cls, sev="SEV2", host="h1", t=0.0, trig="1"):
@@ -266,6 +310,9 @@ def _incident_checks() -> int:
     capped = incident.Incident(key=k_repl, host="h1", alerts=[_a("replication")],
                                opened_at=0.0, last_at=0.0)
     assert capped.add(_a("replication"), 1) is False   # max_alerts 캡
+    disk_inc = incident.Incident(key=k_disk, host="h1", opened_at=0.0, last_at=0.0,
+                                 alerts=[_a("disk_space"), _a("service_down")])
+    assert "알려진 인과 조합" in disk_inc.merge_reason(), disk_inc.merge_reason()
 
     # 비동기 버퍼 — 짧은 디바운스로 병합/분리/멀티호스트 검증
     async def _run():
@@ -282,11 +329,16 @@ def _incident_checks() -> int:
         await mgr.submit(_a("auth_security", host="h1", t=mono))
         # h2: replication → 별개 (호스트 다름)
         await mgr.submit(_a("replication", host="h2", t=mono))
+        # h3: 디스크 + 서비스 정지 → 1건 (브리지 2번 그룹, 데모 B 시나리오)
+        await mgr.submit(_a("disk_space", host="h3", t=mono))
+        await mgr.submit(_a("service_down", host="h3", t=mono))
         await asyncio.sleep(0.2)   # 디바운스 창 마감 대기
         return closed
 
     closed = asyncio.run(_run())
-    assert len(closed) == 3, [len(c.alerts) for c in closed]
+    assert len(closed) == 4, [len(c.alerts) for c in closed]
+    h3 = [c for c in closed if c.host == "h3"][0]
+    assert len(h3.alerts) == 2 and h3.is_merged(), h3.alerts
     resource = [c for c in closed if c.classes() & {"replication", "cpu_io_pressure"}
                 and c.host == "h1"][0]
     assert len(resource.alerts) == 3, resource.alerts   # 3건이 1개로 병합
@@ -332,7 +384,7 @@ def _incident_checks() -> int:
         os.environ.pop(k, None)
     r = llm.triage_reply(inc_ctx, "SEV2")
     assert r["degraded"] and "병합" in r["text"], r
-    return 17 + len(CASES_CLASSIFY) + gate_checks
+    return 25 + len(CASES_CLASSIFY) + gate_checks
 
 
 if __name__ == "__main__":

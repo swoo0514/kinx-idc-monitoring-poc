@@ -265,11 +265,20 @@ triage 경로의 분석 계층. 전송 규칙의 원본은 **private/docs/llm_da
   - 검증은 selftest의 `CASES_CLASSIFY` — 표준 템플릿 트리거명·랩 실측 알림명·Wazuh 룰 설명
     23케이스. 분류를 손대면 이 표부터 늘린다.
 - **키**: `incident_key(host, class)` = `(host, bridge_id(class))`. 같은 키의 알림은 한 사건.
-- **브리지 룰**: 서로 다른 class라도 `BRIDGE_GROUPS` 조합이면 같은 키로 병합. 현재 조합은
-  `{replication, cpu_io_pressure}` — 복제 지연이 자원 경합(iowait/CPU)과 같은 사건일 수 있다는
-  인과 후보. `host`만으로 묶지 않고 class를 넣는 이유: 동일 호스트의 **서로 다른 사건**
-  (예: 복제 지연 vs 보안 브루트포스)이 한 창에 뭉치는 것을 막는다. `auth_security`는 브리지에
-  없어 항상 독립 인시던트 — Wazuh 보안 신호는 별도 사건으로 보는 정직한 분리.
+- **브리지 룰**: 서로 다른 class라도 `BRIDGE_GROUPS` 조합이면 같은 키로 병합. 현재 두 그룹이다.
+  - `{replication, cpu_io_pressure}` — 복제 지연이 자원 경합(iowait/CPU)과 같은 사건일 수
+    있다는 인과 후보(데모 C 시나리오, 랩 실측으로 확인된 조합).
+  - `{disk_space, service_down}` — 디스크가 차서 서비스가 멈추는 것은 한 사건(데모 B 시나리오).
+  - `host`만으로 묶지 않고 class를 넣는 이유: 동일 호스트의 **서로 다른 사건**(예: 복제 지연 vs
+    보안 브루트포스)이 한 창에 뭉치는 것을 막는다. `auth_security`는 브리지에 없어 항상 독립
+    인시던트 — Wazuh 보안 신호는 별도 사건으로 보는 정직한 분리.
+  - **그룹은 서로 겹칠 수 없다.** `_bridge_id`가 첫 매칭을 반환하므로 겹치는 class가 있으면
+    뒤 그룹이 통째로 死코드가 되고, 그것도 조용히 그렇게 된다. `_validate_bridges()`가
+    import 시점에 이 규칙을 강제하므로 겹치게 쓰면 프로세스가 즉시 죽는다(조용한 오작동보다 낫다).
+  - `memory_pressure`는 **의도적으로 어느 그룹에도 넣지 않았다.** 자원 경합(swap→iowait→load)과
+    OOM→서비스 정지 양쪽에 인과 후보가 걸치는데 그룹은 겹칠 수 없어 한쪽을 고르면 다른 쪽 링크를
+    영구히 포기하게 된다. 어느 쪽이 실제로 자주 함께 뜨는지에 대한 실측이 아직 없으므로
+    독립 키로 두고, 편입 여부는 co-occurrence 관측 자료가 쌓인 뒤 판단한다.
 
 ### 디바운스와 창 마감 (`IncidentManager`)
 
@@ -325,6 +334,67 @@ triage 경로 알림은 `triage.run`을 직접 부르지 않고 `IncidentManager
 
 `python -m gateway.selftest` — 분류·브리지 키·집계·게이트·마스킹 누수는 순수 로직으로,
 병합/분리/멀티호스트 동작은 짧은 디바운스(0.05s) 비동기 버퍼로 검증(2026-07-29, 77 checks 통과).
+
+## 16. 조치 후보 경로 — 데모 B 배관 복구 (P0-1, 2026-07-29)
+
+### 무엇이 끊겨 있었나
+
+`router.decide()`는 SEV1·2 알림에 `automate` 태그가 있고 계약이 조치를 막지 않으면
+`{route: "remediate", playbook}`을 계산했다. 그런데 `_dispatch`가 `triage`만 처리하고 나머지를
+조용히 버려서, **데모 B(자가 치유)의 배관이 코드에서 끊겨 있었다.** 실행 뒷단(Keep 워크플로 →
+SSH → `ansible-playbook`)은 이미 e2e로 검증돼 있었으므로 빠진 것은 앞단 한 조각이었다.
+
+### 흐름과 역할 분담
+
+```
+Zabbix 트리거(automate 태그)
+  → 게이트웨이 _dispatch: route=remediate
+  → keep.push_alert(조치 후보, 승인 대기)        ← 봇은 여기까지
+  → [사람] Keep UI 에서 Run Workflow = 승인
+  → Keep 워크플로 → SSH(core) → ansible-playbook → 조치 후 상태 재검증
+```
+
+봇이 판단까지만 하고 실행에 손대지 않는 것이 핵심이다. 계약 게이트(`scope=notify_only`)는
+`router` 단에서 이미 걸러지므로, 조치 후보로 등록되는 것은 조치가 허용된 알림뿐이다.
+
+### 태그 규약 (Zabbix 트리거에 부여)
+
+| 태그 | 값 | 뜻 |
+|---|---|---|
+| `automate` | `service_restart` | 조치 후보로 등록할 플레이북 논리명 |
+| `service` | `chronyd` 등 | 조치 대상 서비스 |
+| `scope` | `notify_only` | (선택) 계약상 조치 금지 — 있으면 triage 로 흐른다 |
+
+### 파라미터 하드코딩 제거
+
+기존 워크플로는 `-e target_host=... -e service_name=...` 을 고정값으로 갖고 있었다. 봇이 후보를
+올려도 워크플로가 그 값을 안 읽으면 "배관은 이었는데 값은 여전히 고정"이라 시연 중 반문이
+나온다. 이제 워크플로가 `{{ alert.host }}` · `{{ alert.service }}` · `{{ alert.playbook }}` 로
+알림 필드를 참조한다. **근거(공식 문서)**: Keep `workflows/syntax/context` — "You can access
+attributes of the alert anywhere in the workflow: `{{ alert.name }}`" 이며 `{{ alert.customer_id }}`
+예시처럼 **임의 커스텀 속성**도 참조 가능하다. 트리거 종류는 manual / interval / alert / incident.
+
+워크플로 첫 단계에 `if: "'{{ alert.playbook }}' == 'service_restart'"` 안전 게이트를 두어, 다른
+조치 후보 알림에서 실수로 Run 해도 아무 일이 일어나지 않게 했다.
+
+`fingerprint`는 (호스트·플레이북·서비스)로 고정한다. 같은 조치 후보가 반복 발화해도 Keep에서
+한 행으로 모여 승인해야 할 것이 한 줄로 유지된다.
+
+### 랩 배선 절차 (사용자 실행)
+
+1. `git pull` 후 `python -m gateway.selftest` → `ALL OK (109 checks)` 확인
+2. Zabbix에서 대상 트리거에 `automate=service_restart`, `service=chronyd` 태그 부여
+3. Keep에 갱신된 워크플로 반영(프로비저닝 디렉토리 재적용 또는 UI 갱신)
+4. `chaos/service_down.sh <대상> chronyd` 로 서비스 정지
+5. 게이트웨이 로그에서 `route=remediate` 와 `remediation queued ...` 확인
+6. Keep UI에서 조치 후보 알림 확인 → Run Workflow(승인) → Ansible 실행·재검증 결과 확인
+
+### 미확인 항목
+
+**수동 실행(Run Workflow) 시 알림 컨텍스트가 실리는지**는 공식 문서에 명시가 없다. 알림
+행에서 실행하면 실릴 가능성이 높지만 확인이 필요하다. 4~6번 절차에서 명령이 실제 호스트·서비스
+값으로 치환됐는지 SSH 실행 로그로 확인할 것. 만약 비어 있으면 대안은 트리거를 `type: alert` +
+CEL 필터로 바꾸고 승인 단계를 워크플로 안에 두는 것이다.
 
 ## 15. 교차 소스 조회 상태 — "신호 없음"과 "조회 실패"의 구분 (G1, 2026-07-29)
 

@@ -69,9 +69,29 @@ _COMPILED_RULES = [(cls, [(kw, _matcher(kw)) for kw in kws]) for cls, kws in CLA
 
 # 서로 다른 class라도 같은 호스트·시간창에 겹치면 하나의 인과 후보로 병합하는 조합.
 # 복제 지연 시나리오: replication_lag + high_iowait/cpu = 자원 경합이라는 단일 사건.
+# 디스크 포화 시나리오(데모 B): 디스크가 차서 서비스가 멈추는 것은 한 사건이다.
+#
+# 그룹은 서로 겹치면 안 된다 — _bridge_id 가 첫 매칭을 반환하므로 겹치는 class 가 있으면
+# 뒤 그룹이 통째로 死코드가 되고, 그것도 조용히 그렇게 된다. 아래 _validate_bridges 가
+# import 시점에 이 규칙을 강제한다.
 BRIDGE_GROUPS = [
     frozenset({"replication", "cpu_io_pressure"}),
+    frozenset({"disk_space", "service_down"}),
 ]
+
+
+def _validate_bridges(groups=None):
+    groups = BRIDGE_GROUPS if groups is None else groups
+    seen = set()
+    for grp in groups:
+        overlap = seen & grp
+        if overlap:
+            raise ValueError(
+                f"BRIDGE_GROUPS 겹침 {sorted(overlap)} — 첫 매칭 반환이라 뒤 그룹이 死코드가 된다")
+        seen |= grp
+
+
+_validate_bridges()
 
 _SEV_ORDER = {"SEV1": 1, "SEV2": 2, "SEV3": 3, "SEV4": 4, "NONE": 5}
 
@@ -147,8 +167,7 @@ class Incident:
         if n == 1:
             return f"단일 알림 (유형 {classes[0]})"
         combo = ""
-        if len(classes) > 1 and any(set(classes) & grp == set(classes) or
-                                    len(set(classes) & grp) > 1 for grp in BRIDGE_GROUPS):
+        if any(len(set(classes) & grp) > 1 for grp in BRIDGE_GROUPS):
             combo = " · 알려진 인과 조합"
         return (f"동일 호스트 · {self.window_s()}s 관측창 · {n}건 · "
                 f"유형 {classes}{combo}")
