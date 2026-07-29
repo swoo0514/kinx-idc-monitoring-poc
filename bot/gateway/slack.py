@@ -62,6 +62,41 @@ def _blocks(alert_name: str, sev: str, host: str, verdict: str, body: str,
     return blocks
 
 
+def post_raw(alert_name: str, sev: str, host: str, thread_ts: str = None) -> dict:
+    """트리거 즉시 띄우는 원시 신호 카드 — LLM·수집 호출 없이 "무슨 일이 났다"만 (P1-A).
+
+    병합 디바운스 창이 닫혀야 나오는 분석 카드는 최악 1분 이상 걸린다. 그동안 사람이 아무것도
+    못 보는 것을 막는다. 반환의 'ts'가 스레드 앵커이며, 분석은 그 스레드 답글로 이어 붙는다.
+    thread_ts 를 주면 후속 신호를 같은 스레드 답글로 단다(부모는 인시던트당 하나만 유지).
+    """
+    token = os.environ.get("SLACK_BOT_TOKEN", "")
+    channel = os.environ.get("SLACK_CHANNEL_ID", "")
+    head = f"{_SEV_EMOJI.get(sev, '⚪')} [{sev}] {alert_name}"
+    note = ("추가 신호 — 같은 사건으로 묶임" if thread_ts
+            else "원시 신호 · 분석은 이 스레드에 이어집니다")
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": head[:150], "emoji": True}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": f"host: {host}  ·  {note}"}]},
+    ]
+    if not token or not channel:
+        log.info("[slack skipped: no token] raw %s / %s", sev, host)
+        return {"ok": False, "skipped": True}
+    payload = {"channel": channel, "blocks": blocks, "text": f"[{sev}] {alert_name}"}
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+    try:
+        r = httpx.post(API, headers={"Authorization": f"Bearer {token}",
+                                     "Content-Type": "application/json; charset=utf-8"},
+                       json=payload, timeout=10)
+        data = r.json()
+        if not data.get("ok"):
+            log.warning("slack raw post failed: %s", data.get("error"))
+        return data
+    except Exception as e:
+        log.warning("slack raw post exception: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
 def post_triage(alert_name: str, sev: str, host: str, verdict: str, body: str,
                 thread_ts: str = None, sources: dict = None) -> dict:
     """반환의 'ts'는 스레드 앵커 — thread_ts로 되넘기면 같은 스레드에 후속 게시.

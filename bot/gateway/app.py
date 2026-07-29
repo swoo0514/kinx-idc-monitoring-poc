@@ -1,5 +1,6 @@
 """데모 B·C 공용 알림 게이트웨이 (FastAPI). 실행·배선은 bot/GATEWAY_GUIDE.md."""
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -14,6 +15,7 @@ from . import incident
 from . import keep
 from . import router as tag_router
 from . import severity
+from . import slack
 from . import triage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -21,8 +23,17 @@ log = logging.getLogger("gateway")
 
 app = FastAPI(title="kinx-poc alert gateway", version="0.1.0")
 
-# triage 경로 알림은 (host, class) 버퍼에 모여 디바운스 창 마감 시 병합 트리아지 1회 (§14)
-_incidents = incident.IncidentManager(on_close=triage.run_incident)
+async def _raw_ping(alert, thread_ts):
+    """알림 도착 즉시 원시 신호 카드 (P1-A). 반환 ts 가 인시던트 스레드 앵커.
+    Slack 호출은 블로킹이라 to_thread 로 감싸 인시던트 타이머 루프를 막지 않는다."""
+    res = await asyncio.to_thread(slack.post_raw, alert.alert_name or "(알림명 없음)",
+                                  alert.sev, alert.host, thread_ts)
+    return res.get("ts")
+
+
+# triage 경로 알림은 (host, class) 버퍼에 모여 디바운스 창 마감 시 병합 트리아지 1회 (§14).
+# on_signal 은 창이 닫히기 전에 "무슨 일이 났다"만 먼저 알리는 경로 (§18).
+_incidents = incident.IncidentManager(on_close=triage.run_incident, on_signal=_raw_ping)
 
 IDEMPOTENCY_TTL_S = 3600
 _seen: dict = {}  # (source, event_id, event_value) -> monotonic time. 프로덕션은 Redis (가이드 §10)
@@ -107,13 +118,14 @@ def webhook_wazuh(ev: WazuhEvent, bg: BackgroundTasks, x_gateway_token: str = He
 def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision, tags=None):
     # 웹훅은 즉시 200 (발송측 타임아웃 회피). triage는 인시던트 버퍼로, remediate는 Keep 승인 큐로.
     route = decision["route"]
-    log.info("event=%s source=%s host=%s sev=%s route=%s playbook=%s",
-             event_id, source, host, sev, route, decision["playbook"])
+    cls = incident.classify(alert_name)
+    log.info("event=%s source=%s host=%s sev=%s class=%s route=%s playbook=%s",
+             event_id, source, host, sev, cls, route, decision["playbook"])
     if route == "triage":
         alert = incident.Alert(
             source=source, event_id=event_id, trigger_id=trigger_id, host=host,
             alert_name=alert_name, sev=sev,
-            incident_class=incident.classify(alert_name), recv=time.monotonic())
+            incident_class=cls, recv=time.monotonic())
         bg.add_task(_incidents.submit, alert)
     elif route == "remediate":
         # 데모 B. 봇은 조치 "후보"를 승인 큐에 올리는 데까지만 — 승인(Run)과 실행(SSH→Ansible)은

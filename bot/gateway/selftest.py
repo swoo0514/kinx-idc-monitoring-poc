@@ -155,12 +155,13 @@ def main():
     source_checks = _source_status_checks()
     remediation_checks = _remediation_checks()
     holmes_checks = _holmes_gate_checks()
+    fastpath_checks = _fastpath_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
-             + remediation_checks + holmes_checks)
+             + remediation_checks + holmes_checks + fastpath_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -253,6 +254,43 @@ def _remediation_checks() -> int:
     finally:
         if saved is not None:
             os.environ["KEEP_URL"] = saved
+    return 4
+
+
+def _fastpath_checks() -> int:
+    """P1-A — 원시 신호가 인시던트당 부모 1개, 후속은 그 스레드 답글."""
+    import asyncio
+
+    from . import incident
+
+    calls = []
+
+    async def on_signal(alert, thread_ts):
+        calls.append((alert.incident_class, thread_ts))
+        return "ts-anchor"
+
+    def _a(cls, host="h1", t=0.0):
+        return incident.Alert(source="zabbix-internal", event_id="e", trigger_id="1",
+                              host=host, alert_name=cls, sev="SEV2",
+                              incident_class=cls, recv=t)
+
+    async def _run():
+        closed = []
+        mgr = incident.IncidentManager(
+            on_close=lambda i: closed.append(i) or asyncio.sleep(0),
+            on_signal=on_signal, debounce_s=0.05, max_window_s=5,
+            priority_debounce_s=0.02, max_alerts=20)
+        mono = time.monotonic()
+        await mgr.submit(_a("replication", t=mono))
+        await mgr.submit(_a("cpu_io_pressure", t=mono))   # 브리지 → 같은 키 → 답글
+        await asyncio.sleep(0.2)
+        return closed
+
+    closed = asyncio.run(_run())
+    assert len(calls) == 2, calls
+    assert calls[0][1] is None, "첫 신호는 최상위 카드여야"
+    assert calls[1][1] == "ts-anchor", "후속 신호는 앵커 스레드 답글이어야"
+    assert len(closed) == 1 and closed[0].anchor_ts == "ts-anchor", closed
     return 4
 
 

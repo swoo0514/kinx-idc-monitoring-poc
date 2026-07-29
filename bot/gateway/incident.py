@@ -136,6 +136,7 @@ class Incident:
     alerts: list = field(default_factory=list)
     opened_at: float = 0.0
     last_at: float = 0.0
+    anchor_ts: str = ""   # 첫 원시 신호 카드의 Slack ts — 분석·후속 신호가 이 스레드에 붙는다
 
     def add(self, a: Alert, max_alerts: int) -> bool:
         if len(self.alerts) >= max_alerts:
@@ -231,8 +232,13 @@ class IncidentManager:
     """
 
     def __init__(self, on_close, debounce_s: float = None, max_window_s: float = None,
-                 priority_debounce_s: float = None, max_alerts: int = None):
+                 priority_debounce_s: float = None, max_alerts: int = None,
+                 on_signal=None):
         self._on_close = on_close
+        # on_signal(alert, thread_ts) -> ts : 알림 도착 즉시 원시 신호를 게시하는 선택적 콜백.
+        # 신규 인시던트면 thread_ts=None(최상위, 반환 ts가 앵커), 후속이면 앵커 ts(답글).
+        # 주입식이라 순수 로직 테스트는 콜백 없이 그대로 돈다.
+        self._on_signal = on_signal
         self.debounce_s = _env_float("INCIDENT_DEBOUNCE_S", 90) if debounce_s is None else debounce_s
         self.max_window_s = _env_float("INCIDENT_MAX_WINDOW_S", 300) if max_window_s is None else max_window_s
         self.priority_debounce_s = (_env_float("INCIDENT_PRIORITY_DEBOUNCE_S", 15)
@@ -244,9 +250,12 @@ class IncidentManager:
     async def submit(self, a: Alert):
         key = incident_key(a.host, a.incident_class)
         inc = self._open.get(key)
-        if inc is None:
+        new = inc is None
+        if new:
             inc = Incident(key=key, host=a.host, alerts=[a],
                            opened_at=a.recv, last_at=a.recv)
+            # ★ 등록을 아래 await 보다 먼저 한다. 원시 신호를 게시하는 동안 같은 키의 알림이
+            #   도착하면 그것도 신규로 보여 부모 카드가 두 번 뜨고 스레드가 갈라진다.
             self._open[key] = inc
         else:
             if not inc.add(a, self.max_alerts):
@@ -254,6 +263,21 @@ class IncidentManager:
                             key, self.max_alerts, a.alert_name)
                 return
         self._schedule(key, inc)
+        await self._signal(a, inc, new)
+
+    async def _signal(self, a: Alert, inc: Incident, new: bool):
+        """원시 신호 게시(P1-A). 실패해도 병합·트리아지 흐름에 영향 없음."""
+        if not self._on_signal:
+            return
+        if not new and not inc.anchor_ts:
+            return   # 앵커가 없으면 후속 신호는 생략 — 최상위 카드가 늘어나는 것을 막는다
+        try:
+            ts = await self._on_signal(a, None if new else inc.anchor_ts)
+        except Exception as e:
+            log.warning("on_signal failed for incident %s: %s", inc.key, e)
+            return
+        if new and ts:
+            inc.anchor_ts = ts
 
     def _delay_for(self, inc: Incident) -> float:
         base = self.priority_debounce_s if inc.dominant_sev() == "SEV1" else self.debounce_s

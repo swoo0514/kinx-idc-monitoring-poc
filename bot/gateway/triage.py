@@ -115,8 +115,10 @@ async def run_incident(inc) -> dict:
     verdict = f"{n}건 병합" if inc.is_merged() else "단일"
     fp = inc.fingerprint()
     t2 = time.monotonic()
+    # 분석은 원시 신호(P1-A) 스레드의 답글로 붙는다. 앵커가 없으면 최상위 게시로 자연 열화.
+    anchor = getattr(inc, "anchor_ts", "") or None
     posted = await asyncio.to_thread(slack.post_triage, headline, sev, inc.host,
-                                     verdict, reply["text"], None, context.get("sources"))
+                                     verdict, reply["text"], anchor, context.get("sources"))
     timings["slack_s"] = round(time.monotonic() - t2, 2)
     # 봇 알림은 사건 fingerprint로 고정 → 홈즈 심층분석이 같은 행에 enrich (별개 알림 방지)
     await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"],
@@ -131,7 +133,8 @@ async def run_incident(inc) -> dict:
                                                  verdict=incident_mod.dominant_verdict(context))
     if fire_h:
         log.info("holmes deep-dive scheduled fp=%s reason=%s", fp, reason_h)
-        _spawn_bg(_deep_investigate(inc.host, headline, sev, fp, posted.get("ts")))
+        _spawn_bg(_deep_investigate(inc.host, headline, sev, fp,
+                                    anchor or posted.get("ts")))
 
     timings["total_s"] = round(time.monotonic() - t0, 2)
     log.info("incident triage done fp=%s alerts=%d provider=%s degraded=%s timings=%s",
