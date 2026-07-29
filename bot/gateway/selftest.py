@@ -45,6 +45,35 @@ CASES_ROUTER = [
 ]
 
 
+# 분류 — Zabbix 7.0 표준 템플릿 트리거명·랩 실측 알림명·Wazuh 룰 설명 기준 (G2a).
+# 오분류는 인시던트 키를 갈라 병합·브리지를 조용히 실패시키므로 케이스를 넓게 잠근다.
+CASES_CLASSIFY = [
+    ("MySQL: Replication lag is too high (over 60 for 5m)", "replication"),
+    ("MySQL 복제 지연 512초", "replication"),
+    ("Linux: Load average is too high (per CPU load over 1.5 for 5m)", "cpu_io_pressure"),
+    ("high iowait on data volume", "cpu_io_pressure"),
+    ("Linux: High CPU utilization (over 90% for 5m)", "cpu_io_pressure"),
+    ("CPU 사용률 95%", "cpu_io_pressure"),
+    ("Linux: High memory utilization (>90% for 5m)", "memory_pressure"),
+    ("메모리 사용률 95% 초과", "memory_pressure"),          # 예전엔 disk_space 로 오분류
+    ("Linux: High swap space usage", "memory_pressure"),
+    ("Out of memory (OOM) killer invoked", "memory_pressure"),
+    ("Linux: FS [/]: Space is critically low (used > 90%)", "disk_space"),
+    ("디스크 사용률 92%", "disk_space"),
+    ("Filesystem /data is running out of free inodes", "disk_space"),
+    ("SSH 브루트포스 탐지", "auth_security"),
+    ("sshd: Attempt to login using a non-existent user", "auth_security"),
+    ("Linux: SSH service is down", "service_down"),          # 예전엔 auth_security 로 오분류
+    ("Zabbix agent is not available (for 3m)", "service_down"),   # 예전엔 other
+    ("Nginx process is not running", "service_down"),
+    ("Interface eth0(): Link down", "network"),              # 예전엔 service_down("down")
+    ("Interface eth0(): High error rate", "network"),
+    ("Website response time is too high", "service_latency"),
+    ("MySQL: Buffer pool utilization is too low", "other"),  # 미분류가 정답 — 지어내지 않는다
+    ("무슨무슨 알림", "other"),
+]
+
+
 def main():
     fails = 0
     for source, level, expected in CASES_SEVERITY:
@@ -206,11 +235,14 @@ def _incident_checks() -> int:
 
     from . import incident, llm, masking
 
-    # 분류
-    assert incident.classify("MySQL 복제 지연 512초") == "replication"
-    assert incident.classify("high iowait on data volume") == "cpu_io_pressure"
-    assert incident.classify("SSH 브루트포스 탐지") == "auth_security"
-    assert incident.classify("무슨무슨 알림") == "other"
+    # 분류 — 표준 템플릿·랩 실측 알림명 전수
+    for name, expected in CASES_CLASSIFY:
+        got = incident.classify(name)
+        assert got == expected, f"classify({name!r}) -> {got}, expected {expected}"
+
+    # memory_pressure 는 아직 어떤 브리지에도 속하지 않는다(자원 경합 묶음 편입은 P0-3 판단).
+    assert (incident.incident_key("h1", "memory_pressure")
+            != incident.incident_key("h1", "cpu_io_pressure"))
 
     # 브리지 — replication + cpu_io_pressure 는 같은 키, auth_security 는 분리
     k_repl = incident.incident_key("h1", "replication")
@@ -300,7 +332,7 @@ def _incident_checks() -> int:
         os.environ.pop(k, None)
     r = llm.triage_reply(inc_ctx, "SEV2")
     assert r["degraded"] and "병합" in r["text"], r
-    return 20 + gate_checks
+    return 17 + len(CASES_CLASSIFY) + gate_checks
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -32,17 +33,39 @@ def _env_float(name: str, default: float) -> float:
 
 
 # 알림명·아이템키 → incident_class. 위에서부터 먼저 걸리는 것. (근거: demo_c_scenario.md)
+# 순서와 키워드 폭이 곧 분류 정확도다 — 틀리면 인시던트 키가 갈려 병합·브리지가 조용히 실패한다.
 CLASS_RULES = [
     ("replication", ["복제", "replication", "repl", "slave", "seconds_behind"]),
     ("cpu_io_pressure", ["iowait", "io wait", "i/o", "load average", "cpu", "load",
                          "디스크 지연", "disk latency", "await"]),
-    ("auth_security", ["브루트포스", "brute", "authentication", "login fail", "ssh",
-                       "unauthorized", "비인가", "5712", "sca", "fim", "rootcheck"]),
-    ("disk_space", ["사용률", "filesystem", "vfs.fs", "disk space", "디스크 사용", "pused"]),
-    ("service_down", ["proc.num", "process", "not running", "재기동", "down", "unreachable"]),
-    ("service_latency", ["지연", "latency", "response time", "응답", "qps", "queue"]),
+    # "ssh" 단독 금지 — "SSH service is down"(서비스 장애)까지 보안 사건으로 끌어갔다.
+    ("auth_security", ["브루트포스", "brute", "authentication", "login fail", "sshd",
+                       "unauthorized", "비인가", "sca", "fim", "rootcheck"]),
+    ("memory_pressure", ["메모리", "memory", "스왑", "swap", "oom"]),
+    # "사용률" 단독 금지 — 메모리·CPU 사용률까지 디스크로 흡수했다. "space is"는 표준
+    # 템플릿의 "FS [/]: Space is critically low" 형태를 잡기 위한 것(랩 실측 알림명).
+    ("disk_space", ["디스크 사용률", "디스크 사용", "filesystem", "vfs.fs", "disk space",
+                    "space is", "pused"]),
+    # network 를 service_down 보다 앞에 둔다 — "Link down"이 "down"에 걸려 서비스 장애로
+    # 분류되던 것을 바로잡는다.
     ("network", ["interface", "packet", "drop", "crc", "link down", "ifoperstatus"]),
+    ("service_down", ["proc.num", "process", "not running", "not available", "재기동",
+                      "down", "unreachable"]),
+    ("service_latency", ["지연", "latency", "response time", "응답", "qps", "queue"]),
 ]
+
+# 짧은 ASCII 토큰은 단어 경계로 매칭한다. 부분 일치가 실제 오분류를 만들었다 —
+# "fim"이 confirm, "sca"가 scan/escalation, "oom"이 room, "down"이 shutdown 에 걸린다.
+_WORD_BOUNDARY_MAX = 5
+
+
+def _matcher(keyword: str):
+    if keyword.isascii() and " " not in keyword and len(keyword) <= _WORD_BOUNDARY_MAX:
+        return re.compile(rf"(?<!\w){re.escape(keyword)}(?!\w)")
+    return None
+
+
+_COMPILED_RULES = [(cls, [(kw, _matcher(kw)) for kw in kws]) for cls, kws in CLASS_RULES]
 
 # 서로 다른 class라도 같은 호스트·시간창에 겹치면 하나의 인과 후보로 병합하는 조합.
 # 복제 지연 시나리오: replication_lag + high_iowait/cpu = 자원 경합이라는 단일 사건.
@@ -55,9 +78,10 @@ _SEV_ORDER = {"SEV1": 1, "SEV2": 2, "SEV3": 3, "SEV4": 4, "NONE": 5}
 
 def classify(alert_name: str, item_key: str = "") -> str:
     text = f"{alert_name} {item_key}".lower()
-    for cls, keywords in CLASS_RULES:
-        if any(k in text for k in keywords):
-            return cls
+    for cls, matchers in _COMPILED_RULES:
+        for kw, rx in matchers:
+            if rx.search(text) if rx else kw in text:
+                return cls
     return "other"
 
 

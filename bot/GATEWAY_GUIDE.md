@@ -254,8 +254,16 @@ triage 경로의 분석 계층. 전송 규칙의 원본은 **private/docs/llm_da
 ### 병합 키와 브리지 (`(host, incident_class)`)
 
 - **분류**: `classify(alert_name, item_key)` 가 알림을 `replication` / `cpu_io_pressure` /
-  `auth_security` / `disk_space` / `service_down` / `service_latency` / `network` / `other`
-  중 하나로 결정적 매핑(키워드 규칙). 값이 없으면 `other`.
+  `auth_security` / `memory_pressure` / `disk_space` / `network` / `service_down` /
+  `service_latency` / `other` 중 하나로 결정적 매핑(키워드 규칙). 값이 없으면 `other`.
+  - 규칙 순서가 곧 우선순위다. `network`가 `service_down`보다 앞에 있어야 "Link down"이
+    서비스 장애로 분류되지 않는다.
+  - 짧은 ASCII 토큰(5자 이하)은 **단어 경계**로 매칭한다. 부분 일치가 실제 오분류를 만들었다 —
+    `fim`이 confirm, `sca`가 scan·escalation, `oom`이 room, `down`이 shutdown 에 걸린다.
+  - 키워드는 좁게 잡는다. `ssh` 단독은 "SSH service is down"을 보안 사건으로,
+    `사용률` 단독은 메모리·CPU 사용률을 디스크로 끌어갔다(2026-07-29 실행으로 확인).
+  - 검증은 selftest의 `CASES_CLASSIFY` — 표준 템플릿 트리거명·랩 실측 알림명·Wazuh 룰 설명
+    23케이스. 분류를 손대면 이 표부터 늘린다.
 - **키**: `incident_key(host, class)` = `(host, bridge_id(class))`. 같은 키의 알림은 한 사건.
 - **브리지 룰**: 서로 다른 class라도 `BRIDGE_GROUPS` 조합이면 같은 키로 병합. 현재 조합은
   `{replication, cpu_io_pressure}` — 복제 지연이 자원 경합(iowait/CPU)과 같은 사건일 수 있다는
