@@ -5,12 +5,15 @@ WAZUH_INDEXER_PASSWORD(선택 — 없으면 해당 소스 생략, 열화 진행)
 """
 
 import asyncio
+import logging
 import os
 import time
 
 import httpx
 
 from . import prejudge
+
+log = logging.getLogger("gateway.collector")
 
 HISTORY_WINDOW_S = 3600
 HISTORY_LIMIT = 20
@@ -21,6 +24,13 @@ CORR_WINDOW_S = 900   # 15분
 LOKI_LIMIT = 40
 LOKI_LINE_MAX = 300   # 라인당 최대 문자 (토큰 억제)
 WAZUH_LIMIT = 20
+
+# 교차 소스 조회 상태 — "신호 없음"과 "조회 실패"를 구분한다 (G1).
+# 빈 리스트만 돌려주면 Wazuh 인덱서 장애가 "침해 흔적 없음"으로 둔갑하고, 발동조건 게이트도
+# 교차 신호 0으로 보아 LLM을 스킵한다. 즉 관측 백엔드가 죽을수록 봇이 조용해지고 자신만만해진다.
+SOURCE_OK = "ok"                    # 조회 성공 (결과가 비어 있어도 "없음"이 사실)
+SOURCE_UNAVAILABLE = "unavailable"  # 조회 시도했으나 실패 — 비어 있음을 근거로 쓰면 안 됨
+SOURCE_DISABLED = "disabled"        # 미배선(URL 미설정) — 애초에 판단 근거가 없음
 
 
 class ZabbixClient:
@@ -91,14 +101,16 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
 
     zbx_host = base["host"].get("host") or ""
     host_label = _resolve_label(zbx_host, base["host"])   # Zabbix명 → Loki/Wazuh FQDN 라벨
-    logs, security = await asyncio.gather(
+    (logs, logs_status), (security, sec_status) = await asyncio.gather(
         _loki_logs(host_label, now),
         _wazuh_alerts(host_label, now),
     )
     return {
         **base,
         "logs": logs,            # Loki (Alloy) — 백업/앱 로그 등
-        "security": security,    # Wazuh Indexer — 침해·변경 경보 (없으면 [] = 배제 신호)
+        "security": security,    # Wazuh Indexer — 침해·변경 경보
+        # 빈 목록의 의미를 확정하는 상태. ok일 때만 "없음 = 사실"이다 (G1)
+        "sources": {"logs": logs_status, "security": sec_status},
     }
 
 
@@ -127,7 +139,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
     zbx_host = host_obj.get("host") or incident.host
     host_label = _resolve_label(zbx_host, host_obj) if host_obj else incident.host
 
-    logs, security = await asyncio.gather(
+    (logs, logs_status), (security, sec_status) = await asyncio.gather(
         _loki_logs(host_label, now),
         _wazuh_alerts(host_label, now),
     )
@@ -164,6 +176,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         "alerts": alerts_ctx,
         "logs": logs,
         "security": security,
+        "sources": {"logs": logs_status, "security": sec_status},
     }
 
 
@@ -184,11 +197,14 @@ def _resolve_label(zbx_host: str, host_obj: dict) -> str:
     return zbx_host
 
 
-async def _loki_logs(host_label: str, now: int) -> list:
-    """Loki 최근 로그. LOKI_URL 없거나 실패 시 [] (열화)."""
+async def _loki_logs(host_label: str, now: int) -> tuple:
+    """Loki 최근 로그. 반환 (로그 목록, 조회 상태). 상태는 SOURCE_* 셋 중 하나 (G1)."""
     url = os.environ.get("LOKI_URL", "").rstrip("/")
-    if not url or not host_label:
-        return []
+    if not url:
+        return [], SOURCE_DISABLED
+    if not host_label:   # 호스트 라벨을 못 정하면 조회 자체가 불가 — 성공이 아니다
+        log.warning("loki skipped: host label 미해석 (HOST_LABEL_MAP·인터페이스 dns 확인)")
+        return [], SOURCE_UNAVAILABLE
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(f"{url}/loki/api/v1/query_range", params={
@@ -201,18 +217,25 @@ async def _loki_logs(host_label: str, now: int) -> list:
             for stream in r.json().get("data", {}).get("result", []):
                 for _ts, line in stream.get("values", []):
                     out.append(line[:LOKI_LINE_MAX])
-            return out[:LOKI_LIMIT]
-    except Exception:
-        return []
+            return out[:LOKI_LIMIT], SOURCE_OK
+    except Exception as e:
+        log.warning("loki query failed host=%s: %s", host_label, e)
+        return [], SOURCE_UNAVAILABLE
 
 
-async def _wazuh_alerts(agent_name: str, now: int) -> list:
-    """Wazuh Indexer(OpenSearch) 최근 경보. 미설정·실패 시 [] (열화 = 침해 배제 신호로 해석)."""
+async def _wazuh_alerts(agent_name: str, now: int) -> tuple:
+    """Wazuh Indexer(OpenSearch) 최근 경보. 반환 (경보 목록, 조회 상태).
+
+    빈 목록을 "침해 배제"로 해석해도 되는 것은 상태가 SOURCE_OK 일 때뿐이다 (G1).
+    """
     url = os.environ.get("WAZUH_INDEXER_URL", "").rstrip("/")
     user = os.environ.get("WAZUH_INDEXER_USER", "")
     pw = os.environ.get("WAZUH_INDEXER_PASSWORD", "")
-    if not url or not agent_name:
-        return []
+    if not url:
+        return [], SOURCE_DISABLED
+    if not agent_name:
+        log.warning("wazuh skipped: agent name 미해석")
+        return [], SOURCE_UNAVAILABLE
     body = {
         "size": WAZUH_LIMIT,
         "sort": [{"@timestamp": {"order": "desc"}}],
@@ -235,9 +258,10 @@ async def _wazuh_alerts(agent_name: str, now: int) -> list:
                 out.append({"level": rule.get("level"),
                             "desc": rule.get("description"),
                             "ts": src.get("@timestamp")})
-            return out
-    except Exception:
-        return []
+            return out, SOURCE_OK
+    except Exception as e:
+        log.warning("wazuh query failed agent=%s: %s", agent_name, e)
+        return [], SOURCE_UNAVAILABLE
 
 
 async def _metrics_trend(zbx: ZabbixClient, client: httpx.AsyncClient,

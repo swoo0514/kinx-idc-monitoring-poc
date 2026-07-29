@@ -123,12 +123,79 @@ def main():
     degraded_checks = 1
 
     incident_checks = _incident_checks()
+    source_checks = _source_status_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
-             + masking_checks + degraded_checks + incident_checks)
+             + masking_checks + degraded_checks + incident_checks + source_checks)
     print(f"ALL OK ({total} checks)")
+
+
+def _source_status_checks() -> int:
+    """G1 — "조회 실패"와 "신호 없음"의 구분이 수집기·게이트·마스킹·카드까지 전파되는지.
+
+    이 구분이 없으면 Wazuh 인덱서 장애가 "침해 흔적 없음"으로 둔갑하고(프롬프트가 그렇게
+    해석하라고 지시한다), 게이트는 교차 신호 0으로 보아 LLM을 스킵한다. 즉 관측 백엔드가
+    죽을수록 봇이 조용해지고 자신만만해진다. 아래는 그 경로가 막혀 있는지 확인한다.
+    외부 호출 0 — 미배선·라벨 미해석 경로만 검증한다.
+    """
+    import asyncio
+    import os
+
+    from . import collector, incident, llm, masking, slack
+
+    saved = {k: os.environ.pop(k, None) for k in ("LOKI_URL", "WAZUH_INDEXER_URL")}
+    try:
+        # 미배선(URL 없음) = disabled, 호스트 라벨 미해석 = unavailable (성공이 아니다)
+        assert asyncio.run(collector._loki_logs("h", 0)) == ([], collector.SOURCE_DISABLED)
+        assert asyncio.run(collector._wazuh_alerts("h", 0)) == ([], collector.SOURCE_DISABLED)
+        os.environ["LOKI_URL"] = "http://127.0.0.1:1"
+        assert asyncio.run(collector._loki_logs("", 0)) == ([], collector.SOURCE_UNAVAILABLE)
+    finally:
+        os.environ.pop("LOKI_URL", None)
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+    # 게이트 — 조회 실패는 미상이므로 보수적 발동, 미배선은 의도된 구성이라 발동 사유 아님
+    single = incident.Incident(
+        key=("h1", "disk_space"), host="h1", opened_at=0.0, last_at=0.0,
+        alerts=[incident.Alert(source="zabbix-internal", event_id="e", trigger_id="1",
+                               host="h1", alert_name="disk", sev="SEV2",
+                               incident_class="disk_space", recv=0.0)])
+    base = {"logs": [], "security": []}
+    ok_ctx = {**base, "sources": {"logs": collector.SOURCE_OK, "security": collector.SOURCE_OK}}
+    fail_ctx = {**base, "sources": {"logs": collector.SOURCE_OK,
+                                    "security": collector.SOURCE_UNAVAILABLE}}
+    off_ctx = {**base, "sources": {"logs": collector.SOURCE_DISABLED,
+                                   "security": collector.SOURCE_DISABLED}}
+    assert incident.should_triage(single, ok_ctx)[0] is False, "정상 조회·무신호는 스킵이어야"
+    fired, why = incident.should_triage(single, fail_ctx)
+    assert fired is True and "조회 실패" in why, why
+    assert incident.should_triage(single, off_ctx)[0] is False, "미배선은 발동 사유가 아니어야"
+
+    # 마스킹 — 상태는 전송하되 알려진 키·값만(화이트리스트 유지)
+    ctx = {"event": {"name": "n"}, "trigger": {}, "host": {}, "metrics": [],
+           "logs": [], "security": [], "prejudge": {},
+           "sources": {"logs": collector.SOURCE_OK,
+                       "security": collector.SOURCE_UNAVAILABLE, "evil": "LEAK"}}
+    masked = masking.build_llm_context(ctx, "SEV2", masking.Masker())
+    assert masked["sources"] == {"logs": "ok", "security": "unavailable"}, masked["sources"]
+    ctx["sources"]["security"] = "weird-value"
+    masked = masking.build_llm_context(ctx, "SEV2", masking.Masker())
+    assert masked["sources"]["security"] == "unknown", masked["sources"]
+
+    # Slack 카드 — 실패를 사람 눈에 드러낸다
+    note = slack._source_note({"logs": collector.SOURCE_OK,
+                               "security": collector.SOURCE_UNAVAILABLE})
+    assert "조회 실패" in note and "보안" in note, note
+    assert slack._source_note({"logs": collector.SOURCE_OK,
+                               "security": collector.SOURCE_OK}) == ""
+
+    # 프롬프트와 코드의 동기 — 상태를 안 보는 프롬프트로 되돌아가면 실패
+    assert "sources.security" in llm.TRIAGE_SYSTEM, "프롬프트가 조회 상태를 안 본다"
+    return 11
 
 
 def _incident_checks() -> int:

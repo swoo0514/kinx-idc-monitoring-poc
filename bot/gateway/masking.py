@@ -2,6 +2,8 @@
 
 import re
 
+from . import collector   # 조회 상태 상수(SOURCE_*) 단일 정의 참조
+
 IP_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
 
@@ -39,6 +41,18 @@ class Masker:
         for tok, orig in self._rev.items():
             text = text.replace(tok, orig)
         return text
+
+
+_STATUS_KEYS = ("logs", "security")
+_STATUS_VALUES = (collector.SOURCE_OK, collector.SOURCE_UNAVAILABLE, collector.SOURCE_DISABLED)
+
+
+def _sources(context: dict) -> dict:
+    """교차 소스 조회 상태만 통과시킨다 — 키·값 모두 알려진 것으로 한정(화이트리스트 유지).
+    상태 문자열에는 식별자가 없어 마스킹 대상이 아니다. LLM이 빈 목록의 의미를 알려면 필요하다."""
+    src = context.get("sources") or {}
+    return {k: (src[k] if src.get(k) in _STATUS_VALUES else "unknown")
+            for k in _STATUS_KEYS if k in src}
 
 
 def _register_host(host: dict, masker: Masker):
@@ -97,6 +111,7 @@ def build_llm_context(context: dict, sev: str, masker: Masker) -> dict:
             "verdict": (context.get("prejudge") or {}).get("verdict"),
             "statement": (context.get("prejudge") or {}).get("statement"),
         },
+        "sources": _sources(context),
     }
 
 
@@ -140,4 +155,5 @@ def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
             {"level": s.get("level"), "desc": m(s.get("desc")), "ts": s.get("ts")}
             for s in (context.get("security") or [])
         ],
+        "sources": _sources(context),
     }

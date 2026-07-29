@@ -36,8 +36,11 @@ async def run(event_id: str, trigger_id: str, sev: str,
         context = await collector.collect_context(zbx, event_id, trigger_id)
     except Exception as e:   # 수집 실패해도 최소 컨텍스트로 진행
         log.warning("collect failed for event=%s: %s", event_id, e)
+        # 조회를 못 한 것이므로 "신호 없음"이 아니라 "미상" — LLM·카드가 그렇게 읽어야 한다 (G1)
         context = {"event": {"name": alert_name}, "trigger": {}, "host": {},
-                   "metrics": [], "prejudge": {}}
+                   "metrics": [], "prejudge": {}, "logs": [], "security": [],
+                   "sources": {"logs": collector.SOURCE_UNAVAILABLE,
+                               "security": collector.SOURCE_UNAVAILABLE}}
     timings["collect_s"] = round(time.monotonic() - t0, 2)
 
     t1 = time.monotonic()
@@ -49,7 +52,8 @@ async def run(event_id: str, trigger_id: str, sev: str,
     name = alert_name or ev.get("name", "(알림명 없음)")
     verdict = (context.get("prejudge", {}) or {}).get("verdict", "?")
     t2 = time.monotonic()
-    posted = slack.post_triage(name, sev, host, verdict, reply["text"])
+    posted = slack.post_triage(name, sev, host, verdict, reply["text"],
+                               sources=context.get("sources"))
     timings["slack_s"] = round(time.monotonic() - t2, 2)
     keep.push_alert(name, sev, host, reply["text"], prejudge=str(verdict))
 
@@ -84,6 +88,8 @@ async def run_incident(inc) -> dict:
                                     "sev": a.sev, "class": a.incident_class}
                                    for a in inc.alerts],
             "logs": [], "security": [],
+            "sources": {"logs": collector.SOURCE_UNAVAILABLE,
+                        "security": collector.SOURCE_UNAVAILABLE},
         }
     timings["collect_s"] = round(time.monotonic() - t0, 2)
 
@@ -95,6 +101,9 @@ async def run_incident(inc) -> dict:
                  inc.fingerprint(), len(inc.alerts), reason, timings)
         return {"fingerprint": inc.fingerprint(), "alert_count": len(inc.alerts),
                 "gated_out": True, "reason": reason, "timings": timings}
+    # 발동 사유·조회 상태도 남긴다 — 조회 실패로 인한 보수적 발동(G1)을 사후에 구분하려면 필요
+    log.info("gate fire fp=%s alerts=%d reason=%s sources=%s",
+             inc.fingerprint(), len(inc.alerts), reason, context.get("sources"))
 
     t1 = time.monotonic()
     reply = await asyncio.to_thread(llm.triage_reply, context, sev)
@@ -107,7 +116,7 @@ async def run_incident(inc) -> dict:
     fp = inc.fingerprint()
     t2 = time.monotonic()
     posted = await asyncio.to_thread(slack.post_triage, headline, sev, inc.host,
-                                     verdict, reply["text"])
+                                     verdict, reply["text"], None, context.get("sources"))
     timings["slack_s"] = round(time.monotonic() - t2, 2)
     # 봇 알림은 사건 fingerprint로 고정 → 홈즈 심층분석이 같은 행에 enrich (별개 알림 방지)
     await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"],

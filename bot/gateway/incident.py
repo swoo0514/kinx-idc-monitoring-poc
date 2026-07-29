@@ -12,6 +12,8 @@ import os
 import time
 from dataclasses import dataclass, field
 
+from .collector import SOURCE_UNAVAILABLE   # 조회 상태 상수는 생산자(collector)에 1곳만 정의
+
 log = logging.getLogger("gateway.incident")
 
 
@@ -135,17 +137,25 @@ def should_triage(incident, context: dict, min_cross: int = None) -> tuple:
     """LLM 트리아지 발동 여부 + 사유. 교차 상관할 게 있을 때만 값비싼 LLM을 부른다.
 
     context = collect_incident_context 결과(로그·보안 포함). 반환 (bool, 사유).
-    발동: SEV1 / 병합(2건+) / 단일이라도 같은 창에 교차 소스(로그·보안) 존재. 그 외 스킵.
+    발동: SEV1 / 병합(2건+) / 교차 소스 조회 실패(미상) / 단일이라도 같은 창에 교차 소스 존재.
+
+    조회 실패를 "신호 없음"으로 취급하면 관측 백엔드가 죽을수록 봇이 조용해진다 — 가장 필요할
+    때 침묵하는 셈이라, 실패는 미상으로 보고 보수적으로 발동한다 (G1). 미배선(disabled)은
+    의도된 구성이므로 발동 사유가 아니다.
     """
     min_cross = GATE_MIN_CROSS if min_cross is None else min_cross
     if incident.dominant_sev() == "SEV1":
         return True, "SEV1 — 위중, 무조건 발동"
     if incident.is_merged():
         return True, f"{len(incident.alerts)}건 병합 — 교차 축 존재"
+    sources = context.get("sources") or {}
+    failed = [k for k in ("logs", "security") if sources.get(k) == SOURCE_UNAVAILABLE]
+    if failed:
+        return True, f"교차 소스 조회 실패({', '.join(failed)}) — 신호 없음이 아니라 미상, 보수적 발동"
     cross = sum(1 for k in ("logs", "security") if context.get(k))
     if cross >= min_cross:
         return True, f"단일 알림 + 교차 소스 {cross}종(로그/보안)"
-    return False, "단일 축·교차 신호 없음 — LLM 스킵"
+    return False, "단일 축·교차 신호 없음(조회는 정상) — LLM 스킵"
 
 
 class IncidentManager:
