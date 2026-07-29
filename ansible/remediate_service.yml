@@ -2,7 +2,31 @@
 # 서비스 재기동 자가치유 (데모 B). 설계·승인 배선은 GATEWAY_GUIDE / REMEDIATE_GUIDE.
 # 안전 원칙: 승인(HITL)을 통과한 대상 1대의 지정 서비스만 재기동한다. 조치 후 active 재검증까지
 # 하고(승인 버튼이 아니라 이 재검증이 진짜 안전판), 살아나지 않으면 실패로 리턴해 사람이 개입.
-# target_host·service_name 은 승인된 결정에서 온다(n8n/게이트웨이가 -e 로 주입).
+# target_host·service_name 은 승인된 결정에서 온다(게이트웨이가 알림 필드로 넘긴 값).
+
+# 사전 확인. 대상이 인벤토리에 없으면 ansible-playbook 은 "skipping: no hosts matched" 를
+# 출력하고도 종료 코드 0 을 준다. 그러면 조치를 하나도 안 하고 승인 화면에는 "성공" 으로
+# 보인다(2026-07-29 실측). 재검증 태스크 자체가 안 돌므로 안전 원칙이 통째로 무력화된다.
+# 그래서 대상 존재 여부를 먼저 확인하고, 없으면 여기서 실패시킨다.
+- name: 사전 확인 — 조치 대상이 인벤토리에 있는가
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: target_host 지정 확인
+      ansible.builtin.assert:
+        that:
+          - target_host is defined
+          - target_host | length > 0
+        fail_msg: "target_host 가 필요합니다 (예: -e target_host=host.example.com)."
+
+    - name: 인벤토리에 대상이 있는지 확인
+      ansible.builtin.assert:
+        that: target_host in groups['all']
+        fail_msg: >-
+          '{{ target_host }}' 를 인벤토리에서 찾지 못했습니다. 조치를 수행하지 않고 중단합니다.
+          이름을 확인하세요 — Zabbix·Loki·Wazuh 는 FQDN 을 쓰므로 인벤토리 호스트명도 FQDN 으로
+          맞춰야 합니다. 인벤토리에 있는 대상 - {{ groups['all'] | join(', ') }}
+        success_msg: "대상 '{{ target_host }}' 확인"
 - name: Remediate a down service (safe, HITL-approved, single service)
   hosts: "{{ target_host | default('targets') }}"
   become: true
