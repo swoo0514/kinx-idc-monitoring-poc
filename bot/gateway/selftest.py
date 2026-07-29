@@ -154,12 +154,13 @@ def main():
     incident_checks = _incident_checks()
     source_checks = _source_status_checks()
     remediation_checks = _remediation_checks()
+    holmes_checks = _holmes_gate_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
-             + remediation_checks)
+             + remediation_checks + holmes_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -253,6 +254,50 @@ def _remediation_checks() -> int:
         if saved is not None:
             os.environ["KEEP_URL"] = saved
     return 4
+
+
+def _holmes_gate_checks() -> int:
+    """G9 — 심층조사 발동을 지식 공백 기준으로. 만성은 억제, 신규는 발동."""
+    import os
+
+    from . import holmes, incident
+
+    # 인시던트 전체 판정 접기 — 모르는 게 하나라도 있으면 신규
+    assert incident.dominant_verdict({"alerts": [{"prejudge": {"verdict": "만성"}},
+                                                 {"prejudge": {"verdict": "신규"}}]}) == "신규"
+    assert incident.dominant_verdict({"alerts": [{"prejudge": {"verdict": "만성"}},
+                                                 {"prejudge": {"verdict": "만성"}}]}) == "만성"
+    assert incident.dominant_verdict({"alerts": [{"prejudge": {"verdict": "만성"}},
+                                                 {"prejudge": {"verdict": "재발"}}]}) == "재발"
+    assert incident.dominant_verdict({"prejudge": {"verdict": "신규"}}) == "신규"   # 단건 경로
+    assert incident.dominant_verdict({}) == ""
+
+    saved = {k: os.environ.get(k) for k in ("HOLMES_ENABLED", "HOLMES_MASKED")}
+    os.environ["HOLMES_ENABLED"] = "1"
+    os.environ.pop("HOLMES_MASKED", None)
+    try:
+        zbx = ["zabbix-internal"]
+        # 만성 = 아는 문제 → 병합이어도 억제 (G6 흡수)
+        fired, why = holmes.should_investigate("SEV2", False, zbx, merged=True, verdict="만성")
+        assert fired is False and "chronic" in why, why
+        # 신규 = 모르는 문제 → 단일 알림이어도 발동 (종래엔 발동 안 했다)
+        fired, why = holmes.should_investigate("SEV2", False, zbx, merged=False, verdict="신규")
+        assert fired is True and "novel" in why, why
+        # 위중·열화는 지식 여부와 무관하게 우선 — 만성이어도 발동
+        assert holmes.should_investigate("SEV1", False, zbx, verdict="만성")[0] is True
+        assert holmes.should_investigate("SEV2", True, zbx, verdict="만성")[0] is True
+        # 판정이 없으면 종래 규칙(병합) 유지
+        assert holmes.should_investigate("SEV2", False, zbx, merged=True)[0] is True
+        assert holmes.should_investigate("SEV2", False, zbx, merged=False)[0] is False
+        # MSP 는 마스킹 없으면 신규여도 금지 (테넌트 경계가 우선)
+        assert holmes.should_investigate("SEV2", False, ["zabbix-msp"], verdict="신규")[0] is False
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return 12
 
 
 def _incident_checks() -> int:

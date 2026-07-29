@@ -173,6 +173,28 @@ class Incident:
                 f"유형 {classes}{combo}")
 
 
+def dominant_verdict(context: dict) -> str:
+    """인시던트 전체의 만성/신규 판정 — 알림별 선판정을 하나로 접는다 (G9).
+
+    규칙: 모르는 것이 하나라도 있으면 "신규"(조사 가치 최대), 전부 아는 문제면 "만성"
+    (조사 가치 최소), 그 사이는 "재발". 판정 자체는 prejudge 가 이미 결정적으로 계산했고
+    여기서는 고르기만 한다 — LLM 은 관여하지 않는다.
+    """
+    verdicts = [(a.get("prejudge") or {}).get("verdict")
+                for a in (context.get("alerts") or [])]
+    verdicts = [v for v in verdicts if v]
+    if not verdicts:   # 단건 경로 컨텍스트 호환
+        single = (context.get("prejudge") or {}).get("verdict")
+        verdicts = [single] if single else []
+    if not verdicts:
+        return ""
+    if "신규" in verdicts:
+        return "신규"
+    if all(v == "만성" for v in verdicts):
+        return "만성"
+    return "재발"
+
+
 GATE_MIN_CROSS = _env_int("INCIDENT_GATE_MIN_CROSS", 1)
 
 
