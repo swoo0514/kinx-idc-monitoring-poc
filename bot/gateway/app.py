@@ -1,5 +1,6 @@
 """데모 B·C 공용 알림 게이트웨이 (FastAPI). 실행·배선은 bot/GATEWAY_GUIDE.md."""
 
+import hashlib
 import hmac
 import logging
 import os
@@ -10,6 +11,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from . import incident
+from . import keep
 from . import router as tag_router
 from . import severity
 from . import triage
@@ -83,7 +85,8 @@ def webhook_zabbix(ev: ZabbixEvent, bg: BackgroundTasks, x_gateway_token: str = 
         ns = 4   # 미상 → High 취급(SEV2, triage). severity.normalize 의 SEV2 페일세이프와 정합
     sev = severity.normalize(ev.source, ns)
     decision = tag_router.decide(sev, ev.tags, ev.event_value)
-    _dispatch(bg, ev.source, ev.event_id, ev.trigger_id, ev.host, ev.event_name, sev, decision)
+    _dispatch(bg, ev.source, ev.event_id, ev.trigger_id, ev.host, ev.event_name, sev,
+              decision, ev.tags)
     return {"status": "accepted", "sev": sev, **decision, "event_id": ev.event_id}
 
 
@@ -101,8 +104,8 @@ def webhook_wazuh(ev: WazuhEvent, bg: BackgroundTasks, x_gateway_token: str = He
     return {"status": "accepted", "sev": sev, **decision, "event_id": ev.alert_id}
 
 
-def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision):
-    # 웹훅은 즉시 200 (발송측 타임아웃 회피). triage는 인시던트 버퍼로, remediate(n8n)는 데모 B.
+def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision, tags=None):
+    # 웹훅은 즉시 200 (발송측 타임아웃 회피). triage는 인시던트 버퍼로, remediate는 Keep 승인 큐로.
     route = decision["route"]
     log.info("event=%s source=%s host=%s sev=%s route=%s playbook=%s",
              event_id, source, host, sev, route, decision["playbook"])
@@ -112,3 +115,24 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision)
             alert_name=alert_name, sev=sev,
             incident_class=incident.classify(alert_name), recv=time.monotonic())
         bg.add_task(_incidents.submit, alert)
+    elif route == "remediate":
+        # 데모 B. 봇은 조치 "후보"를 승인 큐에 올리는 데까지만 — 승인(Run)과 실행(SSH→Ansible)은
+        # 이미 e2e 검증된 Keep 워크플로가 담당한다. 계약 게이트(scope=notify_only)는 router 가
+        # 이미 걸렀으므로 여기 도달한 것은 조치가 허용된 알림뿐이다.
+        bg.add_task(_queue_remediation, host, alert_name, sev, decision["playbook"],
+                    tag_router.tag_value(tags or [], "service") or "")
+
+
+def _queue_remediation(host, alert_name, sev, playbook, service):
+    """조치 후보를 Keep 알림으로 등록(승인 대기). 실패해도 웹훅 흐름에 영향 없음.
+    fingerprint 를 (호스트·플레이북·서비스)로 고정해 같은 조치 후보가 여러 행으로 늘어나지
+    않게 한다 — 승인해야 할 것이 한 줄로 모인다."""
+    fp = hashlib.sha1(f"remediate|{host}|{playbook}|{service}".encode()).hexdigest()[:12]
+    note = (f"*조치 후보 — 승인 대기*\n"
+            f"playbook: `{playbook}`  ·  host: `{host}`  ·  service: `{service or '미지정'}`\n"
+            f"봇은 후보 등록까지만 수행한다. 승인(Run Workflow) 시 Ansible 이 조치하고 "
+            f"조치 후 상태를 재검증한다.")
+    res = keep.push_alert(alert_name or "(알림명 없음)", sev, host, note,
+                          service=service, fingerprint=fp, playbook=playbook)
+    log.info("remediation queued host=%s playbook=%s service=%s keep=%s",
+             host, playbook, service or "-", res.get("ok"))

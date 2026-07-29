@@ -22,14 +22,14 @@ def decide(sev: str, tags: list, event_value: int = 1) -> dict:
         return {"route": "digest", "playbook": None}
 
     # SEV1/2: automate 태그 + 계약 허용이면 remediate, 아니면 triage. scope가 automate에 우선(A-6).
-    playbook = _tag_value(tags, AUTOMATE_TAG)
-    scope = _tag_value(tags, SCOPE_TAG)
+    playbook = tag_value(tags, AUTOMATE_TAG)
+    scope = tag_value(tags, SCOPE_TAG)
     if playbook and scope != "notify_only":
         return {"route": "remediate", "playbook": playbook}
     return {"route": "triage", "playbook": None}
 
 
-def _tag_value(tags: list, key: str):
+def tag_value(tags: list, key: str):
     for t in tags:
         if isinstance(t, dict) and t.get("tag") == key:
             return t.get("value") or None

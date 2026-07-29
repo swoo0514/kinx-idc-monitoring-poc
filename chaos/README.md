@@ -13,6 +13,7 @@
 - **`repl_lag.sh`** — slave DB 복제를 다루므로, **관측 코어 VM의 `lab/` 디렉토리**(docker compose 접근)에서 실행합니다.
 - **`repl_lag_contention.sh`** — 슬레이브 VM(vm-target-002)의 디스크 I/O를 포화시키므로, **그 슬레이브 VM에서 직접** 실행합니다.
 - **`error_burst.sh`** — 노드 로그에 직접 쓰므로, **감시 노드에서 직접** 실행합니다.
+- **`service_down.sh`** — 대상 노드의 서비스를 정지시키므로, **SSH로 접근 가능한 곳**에서 대상을 인자로 실행합니다(`service_down.sh vm-p3-target-002 chronyd`).
 
 ## 스크립트
 
@@ -24,6 +25,18 @@ SSH 무차별 대입을 시뮬레이션하여 Wazuh 레벨 10(룰 5712) 보안 �
 - 원리: 없는 계정으로 반복 로그인 실패 → 룰 5710(level 5) 누적 → 120초 내 8회 초과 시 5712(level 10)로 격상 (Wazuh 상관 분석)
 - 확인: Wazuh 대시보드 → Threat Hunting → `rule.id:5712`
 - 용도: 데모 A 보안 축, 데모 C(AI 트리아지) 입력 소재
+
+### `service_down.sh` — 서비스 정지 (데모 B 입력)
+
+대상 노드의 서비스를 정지시켜 자가 치유 흐름을 처음부터 끝까지 돌립니다.
+
+- 사용: `./service_down.sh <ssh_대상> [서비스=chronyd]`
+- 흐름: 정지 → Zabbix 서비스 트리거 발화 → 게이트웨이가 `automate` 태그를 보고 조치 후보를
+  Keep 승인 큐에 등록 → 사람이 Run Workflow(승인) → Ansible 이 재기동하고 상태를 재검증
+- 전제: 그 트리거에 `automate=service_restart` 태그와 `service=<서비스명>` 태그가 붙어 있어야
+  조치 경로를 탑니다(태그가 없으면 일반 트리아지로 흐릅니다). 계약상 조치 금지 대상이면
+  `scope=notify_only` 태그가 조치를 차단합니다.
+- 기본값을 `chronyd`로 둔 이유: 랩에 항상 있고 정지해도 서비스 영향이 없어 반복 시연이 안전합니다.
 
 ### `cpu_stress.sh` — 자원 메트릭(CPU) 급등
 

@@ -2,6 +2,9 @@
 # 알림에서 사람이 "Run Workflow"(=승인) → SSH로 core(ansible control) → ansible-playbook 재기동.
 # "Keep = 알림저장·UI + 승인 + Ansible 실행" 데모 B(HITL 자가치유). 배선·전제는 keep/KEEP_GUIDE.md.
 # 전제: Keep UI에 SSH provider(host=core, user=rocky, pkey=p3키)를 이름 core-ansible 로 생성.
+# 대상·서비스는 봇이 알림에 실어 보낸 값을 그대로 쓴다(하드코딩 금지).
+# `{{ alert.* }}` 는 트리거 알림의 임의 속성을 참조하는 Keep 표준 문법이며, 게이트웨이가
+# host·service·playbook 을 커스텀 필드로 push 한다. 근거: docs.keephq.dev/workflows/syntax/context
 workflow:
   id: remediate-service-via-ansible
   name: Remediate service via Ansible
@@ -10,8 +13,11 @@ workflow:
     - type: manual
   steps:
     - name: run-ansible-remediation
+      # 안전 게이트 — 이 워크플로는 service_restart 후보에만 실행한다. 다른 조치 후보 알림에서
+      # 실수로 Run 해도 아무 일도 일어나지 않는다.
+      if: "'{{ alert.playbook }}' == 'service_restart'"
       provider:
         type: ssh
         config: "{{ providers.core-ansible }}"
         with:
-          command: "source ~/ansible-venv/bin/activate && cd /home/rocky/kinx-idc-monitoring-poc/ansible && ansible-playbook -i inventory.local.ini remediate_service.yml -e target_host=vm-p3-target-002 -e service_name=chronyd"
+          command: "source ~/ansible-venv/bin/activate && cd /home/rocky/kinx-idc-monitoring-poc/ansible && ansible-playbook -i inventory.local.ini remediate_service.yml -e target_host={{ alert.host }} -e service_name={{ alert.service }}"
