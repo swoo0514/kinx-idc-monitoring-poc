@@ -65,6 +65,25 @@ async def run(event_id: str, trigger_id: str, sev: str,
             "thread_ts": posted.get("ts")}
 
 
+def _push_gated(inc, context: dict, reason: str) -> dict:
+    """게이트에서 걸러진 사건도 Keep 에는 남긴다 (G5).
+
+    LLM 을 안 부르는 것이 게이트의 목적이고 저장은 LLM 과 무관하므로 비용이 들지 않는다.
+    이걸 빠뜨리면 Keep 에 "분석까지 간 사건"만 쌓인다. 그런데 게이트에 걸리는 것은 정의상
+    단일 축·교차 신호 없음, 곧 만성 노이즈의 전형이라 **만성 반복 랭킹을 하려는 바로 그
+    대상이 저장소에서 빠진다**. 분석 없이 판정과 유형만 실어 보낸다.
+    """
+    verdict = incident_mod.dominant_verdict(context) or "미상"
+    classes = ", ".join(sorted(inc.classes()))
+    note = (f"*분석 생략 — 봇 판단*\n"
+            f"사유: {reason}\n"
+            f"유형: {classes}  ·  알림 {len(inc.alerts)}건\n"
+            f"교차 신호가 없어 LLM 을 호출하지 않았다. 판정과 유형만 기록한다.")
+    return keep.push_alert(inc.alerts[0].alert_name or "(알림명 없음)",
+                           inc.dominant_sev(), inc.host, note,
+                           prejudge=verdict, fingerprint=inc.fingerprint())
+
+
 async def run_incident(inc) -> dict:
     """병합 인시던트 트리아지 — 창 마감 후 IncidentManager.on_close가 호출. 30초 예산 기준점.
 
@@ -96,6 +115,7 @@ async def run_incident(inc) -> dict:
     # 발동조건 게이트 — 교차 상관할 게 있을 때만 LLM 호출 (§14 발동조건 게이트)
     fire, reason = incident_mod.should_triage(inc, context)
     if not fire:
+        await asyncio.to_thread(_push_gated, inc, context, reason)
         timings["total_s"] = round(time.monotonic() - t0, 2)
         log.info("gate skip fp=%s alerts=%d reason=%s timings=%s",
                  inc.fingerprint(), len(inc.alerts), reason, timings)

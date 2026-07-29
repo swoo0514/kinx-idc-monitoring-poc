@@ -251,10 +251,21 @@ def _remediation_checks() -> int:
                                   "service_restart", "nginx")
         assert keep.push_alert("n", "SEV2", "h1", "a", playbook="service_restart") == \
             {"ok": False, "skipped": True}
+
+        # G5 — 게이트에서 걸러진 사건도 Keep 에 남긴다(분석 없이 판정·유형만)
+        from . import incident, triage
+        inc = incident.Incident(
+            key=("h1", "disk_space"), host="h1", opened_at=0.0, last_at=0.0,
+            alerts=[incident.Alert(source="zabbix-internal", event_id="e", trigger_id="1",
+                                   host="h1", alert_name="디스크 사용률 92%", sev="SEV2",
+                                   incident_class="disk_space", recv=0.0)])
+        ctx = {"alerts": [{"prejudge": {"verdict": "만성"}}]}
+        assert triage._push_gated(inc, ctx, "단일 축·교차 신호 없음") == \
+            {"ok": False, "skipped": True}
     finally:
         if saved is not None:
             os.environ["KEEP_URL"] = saved
-    return 4
+    return 5
 
 
 def _fastpath_checks() -> int:
