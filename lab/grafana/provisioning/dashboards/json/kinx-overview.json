@@ -50,6 +50,7 @@
         "type": "grafana-opensearch-datasource",
         "uid": "wazuh"
       },
+      "description": "팀 현행 컷라인(레벨 10+)을 넘은 이벤트만. 레벨은 우리 통합 눈금(SEV)으로 표시해 Slack·봇 카드와 같은 언어를 쓴다 — 매핑 원본은 private/docs/severity_map.md. agent.name 을 클릭하면 그 호스트로 대시보드가 좁혀진다.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -81,18 +82,6 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "_type"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 66
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
               "options": "agent.name"
             },
             "properties": [
@@ -115,12 +104,83 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "agent.ip"
+              "options": "rule.level"
             },
             "properties": [
               {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "from": 14,
+                      "result": {
+                        "color": "dark-red",
+                        "index": 0,
+                        "text": "SEV1 즉시"
+                      },
+                      "to": 15
+                    },
+                    "type": "range"
+                  },
+                  {
+                    "options": {
+                      "from": 10,
+                      "result": {
+                        "color": "red",
+                        "index": 1,
+                        "text": "SEV2 알림"
+                      },
+                      "to": 13
+                    },
+                    "type": "range"
+                  },
+                  {
+                    "options": {
+                      "from": 7,
+                      "result": {
+                        "color": "orange",
+                        "index": 2,
+                        "text": "SEV3 다이제스트"
+                      },
+                      "to": 9
+                    },
+                    "type": "range"
+                  },
+                  {
+                    "options": {
+                      "from": 3,
+                      "result": {
+                        "color": "text",
+                        "index": 3,
+                        "text": "SEV4 화면만"
+                      },
+                      "to": 6
+                    },
+                    "type": "range"
+                  },
+                  {
+                    "options": {
+                      "from": 0,
+                      "result": {
+                        "color": "text",
+                        "index": 4,
+                        "text": "NONE"
+                      },
+                      "to": 2
+                    },
+                    "type": "range"
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
                 "id": "custom.width",
-                "value": 114
+                "value": 130
               }
             ]
           }
@@ -184,6 +244,16 @@
         }
       ],
       "title": "보안 이벤트 (Wazuh) — 레벨 10+ 개별 (agent.name 클릭 → 그 호스트 로그)",
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "pattern": "^(@timestamp|agent\\.name|rule\\.level|rule\\.description|rule\\.id|syscheck\\.path)$"
+            }
+          }
+        }
+      ],
       "type": "table"
     },
     {
@@ -625,7 +695,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 46
+        "y": 49
       },
       "id": 6,
       "options": {
@@ -726,7 +796,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 46
+        "y": 49
       },
       "id": 8,
       "options": {
@@ -814,7 +884,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "syscheck.path"
+              "options": "경로"
             },
             "properties": [
               {
@@ -826,24 +896,107 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "syscheck.event"
+              "options": "변경"
             },
             "properties": [
               {
                 "id": "custom.width",
-                "value": 100
+                "value": 90
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "rule.level"
+              "options": "시각"
             },
             "properties": [
               {
                 "id": "custom.width",
-                "value": 80
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "심각도"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "from": 14,
+                      "result": {
+                        "color": "dark-red",
+                        "index": 0,
+                        "text": "SEV1 즉시"
+                      },
+                      "to": 15
+                    },
+                    "type": "range"
+                  },
+                  {
+                    "options": {
+                      "from": 10,
+                      "result": {
+                        "color": "red",
+                        "index": 1,
+                        "text": "SEV2 알림"
+                      },
+                      "to": 13
+                    },
+                    "type": "range"
+                  },
+                  {
+                    "options": {
+                      "from": 7,
+                      "result": {
+                        "color": "orange",
+                        "index": 2,
+                        "text": "SEV3 다이제스트"
+                      },
+                      "to": 9
+                    },
+                    "type": "range"
+                  },
+                  {
+                    "options": {
+                      "from": 3,
+                      "result": {
+                        "color": "text",
+                        "index": 3,
+                        "text": "SEV4 화면만"
+                      },
+                      "to": 6
+                    },
+                    "type": "range"
+                  },
+                  {
+                    "options": {
+                      "from": 0,
+                      "result": {
+                        "color": "text",
+                        "index": 4,
+                        "text": "NONE"
+                      },
+                      "to": 2
+                    },
+                    "type": "range"
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 130
               }
             ]
           }
@@ -853,7 +1006,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 54
+        "y": 57
       },
       "id": 7,
       "options": {
@@ -915,6 +1068,27 @@
               "pattern": "^(@timestamp|syscheck\\.path|syscheck\\.event|rule\\.level|rule\\.description)$"
             }
           }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "includeByName": {},
+            "indexByName": {
+              "@timestamp": 0,
+              "rule.description": 4,
+              "rule.level": 3,
+              "syscheck.event": 2,
+              "syscheck.path": 1
+            },
+            "renameByName": {
+              "@timestamp": "시각",
+              "rule.description": "설명",
+              "rule.level": "심각도",
+              "syscheck.event": "변경",
+              "syscheck.path": "경로"
+            }
+          }
         }
       ],
       "type": "table"
@@ -936,7 +1110,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 62
+        "y": 81
       },
       "id": 11,
       "options": {
@@ -1092,7 +1266,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 70
+        "y": 65
       },
       "id": 12,
       "options": {
@@ -1180,7 +1354,7 @@
         "type": "grafana-opensearch-datasource",
         "uid": "wazuh"
       },
-      "description": "에이전트 연결·중단 이력. 끊긴 시간은 그 호스트가 무감시인 시간이다. 룰 501/503/504/505/506 은 전부 레벨 3 이라 팀 컷라인(10) 아래여서 알림이 안 간다 — 그래서 화면으로 본다. $host 필터를 일부러 걸지 않는다: 어느 호스트가 빠졌는지는 그 호스트를 선택하지 않은 상태에서 알아야 한다.",
+      "description": "에이전트 연결·중단 이력. 룰 501/503/504/505/506 은 전부 레벨 3(SEV4)이라 팀 컷라인(10) 아래여서 알림이 가지 않는다 — 그래서 화면으로 본다. 끊긴 시간은 그 호스트가 무감시인 시간이다. 룰 번호 대신 설명 컬럼만 둔다(번호는 읽는 데 도움이 안 됨). $host 필터를 일부러 걸지 않는다: 어느 호스트가 빠졌는지는 그 호스트를 선택하지 않은 상태에서 알아야 한다.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -1205,12 +1379,24 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "rule.description"
+              "options": "시각"
             },
             "properties": [
               {
                 "id": "custom.width",
-                "value": 260
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "이벤트"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 280
               }
             ]
           }
@@ -1220,7 +1406,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 70
+        "y": 65
       },
       "id": 13,
       "options": {
@@ -1283,6 +1469,25 @@
               "pattern": "^(@timestamp|agent\\.name|rule\\.id|rule\\.description)$"
             }
           }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "rule.id": true
+            },
+            "includeByName": {},
+            "indexByName": {
+              "@timestamp": 0,
+              "agent.name": 1,
+              "rule.description": 2
+            },
+            "renameByName": {
+              "@timestamp": "시각",
+              "agent.name": "호스트",
+              "rule.description": "이벤트"
+            }
+          }
         }
       ],
       "type": "table"
@@ -1292,7 +1497,7 @@
         "type": "grafana-opensearch-datasource",
         "uid": "wazuh"
       },
-      "description": "Wazuh 룰이 자체적으로 달고 나오는 PCI DSS 요건 태그를 집계한다. 우리가 매핑표를 만든 것이 아니라 룰셋에 이미 들어 있는 값이다(룰 550 = pci_dss_11.5). 랩 실측 검산: 2.2=671 은 SCA 이벤트 수와 정확히 일치, 11.5 는 FIM 이다. 컴플라이언스 보고서의 원재료가 공짜로 나온다는 뜻. $host 필터는 걸지 않는다 — 컴플라이언스는 호스트 단위가 아니라 조직 단위로 본다.",
+      "description": "Wazuh 룰셋이 자체적으로 달고 나오는 PCI DSS 요건 태그를 집계한다. 우리가 만든 매핑이 아니다 (룰 550 = pci_dss_11.5). 요건 계열: 2.x = 시스템 구성 표준, 10.x = 감사 로그 기록·보관, 11.x = 보안 시스템 정기 점검. 세부 항목(10.2.5 등)의 정확한 표준 문구는 PCI DSS 원문 확인이 필요하므로 여기서는 번호만 표시한다. 랩 실측 검산: 2.2=671 이 SCA 이벤트 수와 정확히 일치, 11.5 는 FIM. 컴플라이언스는 호스트 단위가 아니라 조직 단위로 보므로 $host 필터를 걸지 않는다.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -1319,7 +1524,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 78
+        "y": 73
       },
       "id": 14,
       "options": {
@@ -1371,7 +1576,49 @@
         }
       ],
       "title": "PCI DSS 요건별 이벤트 (Wazuh) — 룰셋 기본 태그 집계 (전체 호스트)",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "includeByName": {},
+            "indexByName": {
+              "Count": 1,
+              "rule.pci_dss": 0
+            },
+            "renameByName": {
+              "Count": "이벤트 수",
+              "rule.pci_dss": "PCI DSS 요건"
+            }
+          }
+        }
+      ],
       "type": "table"
+    },
+    {
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "id": 15,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "## 보안 축 상세 — Wazuh 모듈별\n위쪽은 데모 A 의 3축 통합 화면(메트릭·로그·보안을 같은 타임라인에), 아래는 **보안 축을 모듈별로 펼친 것**입니다.\n\n심각도는 통합 눈금 **SEV** 로 표시합니다 — `SEV1 즉시` / `SEV2 알림`(팀 컷라인 10+) / `SEV3 다이제스트` / `SEV4 화면만`. Slack 카드·봇 회신과 같은 언어입니다(원본: `private/docs/severity_map.md`).\n\n**FIM·SCA 기본 레벨은 5~9(SEV3·SEV4)라 알림으로 가지 않습니다.** 그래서 여기서 봅니다. 컷라인 위로 올린 것은 인증·권한 핵심 파일 변경과 SCA 회귀 둘뿐입니다.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "11.6.16",
+      "title": "",
+      "type": "text"
     }
   ],
   "preload": false,
