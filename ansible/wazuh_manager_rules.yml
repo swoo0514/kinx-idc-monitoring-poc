@@ -7,7 +7,7 @@
   vars:
     rules_path: /var/ossec/etc/rules/local_rules.xml
   tasks:
-    - name: 기존 룰 백업
+    - name: 기존 룰 백업 (매 실행마다 직전 상태로 갱신 — 원본 보존이 아니라 되돌림용)
       ansible.builtin.copy:
         src: "{{ rules_path }}"
         dest: "{{ rules_path }}.bak"
@@ -16,6 +16,7 @@
         group: wazuh
         mode: "0640"
       failed_when: false
+      changed_when: false
 
     - name: local_rules.xml 배포
       ansible.builtin.copy:
@@ -26,8 +27,10 @@
         mode: "0640"
       register: rules_copy
 
+    # wazuh-logtest 에는 -t 가 없다(파이썬 래퍼, 옵션은 -h/-V/-d/-U/-l/-q/-v).
+    # 설정·룰셋 검증은 analysisd -t 다 — 공식 daemon 레퍼런스 확인.
     - name: 룰셋 문법 검증
-      ansible.builtin.command: /var/ossec/bin/wazuh-logtest -t
+      ansible.builtin.command: /var/ossec/bin/wazuh-analysisd -t
       register: logtest
       changed_when: false
       failed_when: false
@@ -44,7 +47,7 @@
 
     - name: 검증 실패를 실행 실패로 알림
       ansible.builtin.fail:
-        msg: "룰셋 검증 실패 — 원본으로 되돌렸다. wazuh-logtest 출력: {{ logtest.stderr | default(logtest.stdout) }}"
+        msg: "룰셋 검증 실패 — 직전 상태로 되돌렸다. wazuh-analysisd -t 출력: {{ logtest.stderr | default(logtest.stdout) }}"
       when: logtest.rc != 0
 
     - name: wazuh-manager 재기동
