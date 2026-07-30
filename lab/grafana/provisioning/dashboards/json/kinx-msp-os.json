@@ -64,18 +64,50 @@
         "statusField": true,
         "statusIcon": false,
         "triggerSeverity": [
-          { "color": "rgb(108, 108, 108)", "priority": 0, "severity": "Not classified", "show": true },
-          { "color": "rgb(120, 158, 183)", "priority": 1, "severity": "Information", "show": true },
-          { "color": "rgb(175, 180, 36)", "priority": 2, "severity": "Warning", "show": true },
-          { "color": "rgb(255, 137, 30)", "priority": 3, "severity": "Average", "show": true },
-          { "color": "rgb(255, 101, 72)", "priority": 4, "severity": "High", "show": true },
-          { "color": "rgb(215, 0, 0)", "priority": 5, "severity": "Disaster", "show": true }
+          {
+            "color": "rgb(108, 108, 108)",
+            "priority": 0,
+            "severity": "Not classified",
+            "show": true
+          },
+          {
+            "color": "rgb(120, 158, 183)",
+            "priority": 1,
+            "severity": "Information",
+            "show": true
+          },
+          {
+            "color": "rgb(175, 180, 36)",
+            "priority": 2,
+            "severity": "Warning",
+            "show": true
+          },
+          {
+            "color": "rgb(255, 137, 30)",
+            "priority": 3,
+            "severity": "Average",
+            "show": true
+          },
+          {
+            "color": "rgb(255, 101, 72)",
+            "priority": 4,
+            "severity": "High",
+            "show": true
+          },
+          {
+            "color": "rgb(215, 0, 0)",
+            "priority": 5,
+            "severity": "Disaster",
+            "show": true
+          }
         ]
       },
       "pluginVersion": "6.5.0",
       "targets": [
         {
-          "application": { "filter": "" },
+          "application": {
+            "filter": ""
+          },
           "countTriggersBy": "",
           "datasource": {
             "type": "alexanderzobnin-zabbix-datasource",
@@ -83,12 +115,22 @@
           },
           "evaltype": "0",
           "functions": [],
-          "group": { "filter": "$customer" },
+          "group": {
+            "filter": "$customer"
+          },
           "hide": false,
-          "host": { "filter": "/.*/" },
-          "item": { "filter": "" },
-          "itemTag": { "filter": "" },
-          "macro": { "filter": "" },
+          "host": {
+            "filter": "/.*/"
+          },
+          "item": {
+            "filter": ""
+          },
+          "itemTag": {
+            "filter": ""
+          },
+          "macro": {
+            "filter": ""
+          },
           "options": {
             "acknowledged": 2,
             "count": false,
@@ -96,7 +138,14 @@
             "hostsInMaintenance": false,
             "limit": 1001,
             "minSeverity": 0,
-            "severities": [0, 1, 2, 3, 4, 5],
+            "severities": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
             "showDisabledItems": false,
             "skipEmptyValues": false,
             "sortProblems": "default",
@@ -104,16 +153,24 @@
             "useTrends": "default",
             "useZabbixValueMapping": false
           },
-          "proxy": { "filter": "" },
+          "proxy": {
+            "filter": ""
+          },
           "queryType": "5",
           "refId": "A",
           "resultFormat": "time_series",
           "schema": 12,
           "showProblems": "problems",
-          "table": { "skipEmptyValues": false },
-          "tags": { "filter": "" },
+          "table": {
+            "skipEmptyValues": false
+          },
+          "tags": {
+            "filter": ""
+          },
           "textFilter": "",
-          "trigger": { "filter": "" }
+          "trigger": {
+            "filter": ""
+          }
         }
       ],
       "title": "고객 활성 문제",
@@ -126,7 +183,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -138,16 +197,27 @@
             "drawStyle": "line",
             "fillOpacity": 10,
             "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
             "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 1,
             "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
+            "scaleDistribution": {
+              "type": "linear"
+            },
             "showPoints": "auto",
             "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
           },
           "mappings": [],
           "max": 100,
@@ -155,8 +225,13 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green" },
-              { "color": "red", "value": 80 }
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
             ]
           },
           "unit": "percent"
@@ -171,13 +246,24 @@
       },
       "id": 2,
       "options": {
-        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "hideZeros": false, "mode": "single", "sort": "none" }
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
       "pluginVersion": "11.6.16",
       "targets": [
         {
-          "application": { "filter": "" },
+          "application": {
+            "filter": ""
+          },
           "countTriggersBy": "",
           "datasource": {
             "type": "alexanderzobnin-zabbix-datasource",
@@ -185,11 +271,21 @@
           },
           "evaltype": "0",
           "functions": [],
-          "group": { "filter": "$customer" },
-          "host": { "filter": "/.*/" },
-          "item": { "filter": "CPU utilization" },
-          "itemTag": { "filter": "" },
-          "macro": { "filter": "" },
+          "group": {
+            "filter": "$customer"
+          },
+          "host": {
+            "filter": "/.*/"
+          },
+          "item": {
+            "filter": "CPU utilization"
+          },
+          "itemTag": {
+            "filter": ""
+          },
+          "macro": {
+            "filter": ""
+          },
           "options": {
             "count": false,
             "disableDataAlignment": false,
@@ -198,15 +294,23 @@
             "useTrends": "default",
             "useZabbixValueMapping": false
           },
-          "proxy": { "filter": "" },
+          "proxy": {
+            "filter": ""
+          },
           "queryType": "0",
           "refId": "A",
           "resultFormat": "time_series",
           "schema": 12,
-          "table": { "skipEmptyValues": false },
-          "tags": { "filter": "" },
+          "table": {
+            "skipEmptyValues": false
+          },
+          "tags": {
+            "filter": ""
+          },
           "textFilter": "",
-          "trigger": { "filter": "" }
+          "trigger": {
+            "filter": ""
+          }
         }
       ],
       "title": "CPU 사용률",
@@ -219,7 +323,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -231,16 +337,27 @@
             "drawStyle": "line",
             "fillOpacity": 10,
             "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
             "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 1,
             "pointSize": 5,
-            "scaleDistribution": { "type": "linear" },
+            "scaleDistribution": {
+              "type": "linear"
+            },
             "showPoints": "auto",
             "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": { "mode": "off" }
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
           },
           "mappings": [],
           "max": 100,
@@ -248,8 +365,13 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green" },
-              { "color": "red", "value": 90 }
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
             ]
           },
           "unit": "percent"
@@ -264,13 +386,24 @@
       },
       "id": 3,
       "options": {
-        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "hideZeros": false, "mode": "single", "sort": "none" }
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
       "pluginVersion": "11.6.16",
       "targets": [
         {
-          "application": { "filter": "" },
+          "application": {
+            "filter": ""
+          },
           "countTriggersBy": "",
           "datasource": {
             "type": "alexanderzobnin-zabbix-datasource",
@@ -278,11 +411,21 @@
           },
           "evaltype": "0",
           "functions": [],
-          "group": { "filter": "$customer" },
-          "host": { "filter": "/.*/" },
-          "item": { "filter": "Memory utilization" },
-          "itemTag": { "filter": "" },
-          "macro": { "filter": "" },
+          "group": {
+            "filter": "$customer"
+          },
+          "host": {
+            "filter": "/.*/"
+          },
+          "item": {
+            "filter": "Memory utilization"
+          },
+          "itemTag": {
+            "filter": ""
+          },
+          "macro": {
+            "filter": ""
+          },
           "options": {
             "count": false,
             "disableDataAlignment": false,
@@ -291,19 +434,52 @@
             "useTrends": "default",
             "useZabbixValueMapping": false
           },
-          "proxy": { "filter": "" },
+          "proxy": {
+            "filter": ""
+          },
           "queryType": "0",
           "refId": "A",
           "resultFormat": "time_series",
           "schema": 12,
-          "table": { "skipEmptyValues": false },
-          "tags": { "filter": "" },
+          "table": {
+            "skipEmptyValues": false
+          },
+          "tags": {
+            "filter": ""
+          },
           "textFilter": "",
-          "trigger": { "filter": "" }
+          "trigger": {
+            "filter": ""
+          }
         }
       ],
       "title": "메모리 사용률",
       "type": "timeseries"
+    },
+    {
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 4,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "### 보안 축 — 아직 수집 안 됨 (기술 제약 아님)\n이 화면이 비어 있는 이유는 **현재 MSP 고객 호스트에 wazuh-agent를 배포하지 않았기 때문**입니다. 빈 패널은 \"이상 없음\"으로 오해되므로 패널을 두지 않고 이 사실을 적습니다.\n\n**할 수 있습니다.** `ansible/deploy_agents.yml` 이 zabbix-agent2 · Alloy · wazuh-agent 3종을 한 번에 배포하므로, 인벤토리에 고객 호스트를 추가하고 `customer` 변수를 주면 자동등록이 `Customers/<고객>` 그룹으로 바로 들어가 권한 상속까지 적용됩니다.\n\n**소관 판단**: Wazuh가 보는 것은 OS 인증 로그 · 파일 무결성 · 패키지 CVE 로 전부 인프라 층입니다. 우리가 정한 경계(호스트·리소스=MSP 관측 / 앱 내부=고객)에서 MSP 쪽입니다. 다만 **에이전트 추가 설치 자체는 고객 협의 사안**(인터뷰 A-6: \"임의로 진행 못 함\")이라 확인 항목으로 둡니다.\n\n**에이전트를 못 깔는 고객**은 대안이 있습니다 — 고객사 프록시에 Wazuh syslog 수신(`<connection>syslog</connection>`)을 얹으면 에이전트 없이 장비 로그를 받습니다. 단 그 인터넷 구간에 PSK/TLS가 없어 평문 전송이 되므로 암호화 적용과 묶어야 합니다.\n\n사내 호스트 보안 축은 `KINX 통합 관제` 대시보드에 있습니다.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "11.6.16",
+      "title": "보안 (Wazuh)",
+      "type": "text"
     }
   ],
   "preload": false,

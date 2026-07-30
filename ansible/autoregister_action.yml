@@ -1,16 +1,20 @@
 ---
 # 서버측 autoregistration 액션 (deploy_agents.yml 의 HostMetadata 짝). 근거는 DEPLOY_GUIDE.md.
-- name: Autoregistration action (3-agent bundle)
+- name: Autoregistration actions (3-agent bundle)
   hosts: zabbix
   gather_facts: false
+  vars_files:
+    - customers.yml
   vars:
     ansible_zabbix_auth_key: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
-    host_metadata: "linux-3agent-bundle"   # deploy_agents.yml 의 HostMetadata 와 일치해야 함
+    # deploy_agents.yml 의 HostMetadata 접두와 일치해야 함. 조건이 부분 일치(like)라서
+    # 접미사를 양쪽에 붙여 사내와 MSP 액션이 서로 겹치지 않게 한다.
+    host_metadata: "linux-3agent-bundle"
     autoreg_group: "Discovered hosts"
     autoreg_templates:
       - "Linux by Zabbix agent"
   tasks:
-    - name: 3종 번들 자동등록 액션 생성
+    - name: 사내 3종 번들 자동등록 액션
       community.zabbix.zabbix_action:
         name: "Autoregister 3-agent bundle"
         event_source: "auto_registration"
@@ -20,7 +24,7 @@
         conditions:
           - type: "host_metadata"
             operator: "like"
-            value: "{{ host_metadata }}"
+            value: "{{ host_metadata }}:internal"
         operations:
           - type: "add_host"
           - type: "add_to_host_group"
@@ -28,3 +32,25 @@
               - "{{ autoreg_group }}"
           - type: "link_to_template"
             templates: "{{ autoreg_templates }}"
+
+    - name: MSP 고객별 자동등록 액션 (고객 그룹으로 바로 분류 → 권한 자동 상속)
+      community.zabbix.zabbix_action:
+        name: "Autoregister 3-agent bundle - {{ item.host_group | regex_replace('^.*/', '') }}"
+        event_source: "auto_registration"
+        state: present
+        status: enabled
+        esc_period: "1h"
+        conditions:
+          - type: "host_metadata"
+            operator: "like"
+            value: "{{ host_metadata }}:{{ item.host_group | regex_replace('^.*/', '') | lower }}"
+        operations:
+          - type: "add_host"
+          - type: "add_to_host_group"
+            host_groups:
+              - "{{ item.host_group }}"
+          - type: "link_to_template"
+            templates: "{{ item.autoreg_templates | default(autoreg_templates) }}"
+      loop: "{{ customers | default([]) }}"
+      loop_control:
+        label: "{{ item.host_group }}"

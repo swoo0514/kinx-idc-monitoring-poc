@@ -235,6 +235,64 @@ SCA 는 에이전트가 OS 에 맞는 정책만 자동 설치하므로 Rocky 9 �
 
 전체 조사 결과와 매니저 측 설정은 `private/docs/wazuh_enhancement_plan.md`.
 
+## MSP 고객 호스트에 3종 번들 적용 (2026-07-30)
+
+### 배제할 이유가 없다
+
+`deploy_agents.yml` 은 `hosts: targets` 이므로 인벤토리에 고객 호스트를 추가하면 그대로 돈다.
+MSP를 막는 코드는 없었다. **막혀 있던 건 배포가 아니라 자동등록 그룹이었다.**
+
+```yaml
+autoreg_group: "Discovered hosts"   # 하드코딩 — 고객 호스트도 전부 여기로
+```
+
+이러면 Day7에 만든 중첩 그룹 권한 상속(`Customers/<고객>`)이 적용되지 않아 **고객 격리
+계정이 자기 호스트를 못 본다.** 자동등록을 고객별로 분기해야 한다.
+
+### HostMetadata 접미사로 가른다
+
+| 대상 | 인벤토리 변수 | HostMetadata | 자동등록 그룹 |
+|---|---|---|---|
+| 사내 | (없음 → 기본값) | `linux-3agent-bundle:internal` | `Discovered hosts` |
+| MSP 고객 B | `customer=customer-b` | `linux-3agent-bundle:customer-b` | `Customers/Customer-B` |
+
+`autoregister_action.yml` 이 `customers.yml` 을 읽어 고객마다 액션을 하나씩 만든다.
+액션 이름은 `Autoregister 3-agent bundle - Customer-B` 형태이고, 조건은
+`host_metadata like "linux-3agent-bundle:customer-b"` 다.
+
+**접미사를 사내에도 붙인 이유**: 자동등록 조건은 **부분 일치(`like`)** 다. 사내 조건을
+`linux-3agent-bundle` 로 두면 `...:customer-b` 도 그 문자열을 포함하므로 **MSP 호스트가
+사내 액션에도 걸려 `Discovered hosts` 에 중복 등록된다.** 처음 만들 때 이 버그를 냈고,
+양쪽에 접미사를 붙여 해소했다.
+
+인벤토리 예:
+```
+custb-web-01.example.net ansible_host=192.0.2.51 agent_identity=custb-web-01.example.net customer=customer-b
+```
+
+`customer` 값은 `customers.yml` 의 `host_group` 마지막 조각을 소문자로 쓴 것이다
+(`Customers/Customer-B` → `customer-b`).
+
+### 소관 판단 — 왜 MSP에도 Wazuh를 넣나
+
+Wazuh가 보는 것을 층으로 나누면 답이 나온다.
+
+| 대상 | 층 |
+|---|---|
+| 로그인 실패·sudo | OS 인증 = **인프라** |
+| 파일 무결성 (`/etc`, SSH 키, cron) | OS 설정 = **인프라** |
+| 패키지 CVE | OS 패키지 = **인프라** |
+| 앱 내부 취약점 | 고객 |
+
+앞의 셋은 우리가 정한 경계(호스트·리소스=MSP 관측 / 앱 내부=고객)에서 MSP 쪽이다.
+**다만 에이전트 추가 설치 자체는 고객 협의 사안**이다(인터뷰 A-6 "임의로 진행 못 함").
+기술 제약이 아니라 계약 확인 항목으로 둔다.
+
+**에이전트를 못 깔는 고객**에는 대안이 있다 — 고객사 프록시에 Wazuh syslog 수신
+(`<remote><connection>syslog</connection>`, 514, `allowed-ips` 필수)을 얹으면 에이전트 없이
+장비 로그를 받는다. 단 그 구간이 **PSK/TLS 없는 일반 인터넷**이므로 보안 로그를 평문으로
+태우게 된다. 암호화 적용 권고와 반드시 묶어서 제안한다.
+
 ## 인증서 만료 감시 (`certificates.yml`, 2026-07-30)
 
 ### 왜 하나

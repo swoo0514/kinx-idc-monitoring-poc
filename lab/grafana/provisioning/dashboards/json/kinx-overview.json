@@ -374,7 +374,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
             "drawStyle": "line",
             "fillOpacity": 10,
@@ -395,13 +397,23 @@
       },
       "id": 10,
       "options": {
-        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "single", "sort": "none" }
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
       },
       "pluginVersion": "11.6.16",
       "targets": [
         {
-          "application": { "filter": "" },
+          "application": {
+            "filter": ""
+          },
           "countTriggersBy": "",
           "datasource": {
             "type": "alexanderzobnin-zabbix-datasource",
@@ -409,11 +421,21 @@
           },
           "evaltype": "0",
           "functions": [],
-          "group": { "filter": "/.*/" },
-          "host": { "filter": "/$host/" },
-          "item": { "filter": "/.*Seconds Behind Master.*/" },
-          "itemTag": { "filter": "" },
-          "macro": { "filter": "" },
+          "group": {
+            "filter": "/.*/"
+          },
+          "host": {
+            "filter": "/$host/"
+          },
+          "item": {
+            "filter": "/.*Seconds Behind Master.*/"
+          },
+          "itemTag": {
+            "filter": ""
+          },
+          "macro": {
+            "filter": ""
+          },
           "options": {
             "count": false,
             "disableDataAlignment": false,
@@ -422,15 +444,23 @@
             "useTrends": "default",
             "useZabbixValueMapping": false
           },
-          "proxy": { "filter": "" },
+          "proxy": {
+            "filter": ""
+          },
           "queryType": "0",
           "refId": "A",
           "resultFormat": "time_series",
           "schema": 12,
-          "table": { "skipEmptyValues": false },
-          "tags": { "filter": "" },
+          "table": {
+            "skipEmptyValues": false
+          },
+          "tags": {
+            "filter": ""
+          },
           "textFilter": "",
-          "trigger": { "filter": "" }
+          "trigger": {
+            "filter": ""
+          }
         }
       ],
       "title": "메트릭 (Zabbix) — $host 복제 지연(초, Seconds Behind Master)",
@@ -1002,6 +1032,346 @@
       ],
       "title": "인증서 만료 재고 (Zabbix) — 도메인별 만료 시점",
       "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "wazuh"
+      },
+      "description": "로그인 성공과 실패를 나란히 본다. 레벨 10+ 패널에서는 실패가 누적 임계를 넘긴 뒤에야 한 줄로 보이는데, 이 패널은 그 전 단계를 보여준다. 실패가 쌓인 뒤 성공이 찍히는 패턴이 침해 신호다.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "실패"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "성공"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 70
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "alias": "실패",
+          "bucketAggs": [
+            {
+              "field": "@timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "grafana-opensearch-datasource",
+            "uid": "wazuh"
+          },
+          "format": "table",
+          "luceneQueryType": "Metric",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "query": "rule.groups:authentication_failed AND agent.name:\"$host\"",
+          "queryType": "lucene",
+          "refId": "A",
+          "timeField": "@timestamp"
+        },
+        {
+          "alias": "성공",
+          "bucketAggs": [
+            {
+              "field": "@timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "grafana-opensearch-datasource",
+            "uid": "wazuh"
+          },
+          "format": "table",
+          "luceneQueryType": "Metric",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "query": "rule.groups:authentication_success AND agent.name:\"$host\"",
+          "queryType": "lucene",
+          "refId": "B",
+          "timeField": "@timestamp"
+        }
+      ],
+      "title": "인증 활동 (Wazuh) — $host 로그인 실패/성공",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "wazuh"
+      },
+      "description": "에이전트 연결·중단 이력. 끊긴 시간은 그 호스트가 무감시인 시간이다. 룰 501/503/504/505/506 은 전부 레벨 3 이라 팀 컷라인(10) 아래여서 알림이 안 간다 — 그래서 화면으로 본다. $host 필터를 일부러 걸지 않는다: 어느 호스트가 빠졌는지는 그 호스트를 선택하지 않은 상태에서 알아야 한다.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text"
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rule.description"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 260
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 70
+      },
+      "id": 13,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "alias": "",
+          "bucketAggs": [
+            {
+              "field": "@timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "grafana-opensearch-datasource",
+            "uid": "wazuh"
+          },
+          "format": "table",
+          "luceneQueryType": "RawData",
+          "metrics": [
+            {
+              "id": "1",
+              "settings": {
+                "order": "desc",
+                "size": "100",
+                "useTimeRange": true
+              },
+              "type": "raw_data"
+            }
+          ],
+          "query": "rule.id:(501 OR 503 OR 504 OR 505 OR 506)",
+          "queryType": "lucene",
+          "refId": "A",
+          "timeField": "@timestamp"
+        }
+      ],
+      "title": "에이전트 수명주기 (Wazuh) — 연결·중단 이력 (전체 호스트)",
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "pattern": "^(@timestamp|agent\\.name|rule\\.id|rule\\.description)$"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "wazuh"
+      },
+      "description": "Wazuh 룰이 자체적으로 달고 나오는 PCI DSS 요건 태그를 집계한다. 우리가 매핑표를 만든 것이 아니라 룰셋에 이미 들어 있는 값이다(룰 550 = pci_dss_11.5). 랩 실측 검산: 2.2=671 은 SCA 이벤트 수와 정확히 일치, 11.5 는 FIM 이다. 컴플라이언스 보고서의 원재료가 공짜로 나온다는 뜻. $host 필터는 걸지 않는다 — 컴플라이언스는 호스트 단위가 아니라 조직 단위로 본다.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 78
+      },
+      "id": 14,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": true
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "11.6.16",
+      "targets": [
+        {
+          "alias": "",
+          "bucketAggs": [
+            {
+              "field": "rule.pci_dss",
+              "id": "3",
+              "settings": {
+                "min_doc_count": "1",
+                "order": "desc",
+                "orderBy": "_count",
+                "size": "15"
+              },
+              "type": "terms"
+            }
+          ],
+          "datasource": {
+            "type": "grafana-opensearch-datasource",
+            "uid": "wazuh"
+          },
+          "format": "table",
+          "luceneQueryType": "Metric",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "query": "_exists_:rule.pci_dss",
+          "queryType": "lucene",
+          "refId": "A",
+          "timeField": "@timestamp"
+        }
+      ],
+      "title": "PCI DSS 요건별 이벤트 (Wazuh) — 룰셋 기본 태그 집계 (전체 호스트)",
+      "type": "table"
     }
   ],
   "preload": false,

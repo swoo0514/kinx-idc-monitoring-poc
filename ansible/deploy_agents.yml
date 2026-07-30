@@ -8,7 +8,9 @@
     zabbix_server: "192.0.2.10"
     loki_push_url: "http://192.0.2.10:3100/loki/api/v1/push"
     wazuh_manager: "192.0.2.13"
-    host_metadata: "linux-3agent-bundle"   # autoregister_action.yml 조건과 일치해야 함
+    # autoregister_action.yml 조건과 일치해야 함. 접미사가 자동등록 그룹을 가른다 —
+    # 사내는 internal, MSP 고객은 인벤토리에서 customer=customer-b 처럼 준다(DEPLOY_GUIDE 참고).
+    host_metadata: "linux-3agent-bundle:{{ customer | default('internal') }}"
     zabbix_release_rpm: "https://repo.zabbix.com/zabbix/7.0/rhel/9/x86_64/zabbix-release-latest-7.0.el9.noarch.rpm"
 
   tasks:
