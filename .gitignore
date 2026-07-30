@@ -31,3 +31,4 @@ ansible/inventory.local.ini
 kinx_demo_dump.sql
 *_dump.sql
 ansible/certs.local.yml
+*.stackdump
