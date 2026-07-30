@@ -180,9 +180,29 @@ whodata 는 Rocky 9 커널(5.14 대)에서 eBPF provider 요건(5.8+)을 만족�
   빼 둔 것들이다. 이걸 놓쳤으면 우리가 노이즈를 줄이러 가서 **새 노이즈를 만들** 뻔했다
 - **`<synchronization>` 블록** — syscheck·syscollector가 매니저와 DB를 맞추는 설정.
   없으면 내장 기본값으로 돌지만, 명시가 사라지면 무엇이 적용 중인지 코드에서 안 보인다
+- **`<rootcheck>` 통째로** — 배포 후 에이전트 로그에 `rootcheck: INFO: Rootcheck disabled.`
+  가 찍혀서 발견했다. 루트킷·트로이목마 시그니처 탐지라 FIM·SCA 어느 쪽도 대체하지 않는다.
+  룰 510이 레벨 7이라 컷라인(10) 아래여서 알림 폭증 위험도 없다
 
 **교훈: 기본 파일을 덮어쓰는 템플릿은 "무엇을 더했나"보다 "무엇을 뺐나"를 먼저 대조해야
 한다.** 원본은 공식 저장소 `etc/ossec-agent.conf` 다.
+
+### 되살리되 그대로는 아닌 것 — rootcheck의 `<system_audit>`
+
+기본 rootcheck에는 `<system_audit>` 세 줄이 딸려 있는데 **이건 일부러 뺐다.**
+
+```
+system_audit_rcl.txt / system_audit_ssh.txt / cis_debian_linux_rcl.txt
+```
+
+세 번째가 **Debian용 CIS 파일**이다. Rocky 9 호스트에서 돌릴 물건이 아니다. 그리고 이 설정
+점검 기능은 SCA가 하는 일과 겹치는데, SCA는 OS에 맞는 `cis_rocky_linux_9.yml`(166체크)을
+쓴다. **같은 일을 틀린 기준으로 한 번 더 할 이유가 없다.**
+
+루트킷·트로이목마 탐지(`rootkit_files`·`rootkit_trojans`)만 남겼다. 이건 다른 모듈이
+대신해 주지 않는 기능이다.
+
+**"뺐다"와 "빠뜨렸다"는 다르다.** 위 두 건은 빠뜨린 것이라 되살렸고, 이건 근거를 두고 뺀 것이다.
 
 ### 우리가 추가한 제외 규칙 — 랩 실측에서 나온 것
 
