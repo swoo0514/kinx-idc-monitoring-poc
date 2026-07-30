@@ -263,6 +263,21 @@ SCA 는 에이전트가 OS 에 맞는 정책만 자동 설치하므로 Rocky 9 �
 
 근거: [Creating custom FIM rules](https://documentation.wazuh.com/current/user-manual/capabilities/file-integrity/creating-custom-fim-rules.html)
 
+### 정규식 — `type="pcre2"` 를 반드시 붙인다
+
+Wazuh 기본 정규식(OS_Regex)은 **PCRE와 점 의미가 반대**다.
+
+> osregex: `.` 는 **문자 그대로의 점**, `\.` 가 **아무 문자**를 매칭한다
+
+즉 PCRE 습관으로 `\.ssh` 라고 쓰면 osregex 에서는 `/root/Xssh` 같은 것도 걸린다. 반대로
+osregex 로 쓰려면 `.` 를 그냥 써야 한다. **틀려도 에러가 안 나고 룰이 조용히 안 맞을 뿐**이라
+가장 위험한 종류의 실수다.
+
+그래서 `100201` 은 `<field name="file" type="pcre2">` 로 명시했다. **이 속성을 지우면
+정규식 의미가 바뀐다** — 지울 경우 `\.` 를 `.` 로 함께 고쳐야 한다.
+
+근거: [Regular expression syntax](https://documentation.wazuh.com/current/user-manual/ruleset/ruleset-xml-syntax/regex.html)
+
 ### 버린 룰 — 패키지 매니저 강등
 
 `dnf`/`yum`/`rpm` 이 바꾼 파일을 레벨 2로 내리는 룰을 계획했다가 **버렸다.**

@@ -3,7 +3,7 @@
 
   <rule id="100201" level="12">
     <if_group>syscheck</if_group>
-    <field name="file">^/root/\.ssh/|^/etc/ssh/sshd_config$|^/etc/passwd$|^/etc/shadow$|^/etc/sudoers$</field>
+    <field name="file" type="pcre2">^/root/\.ssh/|^/etc/ssh/sshd_config$|^/etc/passwd$|^/etc/shadow$|^/etc/sudoers$</field>
     <description>인증·권한 핵심 파일 변경: $(file)</description>
   </rule>
 
