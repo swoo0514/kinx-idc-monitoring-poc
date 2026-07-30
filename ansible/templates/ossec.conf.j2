@@ -1,5 +1,4 @@
-<!-- 에이전트 설정을 코드로 관리한다. 패키지 설치 시 환경변수로 1회 생성되는 ossec.conf 는
-     재실행해도 갱신되지 않아 매니저 주소 변경·모듈 튜닝이 불가능했다(DEPLOY_GUIDE 미해결 항목). -->
+<!-- 감시 경로·제외 규칙의 근거는 ansible/DEPLOY_GUIDE.md "Wazuh 에이전트 감시 정의" 참고 -->
 <ossec_config>
 
   <client>
@@ -8,71 +7,38 @@
       <port>1514</port>
       <protocol>tcp</protocol>
     </server>
-    <!-- 세 시스템(Zabbix·Loki·Wazuh)이 같은 이름을 쓰게 하는 것이 상관의 전제다.
-         agent_identity = FQDN 이며 zabbix_agent2.conf·config.alloy 와 동일 값. -->
     <config-profile>rocky, rocky9</config-profile>
     <notify_time>10</notify_time>
     <time-reconnect>60</time-reconnect>
     <auto_restart>yes</auto_restart>
   </client>
 
-  <!-- 폭주 방어. 패키지 업데이트처럼 한 번에 대량 변경이 나는 상황에서 에이전트가
-       매니저를 밀어붙이지 않도록 leaky bucket 을 명시한다(기본값 유지, 문서화 목적). -->
   <client_buffer>
     <disabled>no</disabled>
     <queue_size>5000</queue_size>
     <events_per_second>500</events_per_second>
   </client_buffer>
 
-  <!-- ===== 파일 무결성 감시 =====
-       기본값은 /etc,/usr/bin,/usr/sbin,/bin,/sbin,/boot 를 12시간 주기로 본다. 이 기본 경로는
-       CIS RHEL 9 의 6.1.x 가 전제하는 AIDE 커버리지와 대체로 일치하므로 유지한다.
-       실제 갭은 커버리지가 아니라 빠진 소수(/root, SSH 키, cron, systemd)라 그쪽을 더한다. -->
   <syscheck>
     <disabled>no</disabled>
-    <!-- 12시간. PCI DSS 11.5.2 의 "최소 주간" 요구를 넉넉히 넘는다. -->
     <frequency>43200</frequency>
     <scan_on_start>yes</scan_on_start>
 
-    <!-- 예약 스캔: 크고 변경이 드문 바이너리·설정 트리 -->
     <directories check_all="yes">/etc,/usr/bin,/usr/sbin</directories>
     <directories check_all="yes">/bin,/sbin,/boot</directories>
 
-    <!-- 실시간: 작고 값이 높으며 평소 안 바뀌는 곳만. inotify watch 예산이 유한하고,
-         큰 트리에 realtime 을 걸면 rule 560(실시간 큐 포화)이 난다. -->
     <directories check_all="yes" realtime="yes">/root/.ssh</directories>
     <directories check_all="yes" realtime="yes">/etc/cron.d,/etc/cron.daily,/etc/cron.hourly</directories>
     <directories check_all="yes" realtime="yes">/etc/systemd/system</directories>
-
-    <!-- SSH 설정만 whodata: "누가 바꿨나"까지 남긴다. Rocky 9 커널은 5.14 대라
-         eBPF provider(5.8+ 요건) 사용 가능. 불가하면 audit 모드로 자동 폴백한다. -->
     <directories check_all="yes" whodata="yes" report_changes="yes">/etc/ssh</directories>
 
-    <!-- ===== 랩 실측 노이즈 (2026-07-30) =====
-         최근 FIM 이벤트 5건 중 4건이 zabbix_md5.tmp, 나머지 1건이 grubenv 였다. 둘 다
-         기본 감시 경로에 들어 있고 기본 ignore 목록 14개에는 없다. 즉 표준 설치하면
-         누구에게나 생기는 노이즈다. -->
-
-    <!-- Zabbix 커스텀 스크립트가 /etc 에 쓰는 작업 파일. 감시 에이전트가 /etc 에
-         스크래치를 쓰는 것 자체가 결함이므로, 근본 해결은 스크립트가 /var/lib/zabbix 에
-         쓰게 고치는 것이다. 이건 그때까지의 임시 조치. -->
     <ignore type="sregex">^/etc/zabbix/.*\.tmp$</ignore>
-
-    <!-- grub-boot-success.timer 가 사용자 세션마다 grubenv 를 다시 쓴다(Red Hat KB 7099376,
-         Bugzilla 1971356 에서 의도된 동작으로 확인). 근본 해결은 타이머 마스킹이며
-         이건 이중 안전장치. -->
     <ignore>/boot/grub2/grubenv</ignore>
     <ignore>/boot/grub2/grubenv.new</ignore>
-
-    <!-- 일반적인 변경 잦은 확장자. 기본 ignore 의 ".log$|.swp$" 를 확장한다. -->
     <ignore type="sregex">\.tmp$|\.temp$|\.swp$|\.log$|\.pid$|\.lock$|\.bak$|\.rpmnew$|\.rpmsave$</ignore>
-
-    <!-- 감시 도구 자신의 작업 파일. /var/ossec/logs 를 realtime 으로 보면
-         자기 로그를 쓰고 그게 이벤트가 되는 무한 루프가 난다(공식 경고). -->
     <ignore>/var/ossec/queue</ignore>
     <ignore>/var/ossec/logs</ignore>
 
-    <!-- 변경 사실은 남기되 내용은 남기지 않는다(자격증명 유출 방지). -->
     <nodiff>/etc/shadow</nodiff>
     <nodiff type="sregex">\.key$|\.pem$</nodiff>
 
@@ -84,10 +50,6 @@
     <max_eps>50</max_eps>
   </syscheck>
 
-  <!-- ===== 설정 준수 평가 =====
-       기본값 그대로다. 에이전트가 OS 에 맞는 정책만 자동 설치하므로 Rocky 9 에는
-       cis_rocky_linux_9.yml(166 체크) 하나만 돈다. 명시적으로 적는 이유는 문서화 —
-       "우리가 무엇을 켜뒀는지"가 코드에 보여야 한다. -->
   <sca>
     <enabled>yes</enabled>
     <scan_on_start>yes</scan_on_start>
@@ -95,8 +57,6 @@
     <skip_nfs>yes</skip_nfs>
   </sca>
 
-  <!-- 취약점 탐지의 입력원. os·packages 가 필수이며 매니저가 이 인벤토리를 CVE 피드와
-       대조한다. 기본값 유지. -->
   <wodle name="syscollector">
     <disabled>no</disabled>
     <interval>1h</interval>
@@ -109,7 +69,6 @@
     <processes>yes</processes>
   </wodle>
 
-  <!-- sshd 로그. 브루트포스(룰 5710 누적 → 5712 레벨 10) 재현의 입력원이다. -->
   <localfile>
     <log_format>syslog</log_format>
     <location>/var/log/secure</location>

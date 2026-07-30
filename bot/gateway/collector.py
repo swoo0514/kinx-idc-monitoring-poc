@@ -243,9 +243,6 @@ async def _wazuh_alerts(agent_name: str, now: int) -> tuple:
             {"wildcard": {"agent.name": f"*{agent_name}*"}},
             {"range": {"@timestamp": {"gte": f"now-{CORR_WINDOW_S // 60}m"}}},
         ]}},
-        # rule.id·groups 는 "무슨 종류의 보안 이벤트인가"를 LLM 이 알기 위해, syscheck.* 는
-        # 어떤 파일이 어떻게 바뀌었는지를 알기 위해 가져온다. 이게 없으면 FIM 을 켜도 봇은
-        # "보안 경보 N건"까지만 알고 노이즈성 변경과 유의미한 변경을 구분할 수 없다.
         "_source": ["@timestamp", "rule.level", "rule.description", "agent.name",
                     "rule.id", "rule.groups", "syscheck.path", "syscheck.event"],
     }

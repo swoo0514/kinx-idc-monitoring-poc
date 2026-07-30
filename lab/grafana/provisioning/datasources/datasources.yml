@@ -57,9 +57,7 @@ datasources:
             expr: '{host="$${__value.raw}"}'
             queryType: range
 
-  # 취약점 재고는 알림(wazuh-alerts-*)이 아니라 별도 상태 인덱스에 들어간다. 4.8부터
-  # 바뀐 구조로, 인덱스 하나에 "현재 이 호스트가 안고 있는 CVE 목록"이 스냅샷으로 있다.
-  # 시계열이 아니므로 패널도 추세가 아니라 집계로 그린다.
+  # 취약점 재고 전용(스냅샷 인덱스). 근거는 private/docs/wazuh_enhancement_plan.md §8
   - name: Wazuh-States
     uid: wazuh-states
     type: grafana-opensearch-datasource
@@ -69,7 +67,6 @@ datasources:
       flavor: elasticsearch
       version: "7.10.2"
       database: "wazuh-states-vulnerabilities-*"
-      # 상태 인덱스에는 @timestamp 가 없다. 탐지 시각 필드를 시간축으로 쓴다.
       timeField: "vulnerability.detected_at"
       tlsSkipVerify: true
     basicAuth: true

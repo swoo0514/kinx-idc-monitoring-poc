@@ -143,7 +143,6 @@ def main():
     assert "Customer-A" not in blob, "customer group leaked"
     assert "MUST-NOT-LEAK" not in blob, "non-whitelisted field leaked"
     assert masked["logs"] and masked["security"], "logs/security dropped"
-    # FIM 경로에 호스트명이 섞여도 마스킹을 거친다(2026-07-30 필드 확장)
     assert masked["security"][0]["path"] and "lab-web01" not in masked["security"][0]["path"], \
         "syscheck path 의 호스트명이 마스킹되지 않음"
     assert masked["security"][0]["rule_id"] == "5712", "rule_id 가 전송되지 않음"

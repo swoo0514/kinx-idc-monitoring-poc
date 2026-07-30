@@ -87,8 +87,6 @@
         WAZUH_MANAGER: "{{ wazuh_manager }}"
         WAZUH_AGENT_NAME: "{{ agent_identity }}"
 
-    # 감시 정의를 코드로 관리한다. 기본값 그대로 두면 FIM이 잦은 변경 파일까지 잡아
-    # 노이즈가 되고(랩 실측: 상위 5건 중 4건), 무엇을 켜뒀는지도 코드에 남지 않는다.
     - name: ossec.conf 배포 (FIM 감시 경로·노이즈 제외·SCA)
       ansible.builtin.template:
         src: ossec.conf.j2

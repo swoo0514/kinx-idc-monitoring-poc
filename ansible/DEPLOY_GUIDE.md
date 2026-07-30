@@ -137,18 +137,64 @@ roles 로 갈아엎는 건 over-engineering). 호스트·티어·재사용이 �
 `ansible_os_family` 분기 또는 OS 그룹 `group_vars`, 고객사별은 `host_vars`+인벤토리 그룹.
 근거: docs.ansible.com/ansible/latest/tips_tricks/sample_setup.html
 
-## ossec.conf 를 템플릿으로 뺀 이유 (2026-07-30)
+## Wazuh 에이전트 감시 정의 (`ossec.conf.j2`, 2026-07-30)
 
-wazuh-agent 는 `WAZUH_MANAGER` 환경변수를 **최초 설치 때 한 번만** 읽는다. 그래서 재배포로
-매니저 주소를 바꿔도 반영되지 않았다. 템플릿을 배포하면 그 한계가 없어진다.
+### 왜 템플릿으로 뺐나
+
+wazuh-agent 는 `WAZUH_MANAGER` 환경변수를 **최초 설치 때 한 번만** 읽는다. 재배포로 매니저
+주소를 바꿔도 반영되지 않았다. 템플릿을 배포하면 그 한계가 없어진다.
 
 더 큰 이유는 따로 있다. 랩 인덱서를 조회해 보니 **FIM 이벤트 107건 중 상위 5건 가운데 4건이
-`/etc/zabbix/zabbix_md5.tmp`** 였다. 아무도 켠 적 없는데 기본값이 활성이라 계속 쌓이고 있었고,
-보안적으로 의미 없는 변경이 감시 결과의 대부분을 차지하고 있었다. 무엇을 감시하고 무엇을
-빼는지가 코드에 없으면 이런 상태를 알아챌 방법도, 고칠 방법도 없다.
+`/etc/zabbix/zabbix_md5.tmp`** 였다. 아무도 켠 적 없는데 기본값이 활성이라 계속 쌓이고 있었다.
+무엇을 감시하고 무엇을 빼는지가 코드에 없으면 이런 상태를 알아챌 방법도, 고칠 방법도 없다.
 
-템플릿의 판단 근거(감시 경로를 왜 늘렸는지, 무엇을 왜 제외했는지)는 파일 안 XML 주석과
-`private/docs/wazuh_enhancement_plan.md` 에 있다.
+### 감시 경로 — 기본값을 유지하고 소수만 더했다
+
+기본값은 `/etc`, `/usr/bin`, `/usr/sbin`, `/bin`, `/sbin`, `/boot` 를 12시간 주기로 본다. 이
+범위는 CIS RHEL 9 의 6.1.x 가 전제하는 AIDE 커버리지와 대체로 겹치므로 그대로 둔다. 실제 갭은
+커버리지가 아니라 빠진 소수였다.
+
+| 추가 경로 | 모드 | 이유 |
+|---|---|---|
+| `/root/.ssh` | realtime | 권한 상승 후 백도어 키를 심는 자리인데 기본 감시 밖 |
+| `/etc/cron.d`, `cron.daily`, `cron.hourly` | realtime | 지속성 확보의 고전적 경로 |
+| `/etc/systemd/system` | realtime | 위와 같음. systemd 유닛으로 심는 쪽이 더 흔하다 |
+| `/etc/ssh` | whodata + report_changes | "누가 바꿨나"와 "무엇이 바뀌었나"까지 남긴다 |
+
+**realtime 을 큰 트리에 걸지 않는다.** inotify watch 예산이 유한해서, 넓게 걸면 rule 560(실시간
+큐 포화)이 난다. 작고 값이 높으며 평소 안 바뀌는 곳에만 쓴다.
+
+whodata 는 Rocky 9 커널(5.14 대)에서 eBPF provider 요건(5.8+)을 만족한다. 안 되면 audit 모드로
+자동 폴백하므로 실패하지는 않는다.
+
+`frequency` 12시간은 PCI DSS 11.5.2 의 "최소 주간" 요구를 넉넉히 넘는다.
+
+### 제외 규칙 — 랩 실측에서 나온 것
+
+| 제외 대상 | 근거 |
+|---|---|
+| `^/etc/zabbix/.*\.tmp$` | 랩 FIM 상위 5건 중 4건. Zabbix 커스텀 스크립트의 작업 파일 |
+| `/boot/grub2/grubenv`(+`.new`) | `grub-boot-success.timer` 가 세션마다 다시 쓴다 (Red Hat KB 7099376, Bugzilla 1971356 — 의도된 동작) |
+| 변경 잦은 확장자 9종 | 기본 ignore 의 `.log$\|.swp$` 를 확장 |
+| `/var/ossec/queue`, `/var/ossec/logs` | 감시 도구가 자기 로그를 쓰고 그게 이벤트가 되는 루프 (공식 경고) |
+
+앞의 둘은 **둘 다 임시 조치다.** 근본 해결은 각각 스크립트가 `/etc` 대신 `/var/lib/zabbix` 에
+쓰게 고치는 것과 타이머를 마스킹하는 것이다. 표준 설치하면 누구에게나 생기는 노이즈라 제외
+규칙으로 덮되, 근본 해결책을 로드맵에 남긴다.
+
+`<nodiff>` 는 `/etc/shadow` 와 키 파일에 건다. **변경 사실은 남기되 내용은 남기지 않는다** —
+report_changes 가 켜진 상태에서 자격증명 파일의 diff 가 알림에 실리면 그 자체가 유출이다.
+
+### SCA·syscollector 를 명시적으로 적은 이유
+
+둘 다 기본값 그대로다. 그럼에도 적는 것은 **우리가 무엇을 켜뒀는지가 코드에 보여야 하기**
+때문이다. 이번 작업의 발단이 "기본값으로 돌고 있는데 아무도 몰랐다"였다.
+
+SCA 는 에이전트가 OS 에 맞는 정책만 자동 설치하므로 Rocky 9 에는 `cis_rocky_linux_9.yml`
+(166 체크) 하나만 돈다. syscollector 는 취약점 탐지의 입력원이라 `os`·`packages` 가 필수다 —
+매니저가 이 인벤토리를 CVE 피드와 대조한다.
+
+전체 조사 결과와 매니저 측 설정은 `private/docs/wazuh_enhancement_plan.md`.
 
 ## 아직 남은 것 (다음)
 - **MariaDB 복제**: 데모 C(복제 지연) 대상이 되려면 이 VM에 slave를 얹어야 함(별도 단계).
