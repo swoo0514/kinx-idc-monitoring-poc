@@ -23,6 +23,18 @@
         name: zabbix-agent
         state: absent
 
+    # 패키지 제거만으로는 v1 시절 cron·헬퍼가 남아 계속 돈다. 근거는 DEPLOY_GUIDE.md
+    # "v1 잔재 정리" — 랩에서 이 잔재가 FIM 이벤트의 85.7% 를 만들고 있었다.
+    - name: 구버전 zabbix-agent(v1) 잔재 정리
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/cron.d/restart_zabbix_agent
+        - /etc/zabbix/scripts/restart_agent.sh
+        - /etc/zabbix/zabbix_md5.cur
+        - /etc/zabbix/zabbix_md5.tmp
+
     - name: Zabbix 저장소 설치
       ansible.builtin.dnf:
         name: "{{ zabbix_release_rpm }}"

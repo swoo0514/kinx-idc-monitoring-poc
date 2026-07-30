@@ -235,6 +235,112 @@ SCA 는 에이전트가 OS 에 맞는 정책만 자동 설치하므로 Rocky 9 �
 
 전체 조사 결과와 매니저 측 설정은 `private/docs/wazuh_enhancement_plan.md`.
 
+## v1 잔재 정리 — FIM 노이즈를 추적해서 찾은 것 (2026-07-30)
+
+### 어떻게 발견했나
+
+FIM 이벤트 56건 중 **48건(85.7%)이 `/etc/zabbix/zabbix_md5.tmp`** 하나였다. 그 파일이 뭔지
+추적하니 v1 시절 자동화가 나왔다.
+
+```bash
+/etc/cron.d/restart_zabbix_agent          # 0 */4 * * * → 4시간마다
+  └─ /etc/zabbix/scripts/restart_agent.sh
+       md5sum /etc/zabbix/zabbix_agentd.d/*  > zabbix_md5.tmp   # agent v1 디렉터리
+       diff zabbix_md5.cur zabbix_md5.tmp
+       → 다르면  service zabbix-agent restart                    # agent v1 서비스
+```
+
+**설정이 바뀌면 에이전트를 재기동하는 구조**다. 그런데 감시 대상과 재기동 대상이 둘 다 v1이다.
+
+```
+$ rpm -q zabbix-agent zabbix-agent2
+package zabbix-agent is not installed
+zabbix-agent2-7.0.28-release1.el9.x86_64
+
+$ systemctl status zabbix-agent
+Unit zabbix-agent.service could not be found.
+```
+
+**v1은 없다.** 즉 이 자동화는 4시간마다 돌면서 아무 일도 하지 않고 `/etc` 에 파일만 쓴다.
+
+### 왜 순수 노이즈인가
+
+`.tmp` 는 `else` 분기 첫 줄에서 **diff 결과와 무관하게 매 실행 생성**된다. 설정이 안 바뀌니
+`md5sum` 결과는 매번 같고, **내용은 동일한데 `mtime` 만 갱신**된다. FIM 은 `check_all` 에 mtime 이
+포함되므로 **아무것도 안 바뀌었는데 변경으로 기록**한다.
+
+산수도 맞는다 — 6회/일 × 7일 = 42회, 실측 48건(에이전트 재기동 시 `scan_on_start` 로 추가 감지).
+
+반대로 `.cur` 는 변경이 있을 때만 갱신되므로 FIM 상위 경로에 안 나타났다. **스크립트 로직이
+실측 분포를 설명한다** — 교차검증이 됐다.
+
+### 두 번째 피해 — UserParameter 4개가 고아가 됐다
+
+같은 전환 잔재로 `/etc/zabbix/zabbix_agentd.d/` 에 UserParameter 4개가 남아 있다.
+
+```
+UserParameter=discovery.local.ip   curl http://169.254.169.254/.../local-ipv4
+UserParameter=discovery.public.ip  curl http://169.254.169.254/.../public-ipv4
+UserParameter=discovery.proc       /etc/zabbix/scripts/discovery.proc.sh
+UserParameter=update.agent         sudo /etc/zabbix/scripts/update_agent.sh
+```
+
+**agent2 는 `/etc/zabbix/zabbix_agent2.d/` 를 읽는다**(우리 템플릿의 `Include`). 그 디렉터리에는
+우리 Ansible 이 넣은 `mysql.conf` 하나뿐이다. **네 개 전부 로드되지 않는다.**
+
+`169.254.169.254` 는 클라우드 인스턴스 메타데이터 서비스이므로, 이 세트는 **클라우드 VM 플릿
+관리를 전제로 설계된 일관된 묶음**(IP 자동발견 · 프로세스 발견 · 자기 업데이트 · 설정변경
+자동재기동)이다. 7개 파일과 cron 이 모두 `Jun 29 14:01` 동일 타임스탬프여서 **일괄 배포된
+것**이다. **다만 출처는 미확인이다** — "사내 표준"이라고 단정하지 않는다.
+
+### 플레이북에 무엇을 넣었나
+
+```yaml
+- name: 구버전 zabbix-agent(v1) 잔재 정리
+  ansible.builtin.file: { path: "{{ item }}", state: absent }
+  loop:
+    - /etc/cron.d/restart_zabbix_agent
+    - /etc/zabbix/scripts/restart_agent.sh
+    - /etc/zabbix/zabbix_md5.cur
+    - /etc/zabbix/zabbix_md5.tmp
+```
+
+**죽은 것만 지운다.** `zabbix_agentd.d/*.conf` 와 나머지 스크립트(`set_kinx.sh`,
+`update_agent.sh`, `discovery.proc.sh`, `get_metadata.py`)는 **건드리지 않는다** — 용도가
+확인되지 않았고, 고아 UserParameter 는 `zabbix_agent2.d/` 로 옮기면 기능이 살아날 수 있어
+삭제가 아니라 판단 대상이다.
+
+**옮길지는 사용자 판단이다.** 특히 `update.agent` 는 `sudo` 로 자기 업데이트를 실행하므로
+우리가 조용히 켤 항목이 아니다.
+
+### 왜 이게 중요한가
+
+**우리 플레이북의 "구버전 정리 멱등"이 패키지 제거까지였다.** 포트 10050 선점 충돌은 막았지만
+파일 잔재는 보지 않았다. 실환경에서 팀이 agent v1 → v2 전환을 하면 같은 일이 난다.
+
+그리고 이 스크립트의 목적(설정 변경 시 재기동)은 **우리 MaC 가 이미 더 정확하게 한다** —
+`notify: restart zabbix-agent2` handler 가 배포 시점에 처리하므로 4시간 폴링이 필요 없다.
+
+> **MaC 의 구체적 이득**: cron 폴링으로 설정 변경을 감지하던 것을 배포 도구의 handler 가
+> 대체한다. 폴링은 최대 4시간 지연 + `/etc` 오염을 낳고, handler 는 즉시 + 부작용 없음.
+
+### 일반화 — 실환경 도입 체크리스트
+
+출처가 무엇이든 성립하는 교훈이다.
+
+> **FIM 을 켜기 전에 `/etc` 에 주기적으로 쓰는 cron·스크립트를 먼저 찾는다.**
+> 랩은 그게 하나였고 그것만으로 노이즈의 85.7% 였다.
+
+찾는 방법:
+
+```bash
+sudo grep -rl '/etc/' /etc/cron.d/ /etc/cron.*/ /var/spool/cron/ 2>/dev/null
+sudo find /etc -newermt '-1 day' -type f 2>/dev/null | head -30
+```
+
+**노이즈를 끝까지 추적하면 정보가 된다** — 이번엔 죽은 자동화 하나와 고아 UserParameter 4개를
+찾았다. 좀비 트리거 39%·죽은 Pushover 미디어와 같은 유형이고, **FIM 을 켠 덕분에 발견됐다.**
+
 ## Wazuh 매니저 룰 (`wazuh_manager_rules.yml`, 2026-07-30)
 
 ### 무엇을 승격하나 — 둘만
