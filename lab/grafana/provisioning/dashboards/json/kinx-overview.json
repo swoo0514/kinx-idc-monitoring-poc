@@ -562,21 +562,11 @@
         "type": "grafana-opensearch-datasource",
         "uid": "wazuh"
       },
-      "description": "SCA(CIS 벤치마크) 요약 이벤트의 준수 점수. 요약 룰은 점수 구간마다 룰 ID가 달라지므로(랩 실측 19003) ID 대신 data.sca.score 존재 여부로 거른다.",
+      "description": "SCA(CIS 벤치마크) 준수 점수. 요약 이벤트는 스캔할 때만 생성돼 매우 드물다(랩 실측 전체 7건). 그래서 추세선이 아니라 최신값 stat 으로 그리고, 패널 자체에 timeFrom 30d 를 걸어 대시보드 시간 범위와 무관하게 항상 최신값을 잡는다. 요약 룰 ID 는 점수 구간마다 달라지므로(랩 실측 19003) ID 대신 data.sca.score 존재 여부로 거른다.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisPlacement": "auto",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 2,
-            "pointSize": 6,
-            "showPoints": "always",
-            "spanNulls": true
+            "mode": "thresholds"
           },
           "mappings": [],
           "max": 100,
@@ -609,24 +599,35 @@
       },
       "id": 6,
       "options": {
-        "legend": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
           "calcs": [
             "lastNotNull"
           ],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
+        "textMode": "value_and_name"
       },
       "pluginVersion": "11.6.16",
       "targets": [
         {
           "alias": "",
           "bucketAggs": [
+            {
+              "field": "agent.name",
+              "id": "3",
+              "settings": {
+                "min_doc_count": "1",
+                "order": "desc",
+                "orderBy": "_term",
+                "size": "10"
+              },
+              "type": "terms"
+            },
             {
               "field": "@timestamp",
               "id": "2",
@@ -656,8 +657,9 @@
           "timeField": "@timestamp"
         }
       ],
-      "title": "설정 준수율 (Wazuh SCA) — $host CIS 벤치마크 점수",
-      "type": "timeseries"
+      "timeFrom": "30d",
+      "title": "설정 준수율 (Wazuh SCA) — CIS 벤치마크 점수 (최근 30일 최신 스캔)",
+      "type": "stat"
     },
     {
       "datasource": {
