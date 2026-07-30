@@ -1,0 +1,107 @@
+---
+# Wazuh 매니저 -> 게이트웨이 웹훅 배선. 근거는 ansible/DEPLOY_GUIDE.md "Wazuh 알림을 봇으로".
+# 설정이 틀리면 wazuh-manager 가 안 뜨므로 rules 플레이북과 같은 순서(검증 -> 실패 시 복구)를 쓴다.
+- name: Wire Wazuh manager alerts to the bot gateway
+  hosts: wazuh_managers
+  become: true
+  vars:
+    conf: /var/ossec/etc/ossec.conf
+    token_file: /var/ossec/etc/gateway_token
+    script_path: /var/ossec/integrations/custom-gateway
+    # 실 값은 gitignored lab_vars.yml 로 주입. 아래는 placeholder(RFC5737).
+    gateway_hook_url: "http://192.0.2.10:8800/webhook/wazuh"
+    # 팀 현행 컷라인. 이 아래를 보내면 봇이 폭주한다 (FIM 5~7, SCA 7~9 는 화면·digest 몫).
+    gateway_min_level: 10
+  tasks:
+    - name: 게이트웨이 토큰이 주입됐는지 확인
+      ansible.builtin.assert:
+        that:
+          - gateway_token is defined and gateway_token | length > 0
+          - "'192.0.2.' not in gateway_hook_url"
+        fail_msg: "gateway_token 과 실 gateway_hook_url 이 필요하다 (-e @lab_vars.yml)"
+
+    - name: 토큰 파일 배포
+      ansible.builtin.copy:
+        content: "{{ gateway_token }}\n"
+        dest: "{{ token_file }}"
+        owner: root
+        group: wazuh
+        mode: "0640"
+      no_log: true
+
+    - name: 연동 스크립트 배포
+      ansible.builtin.copy:
+        src: files/wazuh_custom_gateway.py
+        dest: "{{ script_path }}"
+        owner: root
+        group: wazuh
+        mode: "0750"
+
+    - name: ossec.conf 백업 (직전 상태로 갱신 — 되돌림용)
+      ansible.builtin.copy:
+        src: "{{ conf }}"
+        dest: "{{ conf }}.bak-gateway"
+        remote_src: true
+        owner: root
+        group: wazuh
+        mode: "0640"
+      changed_when: false
+
+    - name: integration 블록 삽입
+      ansible.builtin.blockinfile:
+        path: "{{ conf }}"
+        marker: "  <!-- {mark} ANSIBLE MANAGED: bot gateway integration -->"
+        insertbefore: "</ossec_config>"
+        block: |
+          <integration>
+            <name>custom-gateway</name>
+            <hook_url>{{ gateway_hook_url }}</hook_url>
+            <level>{{ gateway_min_level }}</level>
+            <alert_format>json</alert_format>
+          </integration>
+      register: conf_change
+
+    - name: 설정 검증
+      ansible.builtin.command: /var/ossec/bin/wazuh-analysisd -t
+      register: conf_test
+      changed_when: false
+      failed_when: false
+
+    - name: 검증 실패 시 백업으로 되돌림
+      ansible.builtin.copy:
+        src: "{{ conf }}.bak-gateway"
+        dest: "{{ conf }}"
+        remote_src: true
+        owner: root
+        group: wazuh
+        mode: "0640"
+      when: conf_test.rc != 0
+
+    - name: 검증 실패를 실행 실패로 알림
+      ansible.builtin.fail:
+        msg: "설정 검증 실패 — 직전 상태로 되돌렸다. 출력: {{ conf_test.stderr | default(conf_test.stdout) }}"
+      when: conf_test.rc != 0
+
+    - name: wazuh-manager 재기동
+      ansible.builtin.systemd:
+        name: wazuh-manager
+        state: restarted
+      when: conf_change.changed
+
+    - name: 재기동 후 기동 상태 확인
+      ansible.builtin.command: systemctl is-active wazuh-manager
+      register: mgr_state
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: mgr_state.stdout == "active"
+
+    - name: integratord 가 떴는지 확인
+      ansible.builtin.command: /var/ossec/bin/wazuh-control status
+      register: ctl
+      changed_when: false
+
+    - name: integratord 미기동을 실패로 알림
+      ansible.builtin.fail:
+        msg: "wazuh-integratord 가 실행되지 않았다. integration 블록이 파싱되지 않았을 수 있다."
+      when: "'wazuh-integratord is running' not in ctl.stdout"

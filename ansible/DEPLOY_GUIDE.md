@@ -235,6 +235,151 @@ SCA 는 에이전트가 OS 에 맞는 정책만 자동 설치하므로 Rocky 9 �
 
 전체 조사 결과와 매니저 측 설정은 `private/docs/wazuh_enhancement_plan.md`.
 
+## Wazuh 알림을 봇으로 (`wazuh_gateway_integration.yml`, 2026-07-30)
+
+### 조회는 이미 되고 있었다 — 배선은 다른 문제를 푼다
+
+혼동하기 쉬운 지점이라 먼저 정리한다.
+
+| | 방향 | 이전 상태 | 무엇을 위한 것 |
+|---|---|---|---|
+| **조회 (pull)** | 봇 → 인덱서 | **동작 중** | 봇이 발동한 뒤 **맥락을 채운다** |
+| **배선 (push)** | 매니저 → 봇 | **없음** | 보안 이벤트가 **봇을 발동시킨다** |
+
+배선을 깔아도 조회는 계속 필요하다. 웹훅이 "발동 신호"를, 조회가 "주변 맥락"을 준다.
+
+### 무엇이 안 되고 있었나
+
+봇이 Zabbix 알림에만 발동했다. 그래서 둘이 안 됐다.
+
+- **보안 단독 사건에 봇이 침묵한다.** 승격 룰이 인증 파일 변경을 레벨 12로 올렸는데, Zabbix 쪽에 아무 일이 없으면 봇은 그 사건을 모른다. 컷라인 위로 올린 의미가 반쪽이다
+- **인시던트 병합이 3소스가 아니다.** 병합은 호스트와 사건 분류로 알림을 묶는데 들어오는 알림이 Zabbix뿐이었다. 즉 "3소스"는 **수집 3소스이지 병합 3소스가 아니었다**
+
+### 게이트웨이 쪽은 이미 완성돼 있었다
+
+`/webhook/wazuh` 엔드포인트가 토큰 검증·멱등·심각도 정규화·라우팅을 다 하고, triage 경로면 인시던트 버퍼에 넣는다. **웹훅만 오면 병합이 자동으로 3소스가 된다.** 매니저 쪽 배선 하나가 없었다.
+
+기대 페이로드는 여섯 필드다.
+
+| 필드 | 출처 (Wazuh 알림 JSON) |
+|---|---|
+| `alert_id` | `id` (없으면 룰ID-타임스탬프로 폴백) |
+| `rule_id` / `rule_level` / `rule_description` | `rule.*` |
+| `agent_name` | `agent.name` |
+| `timestamp` | `timestamp` |
+
+헤더 `X-Gateway-Token` 필수.
+
+### 먼저 고친 것 — 분류기가 보안 축을 못 알아봤다
+
+배선 전에 확인하니 **우리 룰 설명이 `other` 로 분류됐다.**
+
+| 알림명 | 수정 전 | 원인 |
+|---|---|---|
+| 인증·권한 핵심 파일 변경(우리 승격 룰) | `other` | 한글 키워드 없음 + 아래 밑줄 문제 |
+| `Integrity checksum changed`(기본 FIM 룰) | `other` | `integrity` 키워드 없음 |
+
+`other` 로 떨어지면 **브루트포스와 병합되지 않는다.** 교차 신호 시나리오가 성립하지 않는다.
+
+두 가지를 고쳤다.
+
+**① 단어 경계를 영숫자로 바꿨다.** 기존에는 정규식 단어 문자로 경계를 잡았는데, 그 정의는 **밑줄을 단어 문자로 본다.** 그래서 `sshd` 가 `sshd_config` 에 안 걸렸다. 영숫자 경계로 바꾸면 걸리고, 오분류 방지 목적은 유지된다 — `scan`·`escalation` 의 `sca`, `room` 의 `oom`, `shutdown` 의 `down` 은 앞뒤가 영문자라 여전히 차단된다.
+
+**② 보안 축 키워드를 추가했다** — `integrity`, `무결성`, `syscheck`, `파일 변경`, `루트킷`.
+
+**일부러 안 고친 것**: 기본 FIM 룰의 파일 삭제·추가 설명(`File deleted.`, `File added to the system.`)은 여전히 `other` 다. 레벨 7/5로 컷라인 아래여서 웹훅까지 오지 않고, 우리 승격 룰이 그 세 룰을 한국어 설명으로 덮으므로 실제 경로에서는 문제가 없다. **추측으로 키워드를 늘리지 않는다.**
+
+### 배선 구조
+
+공식 커스텀 연동 계약을 따른다.
+
+| 항목 | 값 |
+|---|---|
+| 스크립트 경로 | `/var/ossec/integrations/custom-gateway` |
+| 소유·권한 | `root:wazuh`, 750 |
+| 이름 규칙 | **`custom-` 접두 필수** |
+| 인자 | argv[1]=알림 JSON 파일, argv[2]=api_key, argv[3]=hook_url |
+| 포맷 | `alert_format json` → 전체 알림 JSON |
+
+**레벨 필터를 10으로 둔다.** 팀 현행 컷라인이다. 이 아래를 보내면 봇이 폭주한다 — FIM(5~7)과 SCA(7~9)는 화면과 digest 몫이고, 컷라인 위로 올린 둘(인증 파일 변경, SCA 회귀)과 취약점 High/Critical, 브루트포스만 봇으로 간다.
+
+### 토큰을 `api_key` 로 넘기지 않았다
+
+공식 방식은 `api_key` 를 설정에 적고 스크립트가 argv[2]로 받는 것이다. **두 가지 이유로 쓰지 않았다.**
+
+- 명령줄 인자는 실행 중 프로세스 목록에 보인다. 오늘 curl 에서 겪은 것과 같은 노출 경로다
+- 우리는 크리덴셜을 코드·커밋·문서에 남기지 않는다. `api_key` 를 쓰면 공개하는 설정 스니펫에 토큰이 들어간다
+
+그래서 스크립트가 `/var/ossec/etc/gateway_token`(`root:wazuh` 640)에서 읽는다. 플레이북이 그 파일을 `no_log` 로 배포하므로 실행 로그에도 남지 않는다.
+
+### 안전장치는 룰 배포와 같은 순서다
+
+```
+토큰·URL 주입 확인 → 토큰 파일 → 스크립트 → ossec.conf 백업
+  → integration 블록 삽입 → 설정 검증 → (실패 시 복구 + 실행 실패)
+  → 재기동 → 기동 확인 → integratord 기동 확인
+```
+
+`integratord` 기동 확인을 마지막에 넣은 이유가 있다. **설정이 문법적으로 통과해도 연동 블록이 실제로 파싱되지 않으면 그 데몬이 안 뜬다.** 매니저는 `active` 인데 알림이 안 가는 상태가 되므로, 그걸 실행 실패로 잡는다.
+
+블록 삽입은 `blockinfile` 로 마커를 남긴다. 재실행 시 같은 블록을 중복 삽입하지 않고, 나중에 사람이 열어봐도 어디가 자동 관리 구간인지 보인다.
+
+### 실행
+
+`ansible/lab_vars.yml`(gitignored)에 두 값을 넣는다.
+
+```yaml
+gateway_token: "<GATEWAY_TOKEN 과 같은 값>"
+gateway_hook_url: "http://<게이트웨이 호스트>:8800/webhook/wazuh"
+```
+
+```bash
+ansible-playbook -i inventory.local.ini wazuh_gateway_integration.yml -e @lab_vars.yml
+```
+
+사전 검증이 placeholder 주소를 거부하므로, 실 주소를 안 넣으면 첫 task에서 멈춘다.
+
+### 확인
+
+**① 데몬**
+
+```bash
+ssh -i ~/.ssh/deploy_key.pem rocky@<매니저> 'sudo /var/ossec/bin/wazuh-control status | grep integrator'
+```
+
+`wazuh-integratord is running` 이어야 한다.
+
+**② 시나리오** — 승격 룰 시나리오를 그대로 다시 돌린다(SSH 설정 파일 한 줄 변경 후 원복).
+
+```bash
+ssh -i ~/.ssh/deploy_key.pem rocky@<대상> 'sudo cp -a /etc/ssh/sshd_config /tmp/sshd_config.bak'
+ssh -i ~/.ssh/deploy_key.pem rocky@<대상> 'echo "# gateway wiring test" | sudo tee -a /etc/ssh/sshd_config'
+```
+
+**③ 매니저 측 전송 로그**
+
+```bash
+ssh -i ~/.ssh/deploy_key.pem rocky@<매니저> 'sudo tail -20 /var/ossec/logs/integrations.log'
+```
+
+스크립트가 출력한 `sent rule=100201 level=12 agent=... -> HTTP 200` 이 보여야 한다. 실패면 사유가 같은 로그에 남는다(토큰 파일 없음 / 게이트웨이 도달 실패 / 거부).
+
+**④ 게이트웨이 로그** — `event=... source=wazuh host=... sev=SEV2 class=auth_security route=triage`
+
+**⑤ Slack** — 원시 신호 카드가 먼저 오고, 디바운스 창이 닫히면 병합 트리아지가 스레드에 붙는다.
+
+**⑥ 3소스 병합** — 브루트포스를 같은 호스트에 함께 주입하면 두 알림이 **하나의 인시던트**로 묶여야 한다. 둘 다 `auth_security` 라 같은 병합 키를 갖는다. 되돌린 것도 파일 변경이므로 알림이 한 번 더 오는 것이 정상이다.
+
+되돌릴 때 SSH 설정 문법 검사를 반드시 거친다.
+
+```bash
+ssh -i ~/.ssh/deploy_key.pem rocky@<대상> 'sudo cp -a /tmp/sshd_config.bak /etc/ssh/sshd_config && sudo sshd -t && echo SSHD_CONFIG_OK'
+```
+
+### 확인해야 할 볼륨 리스크
+
+취약점 탐지를 켠 뒤 High/Critical 알림이 얼마나 나오는지 아직 모른다. 배선 전 실측에서 해당 그룹 이벤트는 7일에 1건이었지만, 커넥터를 켠 뒤 값이 달라질 수 있다. **배선 후 하루 동안 게이트웨이 로그의 `source=wazuh` 건수를 세어 본다.** 과하면 연동 블록에 룰 ID 또는 그룹 조건을 추가해 좁힌다.
+
 ## v1 잔재 정리 — FIM 노이즈를 추적해서 찾은 것 (2026-07-30)
 
 ### 어떻게 발견했나

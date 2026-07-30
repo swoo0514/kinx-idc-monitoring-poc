@@ -40,7 +40,11 @@ CLASS_RULES = [
                          "디스크 지연", "disk latency", "await"]),
     # "ssh" 단독 금지 — "SSH service is down"(서비스 장애)까지 보안 사건으로 끌어갔다.
     ("auth_security", ["브루트포스", "brute", "authentication", "login fail", "sshd",
-                       "unauthorized", "비인가", "sca", "fim", "rootcheck"]),
+                       "unauthorized", "비인가", "sca", "fim", "rootcheck",
+                       # FIM 계열. 기본 룰 설명("Integrity checksum changed")과 우리 승격 룰
+                       # 설명("인증·권한 핵심 파일 변경")이 둘 다 other 로 떨어지고 있었다 —
+                       # 그러면 브루트포스와 병합되지 않아 교차 신호 시나리오가 성립하지 않는다.
+                       "integrity", "무결성", "syscheck", "파일 변경", "루트킷"]),
     ("memory_pressure", ["메모리", "memory", "스왑", "swap", "oom"]),
     # "사용률" 단독 금지 — 메모리·CPU 사용률까지 디스크로 흡수했다. "space is"는 표준
     # 템플릿의 "FS [/]: Space is critically low" 형태를 잡기 위한 것(랩 실측 알림명).
@@ -60,8 +64,11 @@ _WORD_BOUNDARY_MAX = 5
 
 
 def _matcher(keyword: str):
+    # 경계를 \w 가 아니라 영숫자로 잡는다. \w 는 밑줄을 단어 문자로 보므로 "sshd" 가
+    # "sshd_config" 에 안 걸렸다(실측). 오분류 방지 목적은 유지된다 — scan/escalation 의
+    # "sca", room 의 "oom", shutdown 의 "down" 은 앞뒤가 영문자라 여전히 차단된다.
     if keyword.isascii() and " " not in keyword and len(keyword) <= _WORD_BOUNDARY_MAX:
-        return re.compile(rf"(?<!\w){re.escape(keyword)}(?!\w)")
+        return re.compile(rf"(?<![A-Za-z0-9]){re.escape(keyword)}(?![A-Za-z0-9])")
     return None
 
 
