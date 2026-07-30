@@ -252,6 +252,18 @@ def _remediation_checks() -> int:
         assert keep.push_alert("n", "SEV2", "h1", "a", playbook="service_restart") == \
             {"ok": False, "skipped": True}
 
+        # 채널 계층화 — SEV3(digest)·SEV4(dashboard_only)가 조용히 버려지지 않는다
+        saved_digest = os.environ.pop("SLACK_CHANNEL_ID_DIGEST", None)
+        try:
+            from . import slack
+            # 채널 미설정이면 메인 채널로 흘려보내지 않고 게시를 건너뛴다
+            assert slack.post_digest("n", "SEV3", "h1") == {"ok": False, "skipped": True}
+            gw_app._queue_low_severity("h1", "디스크 사용률 82%", "SEV3", "disk_space", True)
+            gw_app._queue_low_severity("h1", "메모리 사용률 70%", "SEV4", "memory_pressure", False)
+        finally:
+            if saved_digest is not None:
+                os.environ["SLACK_CHANNEL_ID_DIGEST"] = saved_digest
+
         # G5 — 게이트에서 걸러진 사건도 Keep 에 남긴다(분석 없이 판정·유형만)
         from . import incident, triage
         inc = incident.Incident(
@@ -265,7 +277,7 @@ def _remediation_checks() -> int:
     finally:
         if saved is not None:
             os.environ["KEEP_URL"] = saved
-    return 5
+    return 8
 
 
 def _fastpath_checks() -> int:

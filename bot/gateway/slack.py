@@ -97,6 +97,46 @@ def post_raw(alert_name: str, sev: str, host: str, thread_ts: str = None) -> dic
         return {"ok": False, "error": str(e)}
 
 
+def post_digest(alert_name: str, sev: str, host: str, note: str = "") -> dict:
+    """덜 급한 알림(SEV3)을 별도 채널로 경량 게시. LLM·수집 호출 없음.
+
+    채널이 설정돼 있지 않으면 **게시하지 않는다.** 메인 채널로 흘려보내면 노이즈를 걷어내려던
+    목적이 정확히 뒤집히기 때문이다(진단 ① Warning 99.5%). 게시를 건너뛰어도 Keep 에는 남으므로
+    기록이 사라지지는 않는다.
+    """
+    token = os.environ.get("SLACK_BOT_TOKEN", "")
+    channel = os.environ.get("SLACK_CHANNEL_ID_DIGEST", "")
+    if not token or not channel:
+        log.info("[digest skipped: no SLACK_CHANNEL_ID_DIGEST] %s / %s / %s",
+                 sev, host, alert_name)
+        return {"ok": False, "skipped": True}
+
+    head = f"{_SEV_EMOJI.get(sev, '⚪')} [{sev}] {alert_name}"
+    ctx = f"host: {host}  ·  덜 급한 알림 — 즉시 조치 대상 아님"
+    if note:
+        ctx += f"  ·  {note}"
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": head[:150], "emoji": True}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]},
+    ]
+    link = _grafana_link(host)
+    if link:
+        blocks.append({"type": "context", "elements": [
+            {"type": "mrkdwn", "text": f"📊 <{link}|Grafana에서 이 호스트 원본 열기>"}]})
+    try:
+        r = httpx.post(API, headers={"Authorization": f"Bearer {token}",
+                                     "Content-Type": "application/json; charset=utf-8"},
+                       json={"channel": channel, "blocks": blocks,
+                             "text": f"[{sev}] {alert_name}"}, timeout=10)
+        data = r.json()
+        if not data.get("ok"):
+            log.warning("slack digest post failed: %s", data.get("error"))
+        return data
+    except Exception as e:
+        log.warning("slack digest post exception: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
 def post_triage(alert_name: str, sev: str, host: str, verdict: str, body: str,
                 thread_ts: str = None, sources: dict = None) -> dict:
     """반환의 'ts'는 스레드 앵커 — thread_ts로 되넘기면 같은 스레드에 후속 게시.

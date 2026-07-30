@@ -127,12 +127,38 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
             alert_name=alert_name, sev=sev,
             incident_class=cls, recv=time.monotonic())
         bg.add_task(_incidents.submit, alert)
+    elif route in ("digest", "dashboard_only"):
+        # 채널 계층화(전략 방향 3). 종래에는 두 경로가 계산만 되고 조용히 버려져, 심각도가 낮은
+        # 신호가 통째로 사라졌다. Wazuh FIM·SCA 룰이 대부분 레벨 10 미만이라 이 경로가 열려야
+        # 보인다(wazuh_enhancement_plan.md §1). LLM·수집은 부르지 않는다 — 덜 급한 것에 비싼
+        # 분석을 붙이지 않는 것이 이 경로의 목적이다.
+        bg.add_task(_queue_low_severity, host, alert_name, sev, cls,
+                    route == "digest")
     elif route == "remediate":
         # 데모 B. 봇은 조치 "후보"를 승인 큐에 올리는 데까지만 — 승인(Run)과 실행(SSH→Ansible)은
         # 이미 e2e 검증된 Keep 워크플로가 담당한다. 계약 게이트(scope=notify_only)는 router 가
         # 이미 걸렀으므로 여기 도달한 것은 조치가 허용된 알림뿐이다.
         bg.add_task(_queue_remediation, host, alert_name, sev, decision["playbook"],
                     tag_router.tag_value(tags or [], "service") or "")
+
+
+def _queue_low_severity(host, alert_name, sev, cls, notify: bool):
+    """SEV3(digest)·SEV4(dashboard_only) 공통 처리.
+
+    둘 다 Keep 에는 남기고, digest 만 별도 Slack 채널에 경량 게시한다. Keep 에 남기는 이유는
+    G5 와 같다 — 저장소가 "분석까지 간 사건"만 갖고 있으면 반복 빈도 집계의 모집단이 편향된다.
+    fingerprint 를 (호스트, 유형)으로 고정해 같은 종류가 한 행에 모이게 한다(랭킹용).
+    선판정은 계산하지 않는다. 수집기를 부르지 않는 것이 이 경로의 취지이기 때문이다.
+    """
+    fp = hashlib.sha1(f"lowsev|{host}|{cls}".encode()).hexdigest()[:12]
+    tier = "덜 급함(digest)" if notify else "대시보드 전용"
+    note = (f"*{tier}*\n유형: `{cls}`  ·  호스트: `{host}`\n"
+            f"심각도가 낮아 분석을 생략했다. 반복 빈도 집계를 위해 기록만 남긴다.")
+    res = keep.push_alert(alert_name or "(알림명 없음)", sev, host, note,
+                          fingerprint=fp, classes=cls)
+    posted = slack.post_digest(alert_name, sev, host) if notify else {"skipped": True}
+    log.info("low-sev queued host=%s sev=%s class=%s keep=%s slack=%s",
+             host, sev, cls, res.get("ok"), posted.get("ok"))
 
 
 def _queue_remediation(host, alert_name, sev, playbook, service):
