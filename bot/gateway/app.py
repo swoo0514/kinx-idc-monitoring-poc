@@ -71,6 +71,7 @@ class WazuhEvent(BaseModel):
     rule_id: str = ""
     rule_level: int = Field(ge=0, le=15)
     rule_description: str = ""
+    rule_groups: str = ""   # 콤마 문자열. 분류의 1차 신호 — 설명 문자열 추론보다 우선
     agent_name: str = ""
     timestamp: str = ""
 
@@ -111,14 +112,16 @@ def webhook_wazuh(ev: WazuhEvent, bg: BackgroundTasks, x_gateway_token: str = He
     sev = severity.normalize(severity.SOURCE_WAZUH, ev.rule_level)
     decision = tag_router.decide(sev, [], 1)
     _dispatch(bg, severity.SOURCE_WAZUH, ev.alert_id, "", ev.agent_name,
-              ev.rule_description, sev, decision)
+              ev.rule_description, sev, decision, groups=ev.rule_groups)
     return {"status": "accepted", "sev": sev, **decision, "event_id": ev.alert_id}
 
 
-def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision, tags=None):
+def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
+              tags=None, groups=None):
     # 웹훅은 즉시 200 (발송측 타임아웃 회피). triage는 인시던트 버퍼로, remediate는 Keep 승인 큐로.
     route = decision["route"]
-    cls = incident.classify(alert_name)
+    # 분류는 선언(Zabbix class 태그 / Wazuh rule.groups) 우선, 없으면 알림명 키워드 폴백.
+    cls = incident.classify(alert_name, tags=tags, groups=groups)
     log.info("event=%s source=%s host=%s sev=%s class=%s route=%s playbook=%s",
              event_id, source, host, sev, cls, route, decision["playbook"])
     if route == "triage":

@@ -35,11 +35,17 @@ def build_payload(alert):
         log("rule.level 없음/비정상(%r) — 전송하지 않는다" % (level,))
         return None
     alert_id = alert.get("id") or "%s-%s" % (rule.get("id", "0"), alert.get("timestamp", ""))
+    # rule.groups 는 게이트웨이 분류의 1차 신호다. 설명 문자열 추론보다 정확하므로
+    # 반드시 함께 보낸다(리스트로 오는 것을 콤마 문자열로 평탄화 — 수집기와 같은 형태).
+    groups = rule.get("groups") or []
+    if not isinstance(groups, list):
+        groups = [groups]
     return {
         "alert_id": str(alert_id),
         "rule_id": str(rule.get("id", "")),
         "rule_level": min(max(level, 0), MAX_LEVEL),
         "rule_description": rule.get("description", "") or "",
+        "rule_groups": ",".join(str(g) for g in groups if g),
         "agent_name": agent.get("name", "") or "",
         "timestamp": alert.get("timestamp", "") or "",
     }

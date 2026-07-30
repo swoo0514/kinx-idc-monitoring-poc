@@ -103,13 +103,69 @@ _validate_bridges()
 _SEV_ORDER = {"SEV1": 1, "SEV2": 2, "SEV3": 3, "SEV4": 4, "NONE": 5}
 
 
-def classify(alert_name: str, item_key: str = "") -> str:
+# 소스가 구조적으로 알려주는 신호 → class. 자유 텍스트 추론보다 이쪽이 우선이다.
+# Zabbix 는 트리거 태그를, Wazuh 는 rule.groups 를 이미 준다. 문자열에서 키워드를 찾는 것은
+# 그 둘이 없을 때의 폴백이어야 한다 — 실제로 한국어 룰 설명이 other 로 떨어지는 버그가
+# 이 순서를 거꾸로 둔 탓이었다. 설계 근거는 GATEWAY_GUIDE.md §19.
+CLASS_TAG = "class"          # Zabbix 트리거 태그: class=replication 처럼 직접 지정
+WAZUH_GROUP_CLASS = {
+    "syscheck": "auth_security",
+    "sca": "auth_security",
+    "rootcheck": "auth_security",
+    "authentication_failed": "auth_security",
+    "authentication_failures": "auth_security",
+    "invalid_login": "auth_security",
+    "vulnerability-detector": "vulnerability",
+}
+_KNOWN_CLASSES = {c for c, _ in CLASS_RULES} | set(WAZUH_GROUP_CLASS.values()) | {"other"}
+
+
+def classify(alert_name: str, item_key: str = "", tags=None, groups=None) -> str:
+    """선언(태그·그룹) → 폴백(키워드) 순. 선언이 있으면 문자열을 보지 않는다."""
+    # 1) Zabbix 트리거 태그가 class 를 직접 지정한 경우. 팀이 태그를 붙이면 코드 수정 없이
+    #    분류가 정확해진다 — 그게 이 계층의 목적이다.
+    declared = _tag_class(tags)
+    if declared:
+        return declared
+
+    # 2) Wazuh rule.groups. 문자열이든 리스트든 받는다(수집기는 콤마 문자열로 평탄화한다).
+    mapped = _group_class(groups)
+    if mapped:
+        return mapped
+
+    # 3) 폴백 — 자유 텍스트 키워드
     text = f"{alert_name} {item_key}".lower()
     for cls, matchers in _COMPILED_RULES:
         for kw, rx in matchers:
             if rx.search(text) if rx else kw in text:
                 return cls
     return "other"
+
+
+def _tag_class(tags) -> str:
+    for t in tags or []:
+        if isinstance(t, dict) and t.get("tag") == CLASS_TAG:
+            v = (t.get("value") or "").strip().lower()
+            # 알 수 없는 값은 무시한다 — 오타 하나가 조용히 새 클래스를 만들면 병합이 갈린다.
+            if v in _KNOWN_CLASSES:
+                return v
+            if v:
+                log.warning("알 수 없는 class 태그 %r — 무시하고 폴백. 허용값: %s",
+                            v, sorted(_KNOWN_CLASSES))
+    return ""
+
+
+def _group_class(groups) -> str:
+    if not groups:
+        return ""
+    if isinstance(groups, str):
+        groups = [g.strip() for g in groups.split(",")]
+    present = {str(g).strip().lower() for g in groups if g}
+    # 매핑 순서를 고정한다 — 한 알림이 여러 그룹을 갖는 것이 흔하다(syscheck + pci_dss 등).
+    for grp, cls in WAZUH_GROUP_CLASS.items():
+        if grp in present:
+            return cls
+    return ""
 
 
 def _bridge_id(cls: str) -> str:
