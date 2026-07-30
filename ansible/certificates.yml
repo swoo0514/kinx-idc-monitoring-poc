@@ -1,0 +1,50 @@
+---
+# 인증서 만료 감시 — certs.yml 목록을 읽어 도메인마다 Zabbix 호스트를 만들고 표준 템플릿을 링크.
+# 근거·운영 기준은 ansible/DEPLOY_GUIDE.md "인증서 만료 감시".
+- name: Onboard TLS certificate monitoring (Zabbix objects)
+  hosts: zabbix
+  gather_facts: false
+  vars_files:
+    - certs.yml
+  vars:
+    ansible_zabbix_auth_key: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+    cert_template: "Website certificate by Zabbix agent 2"
+  tasks:
+    - name: 감시 대상이 비어 있지 않은지 확인
+      ansible.builtin.assert:
+        that:
+          - certificates | default([]) | length > 0
+          - cert_checker_dns is defined and cert_checker_dns | length > 0
+        fail_msg: "certificates 목록과 cert_checker_dns 가 필요하다 (-e @certs.local.yml)"
+
+    - name: 호스트그룹 생성 (목록에 등장하는 그룹 일괄)
+      community.zabbix.zabbix_group:
+        state: present
+        host_groups: "{{ certificates | map(attribute='host_group') | unique | list }}"
+
+    - name: 도메인별 감시 호스트 등록
+      community.zabbix.zabbix_host:
+        host_name: "cert-{{ item.domain }}"
+        visible_name: "{{ item.domain }} 인증서"
+        host_groups:
+          - "{{ item.host_group }}"
+        status: enabled
+        state: present
+        interfaces:
+          - type: 1
+            main: 1
+            useip: 0
+            dns: "{{ cert_checker_dns }}"
+            port: "10050"
+        link_templates:
+          - "{{ cert_template }}"
+        macros:
+          - macro: "{$CERT.WEBSITE.HOSTNAME}"
+            value: "{{ item.domain }}"
+          - macro: "{$CERT.WEBSITE.PORT}"
+            value: "{{ item.port | default(443) }}"
+          - macro: "{$CERT.EXPIRY.WARN}"
+            value: "{{ item.expiry_warn | default(cert_expiry_warn_default) }}"
+      loop: "{{ certificates }}"
+      loop_control:
+        label: "{{ item.domain }} → {{ item.host_group }}"

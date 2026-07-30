@@ -30,3 +30,4 @@ ansible/inventory.local.ini
 # 데모 C 복제 스냅샷 덤프 (2-hop 전송 잔재, 랩 데이터)
 kinx_demo_dump.sql
 *_dump.sql
+ansible/certs.local.yml

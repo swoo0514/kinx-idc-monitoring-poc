@@ -1,0 +1,17 @@
+# 인증서 감시 대상 목록. 실 고객 도메인은 커밋하지 않는다 — 아래는 예시(RFC 2606)이고
+# 실 목록은 gitignored certs.local.yml 에 두고 -e @certs.local.yml 로 주입한다.
+# 항목 설명·운영 기준은 ansible/DEPLOY_GUIDE.md "인증서 만료 감시" 참고.
+cert_checker_dns: "cert-checker.example.net"
+cert_expiry_warn_default: 30
+
+certificates:
+  - domain: www.example.com
+    host_group: "Certificates"
+
+  - domain: shop.example.com
+    host_group: "Certificates"
+    expiry_warn: 45
+
+  - domain: api.example.net
+    host_group: "Customers/Customer-B"
+    port: 8443
