@@ -129,7 +129,9 @@ def main():
                  "hostgroups": [{"name": "Customer-A"}]},
         "metrics": [],
         "logs": ["lab-web01 sshd: login from 192.0.2.9 user admin"],   # Loki 라인
-        "security": [{"level": 10, "desc": "brute force on lab-web01", "ts": "t"}],
+        "security": [{"level": 10, "desc": "brute force on lab-web01", "ts": "t",
+                      "rule_id": "5712", "groups": "authentication_failed",
+                      "path": "/etc/ssh/lab-web01.conf", "change": "modified"}],
         "prejudge": {"verdict": "신규", "statement": "s"},
         "secret_field": "MUST-NOT-LEAK",   # 화이트리스트 밖 필드
     }
@@ -141,8 +143,12 @@ def main():
     assert "Customer-A" not in blob, "customer group leaked"
     assert "MUST-NOT-LEAK" not in blob, "non-whitelisted field leaked"
     assert masked["logs"] and masked["security"], "logs/security dropped"
+    # FIM 경로에 호스트명이 섞여도 마스킹을 거친다(2026-07-30 필드 확장)
+    assert masked["security"][0]["path"] and "lab-web01" not in masked["security"][0]["path"], \
+        "syscheck path 의 호스트명이 마스킹되지 않음"
+    assert masked["security"][0]["rule_id"] == "5712", "rule_id 가 전송되지 않음"
     assert mk.unmask(mk.mask("lab-web01 at 192.0.2.5")) == "lab-web01 at 192.0.2.5"
-    masking_checks = 7
+    masking_checks = 9
 
     # 열화 모드 — LLM 어댑터 전멸 시 선판정만으로 회신 (외부 호출 0)
     for k in ("ANTHROPIC_API_KEY", "OLLAMA_URL"):

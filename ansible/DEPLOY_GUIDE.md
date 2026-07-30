@@ -32,6 +32,14 @@
 | `wazuh_manager` | node1 `ossec.conf` 의 server address |
 | OS/버전 | Rocky 9 / agent2 7.0.28 · alloy 1.17.1 · wazuh 4.14.6 (node1 rpm -q) |
 
+배포되는 설정 파일은 셋이다.
+
+| 템플릿 | 배포 위치 | 담는 것 |
+|---|---|---|
+| `zabbix_agent2.conf.j2` | `/etc/zabbix/zabbix_agent2.conf` | 서버 주소, 자동등록 메타데이터 |
+| `alloy_config.alloy.j2` | `/etc/alloy/config.alloy` | 저널 수집 → Loki push |
+| `ossec.conf.j2` | `/var/ossec/etc/ossec.conf` | 매니저 주소, FIM 감시 경로·제외, SCA |
+
 ## 실행
 
 1. 대상 VM을 `inventory.ini`의 `[targets]`에 추가 (agent_identity = 그 VM의 FQDN):
@@ -129,7 +137,18 @@ roles 로 갈아엎는 건 over-engineering). 호스트·티어·재사용이 �
 `ansible_os_family` 분기 또는 OS 그룹 `group_vars`, 고객사별은 `host_vars`+인벤토리 그룹.
 근거: docs.ansible.com/ansible/latest/tips_tricks/sample_setup.html
 
+## ossec.conf 를 템플릿으로 뺀 이유 (2026-07-30)
+
+wazuh-agent 는 `WAZUH_MANAGER` 환경변수를 **최초 설치 때 한 번만** 읽는다. 그래서 재배포로
+매니저 주소를 바꿔도 반영되지 않았다. 템플릿을 배포하면 그 한계가 없어진다.
+
+더 큰 이유는 따로 있다. 랩 인덱서를 조회해 보니 **FIM 이벤트 107건 중 상위 5건 가운데 4건이
+`/etc/zabbix/zabbix_md5.tmp`** 였다. 아무도 켠 적 없는데 기본값이 활성이라 계속 쌓이고 있었고,
+보안적으로 의미 없는 변경이 감시 결과의 대부분을 차지하고 있었다. 무엇을 감시하고 무엇을
+빼는지가 코드에 없으면 이런 상태를 알아챌 방법도, 고칠 방법도 없다.
+
+템플릿의 판단 근거(감시 경로를 왜 늘렸는지, 무엇을 왜 제외했는지)는 파일 안 XML 주석과
+`private/docs/wazuh_enhancement_plan.md` 에 있다.
+
 ## 아직 남은 것 (다음)
-- **wazuh 재실행 멱등 한계**: 매니저 주소는 최초 설치 시에만 주입됨. 재배포로 매니저를 바꾸려면
-  ossec.conf 템플릿화 필요(현재는 최초 설치 정상 동작 우선).
 - **MariaDB 복제**: 데모 C(복제 지연) 대상이 되려면 이 VM에 slave를 얹어야 함(별도 단계).

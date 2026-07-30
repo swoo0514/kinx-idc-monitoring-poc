@@ -55,6 +55,17 @@ def _sources(context: dict) -> dict:
             for k in _STATUS_KEYS if k in src}
 
 
+def _security_item(s: dict, m) -> dict:
+    """보안 경보 1건의 전송 형태 — 이 함수가 보안 축의 화이트리스트다.
+
+    rule_id·groups 는 룰 번호와 그룹명이라 식별자가 없어 원값으로 보낸다. path 는 파일
+    경로라 호스트명·IP 가 섞일 수 있으므로 반드시 마스킹을 거친다(llm_data_spec.md 반영).
+    """
+    return {"level": s.get("level"), "desc": m(s.get("desc")), "ts": s.get("ts"),
+            "rule_id": s.get("rule_id"), "groups": s.get("groups"),
+            "path": m(s.get("path")), "change": s.get("change")}
+
+
 def _register_host(host: dict, masker: Masker):
     masker.register("host", host.get("host"))
     masker.register("host", host.get("name"))
@@ -103,10 +114,7 @@ def build_llm_context(context: dict, sev: str, masker: Masker) -> dict:
             for it in context.get("metrics", []) or []
         ],
         "logs": [m(line) for line in (context.get("logs") or [])],   # Loki — 라인 내 IP·호스트 마스킹
-        "security": [
-            {"level": s.get("level"), "desc": m(s.get("desc")), "ts": s.get("ts")}
-            for s in (context.get("security") or [])
-        ],
+        "security": [_security_item(s, m) for s in (context.get("security") or [])],
         "prejudge": {
             "verdict": (context.get("prejudge") or {}).get("verdict"),
             "statement": (context.get("prejudge") or {}).get("statement"),
@@ -151,9 +159,6 @@ def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
         },
         "alerts": alerts,
         "logs": [m(line) for line in (context.get("logs") or [])],
-        "security": [
-            {"level": s.get("level"), "desc": m(s.get("desc")), "ts": s.get("ts")}
-            for s in (context.get("security") or [])
-        ],
+        "security": [_security_item(s, m) for s in (context.get("security") or [])],
         "sources": _sources(context),
     }

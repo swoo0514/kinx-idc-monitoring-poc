@@ -243,7 +243,11 @@ async def _wazuh_alerts(agent_name: str, now: int) -> tuple:
             {"wildcard": {"agent.name": f"*{agent_name}*"}},
             {"range": {"@timestamp": {"gte": f"now-{CORR_WINDOW_S // 60}m"}}},
         ]}},
-        "_source": ["@timestamp", "rule.level", "rule.description", "agent.name"],
+        # rule.id·groups 는 "무슨 종류의 보안 이벤트인가"를 LLM 이 알기 위해, syscheck.* 는
+        # 어떤 파일이 어떻게 바뀌었는지를 알기 위해 가져온다. 이게 없으면 FIM 을 켜도 봇은
+        # "보안 경보 N건"까지만 알고 노이즈성 변경과 유의미한 변경을 구분할 수 없다.
+        "_source": ["@timestamp", "rule.level", "rule.description", "agent.name",
+                    "rule.id", "rule.groups", "syscheck.path", "syscheck.event"],
     }
     try:
         # 랩 Wazuh Indexer는 자체서명 TLS → verify=False (프로덕션은 사내 CA). basic auth.
@@ -255,9 +259,15 @@ async def _wazuh_alerts(agent_name: str, now: int) -> tuple:
             for h in r.json().get("hits", {}).get("hits", []):
                 src = h.get("_source", {})
                 rule = src.get("rule", {}) or {}
+                sc = src.get("syscheck", {}) or {}
+                groups = rule.get("groups") or []
                 out.append({"level": rule.get("level"),
                             "desc": rule.get("description"),
-                            "ts": src.get("@timestamp")})
+                            "ts": src.get("@timestamp"),
+                            "rule_id": rule.get("id"),
+                            "groups": ",".join(groups) if isinstance(groups, list) else groups,
+                            "path": sc.get("path"),
+                            "change": sc.get("event")})
             return out, SOURCE_OK
     except Exception as e:
         log.warning("wazuh query failed agent=%s: %s", agent_name, e)

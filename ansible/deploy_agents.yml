@@ -79,12 +79,24 @@
         gpgkey: https://packages.wazuh.com/key/GPG-KEY-WAZUH
         priority: "1"
 
-    # WAZUH_MANAGER/AGENT_NAME은 최초 설치 시에만 ossec.conf에 반영됨(재실행 시 config 불변)
+    # 환경변수는 최초 설치 시에만 ossec.conf에 반영된다. 아래 템플릿 배포가 그 한계를 덮어
+    # 재실행 시에도 매니저 주소·감시 모듈 설정이 갱신되게 한다.
     - name: wazuh-agent 설치
       ansible.builtin.dnf: { name: wazuh-agent, state: present }
       environment:
         WAZUH_MANAGER: "{{ wazuh_manager }}"
         WAZUH_AGENT_NAME: "{{ agent_identity }}"
+
+    # 감시 정의를 코드로 관리한다. 기본값 그대로 두면 FIM이 잦은 변경 파일까지 잡아
+    # 노이즈가 되고(랩 실측: 상위 5건 중 4건), 무엇을 켜뒀는지도 코드에 남지 않는다.
+    - name: ossec.conf 배포 (FIM 감시 경로·노이즈 제외·SCA)
+      ansible.builtin.template:
+        src: ossec.conf.j2
+        dest: /var/ossec/etc/ossec.conf
+        owner: root
+        group: wazuh
+        mode: "0640"
+      notify: restart wazuh-agent
 
     - name: 3종 서비스 enable + start
       ansible.builtin.systemd:
@@ -99,3 +111,5 @@
       ansible.builtin.systemd: { name: zabbix-agent2, state: restarted }
     - name: restart alloy
       ansible.builtin.systemd: { name: alloy, state: restarted }
+    - name: restart wazuh-agent
+      ansible.builtin.systemd: { name: wazuh-agent, state: restarted }
