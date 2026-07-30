@@ -32,6 +32,21 @@
     <directories check_all="yes" realtime="yes">/etc/systemd/system</directories>
     <directories check_all="yes" whodata="yes" report_changes="yes">/etc/ssh</directories>
 
+    <ignore>/etc/mtab</ignore>
+    <ignore>/etc/hosts.deny</ignore>
+    <ignore>/etc/mail/statistics</ignore>
+    <ignore>/etc/random-seed</ignore>
+    <ignore>/etc/random.seed</ignore>
+    <ignore>/etc/adjtime</ignore>
+    <ignore>/etc/httpd/logs</ignore>
+    <ignore>/etc/utmpx</ignore>
+    <ignore>/etc/wtmpx</ignore>
+    <ignore>/etc/cups/certs</ignore>
+    <ignore>/etc/dumpdates</ignore>
+    <ignore>/etc/svc/volatile</ignore>
+    <ignore>/sys/kernel/security</ignore>
+    <ignore>/sys/kernel/debug</ignore>
+
     <ignore type="sregex">^/etc/zabbix/.*\.tmp$</ignore>
     <ignore>/boot/grub2/grubenv</ignore>
     <ignore>/boot/grub2/grubenv.new</ignore>
@@ -39,6 +54,7 @@
     <ignore>/var/ossec/queue</ignore>
     <ignore>/var/ossec/logs</ignore>
 
+    <nodiff>/etc/ssl/private.key</nodiff>
     <nodiff>/etc/shadow</nodiff>
     <nodiff type="sregex">\.key$|\.pem$</nodiff>
 
@@ -48,6 +64,12 @@
     <skip_sys>yes</skip_sys>
     <process_priority>10</process_priority>
     <max_eps>50</max_eps>
+
+    <synchronization>
+      <enabled>yes</enabled>
+      <interval>5m</interval>
+      <max_eps>10</max_eps>
+    </synchronization>
   </syscheck>
 
   <sca>
@@ -67,6 +89,9 @@
     <packages>yes</packages>
     <ports all="no">yes</ports>
     <processes>yes</processes>
+    <synchronization>
+      <max_eps>10</max_eps>
+    </synchronization>
   </wodle>
 
   <localfile>
