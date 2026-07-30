@@ -1,0 +1,62 @@
+---
+# Wazuh 매니저 룰 배포. 승격 근거는 ansible/DEPLOY_GUIDE.md "Wazuh 매니저 룰".
+# 룰 문법이 틀리면 wazuh-manager 가 아예 안 뜨므로, 재기동 전에 검증하고 실패 시 되돌린다.
+- name: Deploy Wazuh manager local rules
+  hosts: wazuh_managers
+  become: true
+  vars:
+    rules_path: /var/ossec/etc/rules/local_rules.xml
+  tasks:
+    - name: 기존 룰 백업
+      ansible.builtin.copy:
+        src: "{{ rules_path }}"
+        dest: "{{ rules_path }}.bak"
+        remote_src: true
+        owner: wazuh
+        group: wazuh
+        mode: "0640"
+      failed_when: false
+
+    - name: local_rules.xml 배포
+      ansible.builtin.copy:
+        src: files/wazuh_local_rules.xml
+        dest: "{{ rules_path }}"
+        owner: wazuh
+        group: wazuh
+        mode: "0640"
+      register: rules_copy
+
+    - name: 룰셋 문법 검증
+      ansible.builtin.command: /var/ossec/bin/wazuh-logtest -t
+      register: logtest
+      changed_when: false
+      failed_when: false
+
+    - name: 검증 실패 시 백업으로 되돌림
+      ansible.builtin.copy:
+        src: "{{ rules_path }}.bak"
+        dest: "{{ rules_path }}"
+        remote_src: true
+        owner: wazuh
+        group: wazuh
+        mode: "0640"
+      when: logtest.rc != 0
+
+    - name: 검증 실패를 실행 실패로 알림
+      ansible.builtin.fail:
+        msg: "룰셋 검증 실패 — 원본으로 되돌렸다. wazuh-logtest 출력: {{ logtest.stderr | default(logtest.stdout) }}"
+      when: logtest.rc != 0
+
+    - name: wazuh-manager 재기동
+      ansible.builtin.systemd:
+        name: wazuh-manager
+        state: restarted
+      when: rules_copy.changed
+
+    - name: 재기동 후 기동 상태 확인
+      ansible.builtin.command: systemctl is-active wazuh-manager
+      register: mgr_state
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: mgr_state.stdout == "active"

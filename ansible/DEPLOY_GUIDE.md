@@ -235,6 +235,87 @@ SCA 는 에이전트가 OS 에 맞는 정책만 자동 설치하므로 Rocky 9 �
 
 전체 조사 결과와 매니저 측 설정은 `private/docs/wazuh_enhancement_plan.md`.
 
+## Wazuh 매니저 룰 (`wazuh_manager_rules.yml`, 2026-07-30)
+
+### 무엇을 승격하나 — 둘만
+
+| 룰 | 대상 | 레벨 | 이유 |
+|---|---|---|---|
+| 100201 | `/root/.ssh/`, `/etc/ssh/sshd_config`, `/etc/passwd`, `/etc/shadow`, `/etc/sudoers` 변경 | 3~7 → **12** | 바뀌면 안 되는 것 소수만. 기본 FIM 룰(550/553/554)은 7/7/5 로 팀 컷라인(10) 아래라 알림이 안 간다 |
+| 100210 | SCA 체크가 통과 → 실패로 회귀 (19011) | 9 → **12** | 현재 0건이라 켜도 조용하고, 하드닝이 풀리는 순간에만 울린다 |
+
+**19007(신규 실패)은 승격하지 않는다.** 이미 312건이 실패 상태라 컷라인 위로 올리면 그대로
+폭탄이 된다. 준수율은 대시보드에서 본다.
+
+**에이전트 disconnect(504)도 승격하지 않는다.** 실환경 321대에서 재부팅마다 뜨면 새 노이즈다.
+대시보드 패널과 digest 채널로 보낸다 — "수집은 넓게, 알림은 좁게".
+
+### 필드명 — 공식 매핑을 따른다
+
+룰에서 쓰는 이름과 알림 JSON 필드 이름이 다르다.
+
+| 룰 필드 | 알림 JSON |
+|---|---|
+| `file` | `syscheck.path` |
+| `process_name` | `audit.process.name` |
+| `user_name` | `audit.user.name` |
+| `changed_fields` | `changed_attributes` |
+
+근거: [Creating custom FIM rules](https://documentation.wazuh.com/current/user-manual/capabilities/file-integrity/creating-custom-fim-rules.html)
+
+### 버린 룰 — 패키지 매니저 강등
+
+`dnf`/`yum`/`rpm` 이 바꾼 파일을 레벨 2로 내리는 룰을 계획했다가 **버렸다.**
+
+`process_name` 은 **whodata 가 켜진 경로에서만 채워진다.** 우리는 whodata 를 `/etc/ssh` 한
+곳에만 걸었고(inotify watch 예산 때문), 패키지 업데이트가 건드리는 `/usr/bin`·`/etc` 는 12시간
+예약 스캔이라 audit 정보가 아예 없다. **룰이 적용될 표면이 없다.**
+
+패키지 업데이트 노이즈는 빈도 기반 `<auto_ignore>` 가 담당한다.
+
+**교훈**: whodata 범위를 좁게 잡는 결정이 **쓸 수 있는 룰의 범위도 함께 좁힌다.** 두 설정은
+독립이 아니다.
+
+### 안전장치 — 룰 문법이 틀리면 매니저가 안 뜬다
+
+플레이북 순서가 그래서 이렇다.
+
+```
+백업 → 배포 → wazuh-logtest -t 검증 → (실패 시 백업 복구 + 실행 실패) → 재기동 → is-active 확인
+```
+
+`ansible.builtin.copy` 의 `validate` 파라미터를 쓰지 않은 이유는, `wazuh-logtest -t` 가
+임의 파일이 아니라 **`/var/ossec/etc` 전체 룰셋**을 검사하기 때문이다. 파일을 놓은 뒤에
+검사해야 하고, 그래서 되돌리는 경로가 별도로 필요하다.
+
+### 실행
+
+```bash
+ansible-playbook -i inventory.local.ini wazuh_manager_rules.yml
+```
+
+`[wazuh_managers]` 그룹에 master·worker 둘 다 넣는다. 룰은 양쪽에 같아야 한다.
+
+### 확인 — 시나리오 한 번
+
+```bash
+ssh vm-target-002 "sudo cp /etc/ssh/sshd_config /tmp/sshd_config.bak"
+ssh vm-target-002 "echo '# fim test' | sudo tee -a /etc/ssh/sshd_config"
+```
+
+`/etc/ssh` 는 whodata + realtime 이라 **몇 초 안에** 레벨 12 알림이 떠야 한다. 확인 순서:
+
+1. 대시보드 `보안 이벤트 (Wazuh) — 레벨 10+` 표에 나타나는지
+2. `파일 변경 이력 (Wazuh FIM)` 표에 경로가 보이는지
+3. Slack 도달 (컷라인 10 위)
+4. 게이트웨이가 붙어 있으면 봇 카드까지
+
+되돌린다. **`sshd -t` 문법 검사를 꼭 한다** — 설정이 깨진 채 재기동되면 SSH 가 막힌다.
+
+```bash
+ssh vm-target-002 "sudo mv /tmp/sshd_config.bak /etc/ssh/sshd_config && sudo sshd -t && echo OK"
+```
+
 ## MSP 고객 호스트에 3종 번들 적용 (2026-07-30)
 
 ### 배제할 이유가 없다

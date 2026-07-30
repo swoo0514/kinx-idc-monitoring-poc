@@ -1,0 +1,19 @@
+<!-- 승격 근거·제외한 룰과 그 이유는 ansible/DEPLOY_GUIDE.md "Wazuh 매니저 룰" 참고 -->
+<group name="local,syscheck,">
+
+  <rule id="100201" level="12">
+    <if_group>syscheck</if_group>
+    <field name="file">^/root/\.ssh/|^/etc/ssh/sshd_config$|^/etc/passwd$|^/etc/shadow$|^/etc/sudoers$</field>
+    <description>인증·권한 핵심 파일 변경: $(file)</description>
+  </rule>
+
+</group>
+
+<group name="local,sca,">
+
+  <rule id="100210" level="12">
+    <if_sid>19011</if_sid>
+    <description>SCA 체크가 통과에서 실패로 회귀: $(sca.check.title)</description>
+  </rule>
+
+</group>
