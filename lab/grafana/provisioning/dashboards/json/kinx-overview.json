@@ -237,7 +237,7 @@
               "type": "raw_data"
             }
           ],
-          "query": "rule.level:>=10 AND agent.name:\"$host\"",
+          "query": "rule.level:>=10 AND agent.name:/$host/",
           "queryType": "lucene",
           "refId": "A",
           "timeField": "@timestamp"
@@ -648,7 +648,7 @@
               "type": "count"
             }
           ],
-          "query": "rule.level:>=10 AND agent.name:\"$host\"",
+          "query": "rule.level:>=10 AND agent.name:/$host/",
           "queryType": "lucene",
           "refId": "A",
           "timeField": "@timestamp"
@@ -751,7 +751,7 @@
               "type": "avg"
             }
           ],
-          "query": "rule.groups:sca AND _exists_:data.sca.score AND agent.name:\"$host\"",
+          "query": "rule.groups:sca AND _exists_:data.sca.score AND agent.name:/$host/",
           "queryType": "lucene",
           "refId": "A",
           "timeField": "@timestamp"
@@ -841,7 +841,7 @@
               "type": "count"
             }
           ],
-          "query": "agent.name:\"$host\"",
+          "query": "agent.name:/$host/",
           "queryType": "lucene",
           "refId": "A",
           "timeField": "vulnerability.detected_at"
@@ -1053,7 +1053,7 @@
               "type": "raw_data"
             }
           ],
-          "query": "rule.groups:syscheck AND agent.name:\"$host\"",
+          "query": "rule.groups:syscheck AND agent.name:/$host/",
           "queryType": "lucene",
           "refId": "A",
           "timeField": "@timestamp"
@@ -1310,7 +1310,7 @@
               "type": "count"
             }
           ],
-          "query": "rule.groups:authentication_failed AND agent.name:\"$host\"",
+          "query": "rule.groups:authentication_failed AND agent.name:/$host/",
           "queryType": "lucene",
           "refId": "A",
           "timeField": "@timestamp"
@@ -1340,7 +1340,7 @@
               "type": "count"
             }
           ],
-          "query": "rule.groups:authentication_success AND agent.name:\"$host\"",
+          "query": "rule.groups:authentication_success AND agent.name:/$host/",
           "queryType": "lucene",
           "refId": "B",
           "timeField": "@timestamp"
