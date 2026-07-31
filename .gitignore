@@ -3,6 +3,7 @@
 
 # 크리덴셜·환경변수 — 커밋 금지 (CLAUDE.md 리포 규칙)
 .env
+.env*
 .env.*
 !.env.example
 
