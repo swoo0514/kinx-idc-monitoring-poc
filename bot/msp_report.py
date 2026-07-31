@@ -37,6 +37,19 @@ for _s in (sys.stdout, sys.stderr):
 BOT_SOURCE = "kinx-bot"
 HOLMES_SOURCE = "holmesgpt"
 
+# prejudge 자리에 판정이 아닌 값이 들어간 옛 레코드가 있다 — "단일", "2건 병합", "deep-dive".
+# keep.py 독스트링이 경고한 바로 그 오염이며 2026-07-29 에 고쳤으나 이전 기록은 남아 있다.
+# 접두로 판정한다: "재발(90일 3회) — 자동화 후보" 처럼 접미사가 붙는 경우가 있다.
+VERDICTS = ("만성", "재발", "신규")
+
+
+def verdict_of(a: dict) -> str:
+    v = str(a.get("prejudge") or "").strip()
+    for k in VERDICTS:
+        if v.startswith(k):
+            return k
+    return ""          # 미상·오염값·없음 — 전부 판정 없음으로 본다
+
 
 def fetch_alerts(keep_url: str, api_key: str) -> list:
     import httpx
@@ -66,26 +79,31 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
     if host_filter:
         win = [a for a in win if host_filter in (a.get("host") or "")]
 
-    incidents = [a for a in win
-                 if BOT_SOURCE in (a.get("source") or []) and a.get("prejudge")]
-    lowsev = [a for a in win
-              if BOT_SOURCE in (a.get("source") or []) and not a.get("prejudge")]
-    # 조치 후보는 playbook 필드가 있는 것. "완료"가 아니라 "등록"이다 —
-    # 실제 실행은 Keep 워크플로 기록이고 알림 레코드만으로는 알 수 없다.
+    def src(a):
+        return a.get("source") or []
+
+    # 원시 알림 = 감시 시스템이 낸 것(Keep 이 Zabbix 등에서 받은 provider 알림).
+    # 사건 = 봇이 확정한 인시던트. 둘은 별개 레코드이므로 겹쳐 세지 않는다.
+    # 홈즈는 기존 사건의 심층조사 결과라 어느 쪽도 아니다.
+    incidents = [a for a in win if BOT_SOURCE in src(a)]
+    raw = [a for a in win if BOT_SOURCE not in src(a) and HOLMES_SOURCE not in src(a)]
+    holmes = [a for a in win if HOLMES_SOURCE in src(a)]
+    merged = [a for a in incidents if int(a.get("alert_count") or 1) > 1]
+    # "완료" 가 아니라 "등록" 이다 — 실제 실행은 Keep 워크플로 기록이고 알림 레코드만으론 모른다.
     candidates = [a for a in win if a.get("playbook")]
 
-    raw = sum(int(a.get("alert_count") or 1) for a in incidents) + len(lowsev)
-    verdicts = Counter((a.get("prejudge") or "미상").strip() for a in incidents)
+    verdicts = Counter(verdict_of(a) for a in incidents)
+    judged = sum(verdicts[k] for k in VERDICTS)
     classes = Counter()
-    for a in incidents + lowsev:
+    for a in incidents:
         for c in str(a.get("classes") or "").split(","):
             if c.strip():
                 classes[c.strip()] += 1
     repeat = Counter(a.get("name") or "(이름 없음)" for a in incidents
-                     if (a.get("prejudge") or "") in ("만성", "재발"))
+                     if verdict_of(a) in ("만성", "재발"))
 
     return {
-        "report.alerts": raw,
+        "report.alerts": len(raw),
         "report.incidents": len(incidents),
         "report.chronic": verdicts.get("만성", 0),
         "report.novel": verdicts.get("신규", 0),
@@ -96,7 +114,12 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
                            or "분류 없음",
         "report.period": "%s ~ %s (%d일)" % (since.astimezone().strftime("%Y-%m-%d"),
                                              datetime.now().strftime("%Y-%m-%d"), days),
-        "_holmes": len([a for a in win if HOLMES_SOURCE in (a.get("source") or [])]),
+        "_holmes": len(holmes),
+        "_merged": len(merged),
+        "_folded": sum(int(a.get("alert_count") or 1) for a in merged),
+        # 판정이 붙은 사건 비율. Wazuh 알림은 trigger_id 가 없어 선판정이 안 붙는다(G11).
+        # 이 값이 낮으면 만성/신규 수치를 전체로 읽으면 안 된다 — 커버리지를 함께 본다.
+        "_judged": judged,
         "_window_alerts": len(win),
     }
 
@@ -147,10 +170,19 @@ def main():
     for k, v in res.items():
         if not k.startswith("_"):
             print("  %-26s %s" % (k, v))
-    if res["report.incidents"]:
-        print("\n  압축률: 알림 %d건 → 사건 %d건 (%.1f:1)"
-              % (res["report.alerts"], res["report.incidents"],
-                 res["report.alerts"] / res["report.incidents"]))
+    n_inc = res["report.incidents"]
+    if n_inc:
+        print("\n  원시 알림 %d건 → 사건 %d건" % (res["report.alerts"], n_inc), end="")
+        if res["report.alerts"]:
+            print("  (%.1f:1)" % (res["report.alerts"] / n_inc))
+        else:
+            print()
+        print("  그중 병합 사건 %d건 (알림 %d건이 접힘)" % (res["_merged"], res["_folded"]))
+        cov = 100 * res["_judged"] / n_inc
+        print("  만성/신규 판정이 붙은 사건 %d/%d (%.0f%%)" % (res["_judged"], n_inc, cov))
+        if cov < 60:
+            print("    ↳ 판정 커버리지가 낮다. Wazuh 알림은 trigger_id 가 없어 선판정이 안 "
+                  "붙는다(로드맵 G11). 만성/신규 수치를 전체로 읽지 말 것.")
     print("  심층조사(홈즈) %d건" % res["_holmes"])
 
     if not a.send:
