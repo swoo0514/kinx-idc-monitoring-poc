@@ -1,6 +1,7 @@
 """KINX MSP 월간 리포트 Grafana 대시보드 생성기 (일회성 — 산출물은 JSON)."""
 import io
 import json
+import os
 
 ZBX = {"type": "alexanderzobnin-zabbix-datasource", "uid": "zabbix"}
 WZ = {"type": "grafana-opensearch-datasource", "uid": "wazuh"}
@@ -14,6 +15,8 @@ def nid():
     return _id[0]
 
 
+# 호스트 필터는 **표시명**에 걸린다(플러그인 동작, 2026-07-31 실측). 리포트 호스트의
+# 표시명이 기술명과 같은 접두로 시작하도록 msp_report.yml 에서 맞춰 두었다.
 def zt(item, host="/^report-/", qtype="0", fmt="time_series"):
     return {"refId": "A", "datasource": ZBX, "queryType": qtype,
             "group": {"filter": "$customer"}, "host": {"filter": host},
@@ -180,7 +183,9 @@ P.append(ts_zbx("서버 부하도 — $host", "/^Load average/", 0, y, 12, 7))
 P.append(ts_zbx("CPU 사용률 — $host", "/CPU utilization/", 12, y, 12, 7, unit="percent"))
 y += 7
 P.append(ts_zbx("메모리 사용률 — $host", "/Memory utilization/", 0, y, 12, 7, unit="percent"))
-P.append(ts_zbx("디스크 사용률 — $host", "/Space utilization/", 12, y, 12, 7, unit="percent"))
+# 아이템 이름은 표준 Linux 템플릿 실측을 따른다 — "FS [/]: Space: Used, in %".
+# "Space utilization" 으로 걸면 한 건도 안 잡힌다(2026-07-31 실측).
+P.append(ts_zbx("디스크 사용률 — $host", "/Space: Used, in %/", 12, y, 12, 7, unit="percent"))
 
 DASH = {
     "uid": "kinx-msp-report",
@@ -205,7 +210,7 @@ DASH = {
         # 넣었다). 자원 그래프를 그것들까지 반복하면 빈 패널이 생기므로 이름으로 걸러낸다.
         {"name": "host", "label": "호스트", "type": "query", "datasource": ZBX,
          "definition": "", "refresh": 1, "sort": 1, "options": [],
-         "regex": "/^(?!.*(?:월간 리포트|인증서)).*$/",
+         "regex": "/^(?!report-)(?!.*인증서).*$/",
          # allValue 를 비워 둔다. ".+" 로 두면 '전체'가 **다른 고객 호스트까지** 뜻하게 되어
          # Wazuh·Loki 패널에 남의 데이터가 들어온다. 비우면 Grafana 가 이 고객의 호스트
          # 목록을 (a|b) 로 펼치므로 '전체' 가 '이 고객의 전체' 로 한정된다.
@@ -217,8 +222,8 @@ DASH = {
     "panels": P,
 }
 
-OUT = ("C:/Users/User/WebstormProjects/kinx-idc-monitoring-poc/lab/grafana/"
-       "provisioning/dashboards/json/kinx-msp-report.json")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lab",
+                   "grafana", "provisioning", "dashboards", "json", "kinx-msp-report.json")
 json.dump(DASH, io.open(OUT, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
 cells = set()

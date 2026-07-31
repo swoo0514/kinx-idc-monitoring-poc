@@ -57,7 +57,7 @@
     "refresh": 1,
     "sort": 1,
     "options": [],
-    "regex": "/^(?!.*(?:월간 리포트|인증서)).*$/",
+    "regex": "/^(?!report-)(?!.*인증서).*$/",
     "includeAll": true,
     "allValue": "",
     "multi": true,
@@ -1797,7 +1797,7 @@
       "filter": ""
      },
      "item": {
-      "filter": "/Space utilization/"
+      "filter": "/Space: Used, in %/"
      },
      "itemTag": {
       "filter": ""

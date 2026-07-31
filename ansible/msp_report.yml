@@ -68,7 +68,10 @@
     - name: 고객별 리포트 호스트 등록
       community.zabbix.zabbix_host:
         host_name: "report-{{ item.host_group | regex_replace('^.*/', '') }}"
-        visible_name: "{{ item.host_group | regex_replace('^.*/', '') }} 월간 리포트"
+        # 표시명이 기술명으로 시작해야 한다. **Grafana Zabbix 플러그인의 호스트 필터는
+        # 표시명으로만 매칭한다**(2026-07-31 실측: /^report-/ 는 0건, /월간 리포트/ 는 1건).
+        # 둘이 갈라져 있으면 Zabbix 에서는 보이는데 Grafana 패널만 조용히 빈다.
+        visible_name: "report-{{ item.host_group | regex_replace('^.*/', '') }} 월간 리포트"
         host_groups:
           - "{{ item.host_group }}"
           - "Reports"
