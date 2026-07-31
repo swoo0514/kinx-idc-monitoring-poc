@@ -51,6 +51,23 @@ class ZabbixAPIError(RuntimeError):
     pass
 
 
+READ_ONLY_EXTRA = frozenset({"apiinfo.version", "user.login", "user.logout"})
+
+
+def assert_read_only(method):
+    """작업 원칙 4(실환경에는 조회 API만)를 코드로 강제한다.
+
+    종래에는 독스트링에만 '읽기 전용'이라 적혀 있어 보증이 관례였다. 이 도구들은 실환경
+    super admin 토큰으로도 돌 수 있으므로 오타 하나가 쓰기 호출이 될 수 있다. 세션 인증과
+    버전 조회만 예외로 둔다 — 둘 다 데이터를 바꾸지 않는다.
+    """
+    if method.endswith(".get") or method in READ_ONLY_EXTRA:
+        return
+    raise ZabbixAPIError(
+        "read-only violation: %s — 이 도구는 조회만 한다 (허용: *.get, %s)"
+        % (method, ", ".join(sorted(READ_ONLY_EXTRA))))
+
+
 class ZabbixAPI:
     """최소 기능 JSON-RPC 클라이언트."""
 
@@ -86,6 +103,7 @@ class ZabbixAPI:
                                    {"user": user, "password": password}, auth=False)
 
     def call(self, method, params, auth=True):
+        assert_read_only(method)
         self._id += 1
         payload = {"jsonrpc": "2.0", "method": method, "params": params, "id": self._id}
         headers = {"Content-Type": "application/json-rpc"}

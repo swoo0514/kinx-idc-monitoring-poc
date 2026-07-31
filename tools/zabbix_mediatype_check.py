@@ -26,6 +26,9 @@ STATUS_NAMES = {"0": "활성", "1": "비활성"}
 
 
 def api_call(url, token, method, params, timeout=30, insecure=False):
+    # 작업 원칙 4 를 코드로 강제한다(독스트링의 "읽기 전용"은 보증이 아니다).
+    if not method.endswith(".get"):
+        raise RuntimeError("read-only violation: %s — 이 도구는 .get 만 호출한다" % method)
     if not url.rstrip("/").endswith("api_jsonrpc.php"):
         url = url.rstrip("/") + "/api_jsonrpc.php"
     payload = {"jsonrpc": "2.0", "method": method, "params": params, "id": 1}
