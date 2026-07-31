@@ -117,16 +117,21 @@ def _wz_search(index: str, body: dict) -> dict:
     return r.json()
 
 
-def _terms(index: str, body: dict, field: str) -> Counter:
-    """terms 집계. 매핑이 text 면 field.keyword 로 한 번 더 시도한다."""
+def _terms(index: str, query: dict, field: str) -> Counter:
+    """terms 집계. 매핑이 text 면 field.keyword 로 한 번 더 시도한다.
+
+    실패 시 원인을 그대로 올린다 — 삼켜버리면 "집계 실패" 만 남아 인덱스가 없는 것인지
+    필드명이 틀린 것인지 알 수 없다(2026-07-31 실제로 쿼리 중첩 버그를 이걸로 놓칠 뻔했다).
+    """
+    last = None
     for f in (field, field + ".keyword"):
-        b = dict(body, size=0, aggs={"g": {"terms": {"field": f, "size": 20}}})
         try:
+            b = {"size": 0, "query": query, "aggs": {"g": {"terms": {"field": f, "size": 20}}}}
             buckets = _wz_search(index, b)["aggregations"]["g"]["buckets"]
             return Counter({str(x["key"]): x["doc_count"] for x in buckets})
-        except Exception:
-            continue
-    raise RuntimeError("terms 집계 실패: %s" % field)
+        except Exception as e:
+            last = e
+    raise RuntimeError("terms 집계 실패 %s: %s" % (field, str(last)[:200]))
 
 
 def security_posture(agent_filter: str, days: int) -> dict:
@@ -140,34 +145,45 @@ def security_posture(agent_filter: str, days: int) -> dict:
         return {"status": "disabled"}
     who = [{"wildcard": {"agent.name": "*%s*" % agent_filter}}] if agent_filter else []
     win = {"range": {"@timestamp": {"gte": "now-%dd" % days}}}
+    # 절마다 따로 잡는다 — 취약점 인덱스 하나가 없다고 SCA·FIM 결과까지 버리면
+    # "보안 절 전체 조회 불가" 가 되어 있는 것도 못 보게 된다.
+    out = {"status": "ok", "errors": []}
+
     try:
         # 설정 준수율 — SCA 점수는 스캔마다 기록되므로 기간 평균으로 본다.
-        sca = _wz_search("wazuh-alerts-*", {
-            "size": 0, "query": {"bool": {"must": who + [win, {"exists": {"field": "data.sca.score"}}]}},
-            "aggs": {"avg": {"avg": {"field": "data.sca.score"}}, "hosts": {"cardinality": {"field": "agent.id"}}},
-        })
-        agg = sca.get("aggregations", {})
+        agg = _wz_search("wazuh-alerts-*", {
+            "size": 0,
+            "query": {"bool": {"must": who + [win, {"exists": {"field": "data.sca.score"}}]}},
+            "aggs": {"avg": {"avg": {"field": "data.sca.score"}},
+                     "hosts": {"cardinality": {"field": "agent.id"}}},
+        }).get("aggregations", {})
         score = agg.get("avg", {}).get("value")
-        scanned = agg.get("hosts", {}).get("value") or 0
-
-        # 파일 무결성 — 전체 변경 건수와, 그중 승격 룰에 걸린 건수를 나눠 센다.
-        fim_q = {"bool": {"must": who + [win, {"term": {"rule.groups": "syscheck"}}]}}
-        fim_all = _wz_search("wazuh-alerts-*", {"size": 0, "query": fim_q})["hits"]["total"]["value"]
-        fim_hi = _wz_search("wazuh-alerts-*", {
-            "size": 0, "query": {"bool": {"must": who + [win, {"term": {"rule.groups": "syscheck"}},
-                                                         {"range": {"rule.level": {"gte": FIM_PROMOTED_MIN}}}]}},
-        })["hits"]["total"]["value"]
-
-        # 취약점은 시계열이 아니라 **현재 재고 스냅샷**이라 기간 조건을 걸지 않는다.
-        vuln = _terms("wazuh-states-vulnerabilities-*",
-                      {"query": {"bool": {"must": who}} if who else {"query": {"match_all": {}}}},
-                      "vulnerability.severity")
+        out["compliance"] = round(score, 1) if score is not None else None
+        out["scanned"] = int(agg.get("hosts", {}).get("value") or 0)
     except Exception as e:
-        return {"status": "unavailable", "why": str(e)[:120]}
+        out["errors"].append("설정 준수율: %s" % str(e)[:100])
 
-    return {"status": "ok", "compliance": round(score, 1) if score is not None else None,
-            "scanned": int(scanned), "fim_all": int(fim_all), "fim_promoted": int(fim_hi),
-            "vuln": vuln}
+    try:
+        # 파일 무결성 — 전체 변경 건수와, 그중 승격 룰에 걸린 건수를 나눠 센다.
+        def fim(extra):
+            q = {"bool": {"must": who + [win, {"term": {"rule.groups": "syscheck"}}] + extra}}
+            return _wz_search("wazuh-alerts-*", {"size": 0, "query": q})["hits"]["total"]["value"]
+        out["fim_all"] = int(fim([]))
+        out["fim_promoted"] = int(fim([{"range": {"rule.level": {"gte": FIM_PROMOTED_MIN}}}]))
+    except Exception as e:
+        out["errors"].append("파일 무결성: %s" % str(e)[:100])
+
+    try:
+        # 취약점은 시계열이 아니라 **현재 재고 스냅샷**이라 기간 조건을 걸지 않는다.
+        out["vuln"] = _terms("wazuh-states-vulnerabilities-*",
+                             {"bool": {"must": who}} if who else {"match_all": {}},
+                             "vulnerability.severity")
+    except Exception as e:
+        out["errors"].append("취약점: %s" % str(e)[:100])
+
+    if len(out["errors"]) == 3:
+        out["status"] = "unavailable"
+    return out
 
 
 def posture_items(p: dict) -> dict:
@@ -176,16 +192,25 @@ def posture_items(p: dict) -> dict:
         why = {"disabled": "보안 연동 미설정 — 이 절은 집계 대상이 아님",
                "unavailable": "조회 불가 — 이 절의 수치는 집계되지 않음"}.get(p.get("status"), "상태 미상")
         return {"report.security_status": why}
-    if p.get("compliance") is None:
-        comp = {"report.security_status": "설정 점검 결과 없음 — 준수율 미산출"}
-    else:
-        comp = {"report.compliance": p["compliance"],
-                "report.security_status": "정상 집계 (점검 대상 %d대)" % p["scanned"]}
-    vuln = " / ".join("%s %d" % (s, p["vuln"][s]) for s in SEV_ORDER if p["vuln"].get(s))
-    return dict(comp, **{
-        "report.fim": "승격 룰 %d건 / 전체 파일 변경 %d건" % (p["fim_promoted"], p["fim_all"]),
-        "report.vuln": vuln or "해당 심각도 취약점 없음",
-    })
+
+    out = {}
+    if p.get("compliance") is not None:
+        out["report.compliance"] = p["compliance"]
+    if "fim_all" in p:
+        out["report.fim"] = "승격 룰 %d건 / 전체 파일 변경 %d건" % (p["fim_promoted"], p["fim_all"])
+    if "vuln" in p:
+        v = " / ".join("%s %d" % (s, p["vuln"][s]) for s in SEV_ORDER if p["vuln"].get(s))
+        out["report.vuln"] = v or "해당 심각도 취약점 없음"
+
+    ok_n = len(out)
+    note = "정상 집계 (점검 대상 %d대)" % p.get("scanned", 0)
+    if p.get("compliance") is None and "설정 준수율" not in " ".join(p.get("errors", [])):
+        note = "설정 점검 결과 없음 — 준수율 미산출"
+    if p.get("errors"):
+        # 무엇이 빠졌는지 리포트에 그대로 쓴다. 빠진 절을 조용히 비우면 "해당 없음" 으로 읽힌다.
+        note = "부분 집계 (%d/3) — 미집계: %s" % (ok_n, " ; ".join(p["errors"]))
+    out["report.security_status"] = note
+    return out
 
 
 def fetch_alerts(keep_url: str, api_key: str) -> list:
@@ -244,7 +269,9 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
                  if r.get("host") == inc.get("host") and _ts(r) <= t_inc]
         if prior:
             gaps.append((t_inc - max(prior)).total_seconds())
-    response = round(statistics.median(gaps), 1) if gaps else 0.0
+    # 짝이 하나도 없으면 값을 만들지 않는다. 0.0 을 보내면 "초동 대응 0초" 로 읽혀
+    # 실제보다 좋아 보인다 — 조회 실패를 정상으로 오독시키는 것과 같은 종류의 거짓이다.
+    response = round(statistics.median(gaps), 1) if gaps else None
 
     # 서사는 심각도가 높고 최근인 것부터 3건. 분석 본문이 있는 것만 — 없으면 쓸 게 없다.
     top = sorted([a for a in incidents if a.get("analysis")],
@@ -266,7 +293,7 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
     ev_logs = sum(1 for a in with_src if "logs:ok" in str(a.get("sources")))
     ev_sec = sum(1 for a in with_src if "security:ok" in str(a.get("sources")))
 
-    return {
+    out = {
         "report.alerts": len(raw),
         "report.incidents": len(incidents),
         "report.chronic": verdicts.get("만성", 0),
@@ -277,7 +304,6 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
         "report.by_class": " / ".join(f"{c}:{n}" for c, n in classes.most_common(6))
                            or "분류 없음",
         "report.by_severity": " / ".join(f"{s}:{n}" for s, n in sev.most_common()) or "없음",
-        "report.response_s": response,
         "report.evidence": ("로그 근거 %d건 / 보안 근거 %d건 (근거 기록이 있는 사건 %d건 중)"
                             % (ev_logs, ev_sec, len(with_src))) if with_src
                            else "근거 기록 없음 — 이 항목 도입 이전 사건",
@@ -295,7 +321,11 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
         # 이 값이 낮으면 만성/신규 수치를 전체로 읽으면 안 된다 — 커버리지를 함께 본다.
         "_judged": judged,
         "_window_alerts": len(win),
+        "_gaps": len(gaps),
     }
+    if response is not None:
+        out["report.response_s"] = response
+    return out
 
 
 def zbx_send(server: str, port: int, target_host: str, values: dict) -> dict:
@@ -382,6 +412,9 @@ def selftest() -> None:
     ck(r["report.chronic"] == 1 and r["report.novel"] == 1, "만성/신규 판정 집계 오류")
     ck(r["report.by_severity"].startswith("high:"), "심각도 분포 형식")
     ck(r["report.response_s"] > 0, "초동 대응 중앙값이 0")
+    # 짝지을 원시 알림이 없으면 값을 만들지 않는다 — 0.0 은 "0초 대응" 으로 읽힌다.
+    r_no = aggregate([mk(BOT_SOURCE, name="사건만", prejudge="신규", analysis="x")], 30)
+    ck("report.response_s" not in r_no, "측정 불가인데 초동 대응 값을 만들었다")
 
     # 승인 게이트 — 고객에게 나가는 문서이므로 기본값이 미승인이어야 한다.
     ck(r["report.summary"] == PENDING, "승인 전에 LLM 서사가 전송 대상에 실렸다")
@@ -419,6 +452,15 @@ def selftest() -> None:
     p0 = posture_items({"status": "ok", "compliance": None, "scanned": 0,
                         "fim_all": 0, "fim_promoted": 0, "vuln": Counter()})
     ck("report.compliance" not in p0, "점검 결과 없음을 준수율 0 으로 냈다")
+
+    # 한 절이 실패해도 나머지는 살아야 한다. 취약점 인덱스 하나 때문에 SCA·FIM 을
+    # 통째로 버리던 실측 결함(2026-07-31)의 회귀 검사.
+    pp = posture_items({"status": "ok", "compliance": 52.4, "scanned": 4,
+                        "fim_all": 107, "fim_promoted": 3, "errors": ["취약점: 인덱스 없음"]})
+    ck("report.compliance" in pp and "report.fim" in pp, "한 절 실패로 나머지가 버려졌다")
+    ck("report.vuln" not in pp, "실패한 절의 값을 만들었다")
+    ck("부분 집계 (2/3)" in pp["report.security_status"] and "취약점" in pp["report.security_status"],
+       "무엇이 빠졌는지 리포트에 안 적었다: %s" % pp["report.security_status"])
 
     print("ALL OK (%d checks)" % n)
 
@@ -466,7 +508,7 @@ def main():
     n_inc = res["report.incidents"]
     if n_inc:
         print("\n  원시 알림 %d건 → 사건 %d건" % (res["report.alerts"], n_inc), end="")
-        if res["report.alerts"]:
+        if res.get("report.alerts"):
             print("  (%.1f:1)" % (res["report.alerts"] / n_inc))
         else:
             print()
