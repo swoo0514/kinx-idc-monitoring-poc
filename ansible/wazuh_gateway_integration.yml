@@ -96,10 +96,14 @@
       delay: 5
       until: mgr_state.stdout == "active"
 
+    # wazuh-control status 는 데몬이 하나라도 not running 이면 rc=1 을 준다. 그런데
+    # wazuh-maild·agentlessd·dbd·csyslogd 는 기본 비활성이라 정상 상태에서도 항상 rc=1 이다.
+    # 판정은 바로 아래 태스크가 stdout 으로 하므로 여기서 rc 를 보지 않는다.
     - name: integratord 가 떴는지 확인
       ansible.builtin.command: /var/ossec/bin/wazuh-control status
       register: ctl
       changed_when: false
+      failed_when: false
 
     - name: integratord 미기동을 실패로 알림
       ansible.builtin.fail:

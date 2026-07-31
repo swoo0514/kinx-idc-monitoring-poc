@@ -913,6 +913,31 @@ ansible-playbook -i ansible/inventory.ini ansible/certificates.yml -e @ansible/c
 > API** 이고, 그 정의(`[zabbix]` + httpapi vars)가 커밋본에 있다. `inventory.local.ini` 는
 > SSH 대상(`[targets]`) 용이라 `[zabbix]` 그룹이 없을 수 있다.
 
+#### `wazuh-control status` 는 정상 상태에서도 rc=1 이다 (2026-07-31)
+
+게이트웨이 배선 플레이북의 마지막 검증에서 **배선은 다 됐는데 실패로 끝났다.**
+
+```
+"msg": "non-zero return code", "rc": 1,
+"stdout": "... wazuh-analysisd is running... wazuh-maild not running...
+           wazuh-integratord is running... wazuh-dbd not running..."
+```
+
+**`wazuh-integratord is running` 이 stdout 안에 있다** — 즉 목적은 달성됐다. rc=1 의 원인은
+`wazuh-maild` · `wazuh-agentlessd` · `wazuh-dbd` · `wazuh-csyslogd` 가 `not running` 이기
+때문인데, **이 넷은 기본 비활성이라 정상 상태다.** `wazuh-control status` 는 데몬이 하나라도
+안 돌면 non-zero 를 준다.
+
+→ 상태 명령의 rc 는 보지 않고, 판정은 다음 태스크가 stdout 으로 한다(`failed_when: false`).
+
+**주의**: Ansible 의 `command` 모듈은 `failed_when` 을 쓰면 기본 rc 검사를 **대체**한다.
+그런데 이 플레이북은 `command` 에 `changed_when` 만 걸고 판정을 별도 `fail` 태스크로 뒀기
+때문에, **기본 rc 검사가 먼저 죽여서 판정 태스크까지 가지 못했다.** 검사와 판정을 두 태스크로
+나눌 때는 앞 태스크에 `failed_when: false` 를 반드시 함께 둔다.
+
+> 오늘 나온 다른 사례들과 방향이 반대다 — 앞의 것들은 **실패가 성공처럼** 보였고, 이것은
+> **성공이 실패처럼** 보였다. 상태 판정을 종료 코드에 맡길 때 양쪽 모두 생긴다.
+
 #### 도입 리스크 실측 — Ansible 은 대상이 없어도 "성공"한다 (2026-07-31, 두 번째 사례)
 
 `inventory.local.ini` 로 실행했더니 이렇게 나왔다.
