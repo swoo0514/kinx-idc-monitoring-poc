@@ -1290,6 +1290,52 @@ python tools/zabbix_report_dashboard.py --host report-Customer-B \
 우리가 여기서 더하는 것은 그 격자 **앞에 붙는 요약 페이지 1장**이다. 자원 그래프는
 "무엇이 얼마였나"를 보여주고, 요약 페이지는 "무슨 일이 있었고 무엇을 했나"를 보여준다.
 
+### 발송 — `bot/report_deliver.py` (2026-07-31 랩 완주)
+
+```
+Grafana /render/d/<uid>  ->  PNG  ->  PDF  ->  메일(첨부 + 대시보드 링크)
+```
+
+```bash
+export SMTP_HOST=127.0.0.1 SMTP_PORT=1025 REPORT_FROM=noreply@kinx.local
+python report_deliver.py --customer 'Customers/Customer-B' \
+       --send --to 'ops@custb.example.com'
+```
+
+**의존성을 늘리지 않았다.** PNG 의 IDAT 는 zlib deflate 이고 PDF 의 `FlateDecode` +
+`Predictor 15` 가 **PNG 행 필터를 그대로 해석**하므로, 이미지 라이브러리 없이 IDAT 를
+그대로 옮겨 PDF 를 만든다. 처음에 순수 파이썬으로 언필터링했다가 1,400×2,800 = 1,100만
+바이트를 파이썬 루프로 돌아 **2분 타임아웃**이 났다. 디코딩을 아예 안 하니 **7.4초**다.
+페이지 분할(`--split`)이 필요할 때만 디코딩 경로를 쓴다.
+
+**승인 없이 나가지 않는다.** 서사 항목이 "검토 대기"면 발송을 거부한다(`--force` 로만
+우회). 값 자체에도 게이트가 있어 이중 안전이다.
+
+**범위 없는 집계를 고객에게 보내지 못하게 막는다.** `--host-filter` 없이 집계하면 전체를
+훑으므로 다른 고객·사내 호스트가 서사에 실린다. 랩 실측에서 Customer-B 리포트에 사내
+VM 이름과 사설 IP 가 그대로 들어갔다 — 화면상 아무 문제가 없어 보이는 종류의 사고다.
+`--send` 는 범위 지정을 요구하고 `--allow-unscoped` 로만 우회된다.
+
+**랩에서 잡은 함정 2건**
+
+| 증상 | 원인 |
+|---|---|
+| 렌더가 2분 타임아웃 | `GRAFANA_URL` 이 **공인 IP**(사람이 클릭할 주소)라 서버가 자기 자신에 접속하려다 멈춘다(헤어핀 NAT 없음). **렌더는 `GRAFANA_RENDER_URL`(내부), 링크는 `GRAFANA_URL`(공인)** 로 가른다 |
+| PDF 에 Grafana 내비게이션이 찍힘 | `kiosk` 는 **값 없는 플래그**다. `urlencode` 로 넣으면 `kiosk=` 가 되어 적용되지 않고 Home/Dashboards/Export/Share 가 고객 문서에 그대로 나온다 |
+
+**메일 확인**: 랩에 `mailpit`(SMTP 1025 / 웹 8025)을 뒀다. 실제 메일서버 없이 파이프를
+끝까지 돌려 **받은 메일과 첨부를 눈으로** 본다. SMTP 는 **루프백에만** 연다 — `0.0.0.0`
+으로 열면 인증 없는 오픈 릴레이가 된다. 실환경은 `SMTP_HOST` 만 사내 메일서버로 바꾸면
+되고 스크립트는 그대로다.
+
+**예약**: Grafana OSS 에는 스케줄러가 없다. cron 한 줄로 대신한다.
+
+```cron
+# 매월 1일 08:00 — 승인은 사람이 먼저 한다(승인 없으면 스크립트가 거부하고 끝난다)
+0 8 1 * * cd ~/kinx-idc-monitoring-poc/bot && . .env && \
+  ./venv/bin/python report_deliver.py --customer 'Customers/Customer-B' --send
+```
+
 ### 발송 3안
 
 | 안 | 방식 | 판정 |
