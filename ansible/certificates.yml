@@ -66,18 +66,20 @@
         state: present
         host_name: "cert-{{ item.domain }}"
         name: "인증서 점검 불가 — {{ item.domain }}"
+        # desc 는 params 안이 아니라 최상위다(모듈 문서 확인).
+        desc: >-
+          {{ item.nodata_window | default(cert_nodata_window) }} 동안 인증서 정보가 수집되지
+          않았다. 만료 여부를 알 수 없는 상태이므로 "이상 없음"으로 읽지 말 것.
+          원인 후보 — 대상 서비스 다운(인증서 오류를 제외한 TLS 핸드셰이크 실패에서 아이템이
+          unsupported 가 된다), 점검 에이전트 정지, DNS·방화벽, 프록시 경유(WebCertificate
+          플러그인은 프록시를 지원하지 않는다).
+          만료된 인증서는 여기가 아니라 "SSL certificate is invalid" 로 잡힌다 — 그 경우는
+          데이터가 들어오기 때문이다.
         params:
           severity: average
+          enabled: true
           expression: >-
             nodata(/cert-{{ item.domain }}/{{ cert_master_key }},{{ item.nodata_window | default(cert_nodata_window) }})=1
-          description: >-
-            {{ item.nodata_window | default(cert_nodata_window) }} 동안 인증서 정보가 수집되지
-            않았다. 만료 여부를 알 수 없는 상태이므로 "이상 없음"으로 읽지 말 것.
-            원인 후보 — 대상 서비스 다운(인증서 오류를 제외한 TLS 핸드셰이크 실패에서 아이템이
-            unsupported 가 된다), 점검 에이전트 정지, DNS·방화벽, 프록시 경유(WebCertificate
-            플러그인은 프록시를 지원하지 않는다).
-            만료된 인증서는 여기가 아니라 "SSL certificate is invalid" 로 잡힌다 — 그 경우는
-            데이터가 들어오기 때문이다.
       loop: "{{ certificates }}"
       loop_control:
         label: "{{ item.domain }} ({{ item.nodata_window | default(cert_nodata_window) }})"
