@@ -115,8 +115,55 @@ def png_decode(data: bytes):
 
 # ── PDF 쓰기 ────────────────────────────────────────────────────────────────
 
-def _obj(body: bytes) -> bytes:
-    return body
+def _pdf(objs: list) -> bytes:
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for n in range(1, len(objs)):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % n + objs[n] + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n" % len(objs) + b"0000000000 65535 f \n"
+    for n in range(1, len(objs)):
+        out += b"%010d 00000 n \n" % offsets[n]
+    out += (b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n"
+            % (len(objs), xref))
+    return bytes(out)
+
+
+def png_to_pdf_direct(png: bytes) -> bytes:
+    """디코딩 없이 PNG 압축 스트림을 그대로 PDF 이미지로 넣는다 (한 페이지).
+
+    PDF 의 FlateDecode + Predictor 15 가 **PNG 의 행 필터를 그대로 해석**하므로,
+    IDAT 를 손대지 않고 옮겨도 된다. 순수 파이썬으로 1,400×2,800 을 언필터링하면
+    1,100만 바이트를 파이썬 루프로 돌아 분 단위가 걸린다 — 그 일을 아예 안 한다.
+    페이지 분할이 필요할 때만(--split) 디코딩 경로를 쓴다.
+    """
+    idat, w, h, ct = b"", 0, 0, 0
+    for typ, body in png_chunks(png):
+        if typ == b"IHDR":
+            w, h, bd, ct, _, _, il = struct.unpack(">IIBBBBB", body[:13])
+            if bd != 8 or ct != 2 or il:
+                raise ValueError("직접 삽입은 8비트 RGB 비인터레이스만 (colortype=%d)" % ct)
+        elif typ == b"IDAT":
+            idat += body
+        elif typ == b"IEND":
+            break
+    wpt, hpt = w * PT_PER_PX, h * PT_PER_PX
+    content = ("q %.2f 0 0 %.2f 0 0 cm /Im0 Do Q" % (wpt, hpt)).encode()
+    objs = [b"",
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            ("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.2f %.2f] "
+             "/Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>"
+             % (wpt, hpt)).encode(),
+            ("<< /Type /XObject /Subtype /Image /Width %d /Height %d "
+             "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode "
+             "/DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns %d >> "
+             "/Length %d >>" % (w, h, w, len(idat))).encode()
+            + b"\nstream\n" + idat + b"\nendstream",
+            ("<< /Length %d >>" % len(content)).encode()
+            + b"\nstream\n" + content + b"\nendstream"]
+    return _pdf(objs)
 
 
 def png_to_pdf(w: int, h: int, rgb: bytes, page_px: int = DEFAULT_PAGE_PX) -> bytes:
@@ -157,19 +204,7 @@ def png_to_pdf(w: int, h: int, rgb: bytes, page_px: int = DEFAULT_PAGE_PX) -> by
         objs.append(("<< /Length %d >>" % len(content)).encode()
                     + b"\nstream\n" + content + b"\nendstream")
 
-    out = bytearray(b"%PDF-1.4\n")
-    offsets = [0]
-    for n in range(1, len(objs)):
-        offsets.append(len(out))
-        out += b"%d 0 obj\n" % n + objs[n] + b"\nendobj\n"
-    xref = len(out)
-    out += b"xref\n0 %d\n" % len(objs)
-    out += b"0000000000 65535 f \n"
-    for n in range(1, len(objs)):
-        out += b"%010d 00000 n \n" % offsets[n]
-    out += (b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n"
-            % (len(objs), xref))
-    return bytes(out)
+    return _pdf(objs)
 
 
 # ── Grafana · Zabbix ────────────────────────────────────────────────────────
@@ -255,6 +290,12 @@ def send_mail(msg: EmailMessage) -> str:
 
 # ── 검사 ────────────────────────────────────────────────────────────────────
 
+def _startxref_ok(pdf: bytes) -> bool:
+    """뷰어는 startxref 오프셋으로 파일을 연다. 여기가 틀리면 '손상된 PDF' 가 된다."""
+    off = int(pdf.rsplit(b"startxref", 1)[1].split(b"%%EOF")[0].strip())
+    return pdf[off:off + 4] == b"xref"
+
+
 def selftest() -> None:
     n = 0
 
@@ -327,6 +368,17 @@ def selftest() -> None:
     except ValueError:
         n += 1
 
+    # 디코딩 없이 넣는 경로 — 실제로 쓰이는 기본 경로라 반드시 검사한다.
+    d = png_to_pdf_direct(png)
+    ck(d.startswith(b"%PDF-1.4") and b"/Predictor 15" in d, "직접 삽입 PDF 골격")
+    ck(b"/Columns %d" % w in d, "Columns 가 이미지 폭과 달라 뷰어가 깨진다")
+    ck(_startxref_ok(d), "직접 삽입 startxref 가 xref 를 안 가리킨다")
+    try:
+        png_to_pdf_direct(png4)
+        raise AssertionError("RGBA 를 직접 삽입으로 통과시켰다(PDF 가 깨진다)")
+    except ValueError:
+        n += 1
+
     m = build_mail("a@b", ["c@d"], "Customer-B", "2026-07-01 ~ 2026-07-31",
                    "http://g/d/x", b"%PDF-1.4 x", "r.pdf")
     ck(m["Subject"].startswith("[KINX MSP] Customer-B"), "제목")
@@ -346,6 +398,8 @@ def main():
     ap.add_argument("--width", type=int, default=1400)
     ap.add_argument("--height", type=int, default=2800,
                     help="렌더 세로 픽셀. 대시보드가 잘리면 키운다")
+    ap.add_argument("--split", action="store_true",
+                    help="인쇄용 페이지 분할. 언필터링을 파이썬으로 해 수십 초 걸린다")
     ap.add_argument("--page-px", type=int, default=DEFAULT_PAGE_PX)
     ap.add_argument("--out", help="PDF 저장 경로 (기본 ./<고객>-<기간>.pdf)")
     ap.add_argument("--to", default=os.environ.get("REPORT_TO", ""), help="쉼표 구분")
@@ -381,8 +435,12 @@ def main():
     base = os.environ.get("GRAFANA_URL", "http://127.0.0.1:3000")
     print("렌더: %s  (%dx%d, %d일)" % (a.customer, a.width, a.height, a.days))
     png = render(base, a.uid, a.customer, a.width, a.height, a.days)
-    w, h, rgb = png_decode(png)
-    pdf = png_to_pdf(w, h, rgb, a.page_px)
+    if a.split:
+        # 인쇄용으로 페이지를 나눈다. 언필터링을 파이썬으로 하므로 느리다(수십 초).
+        w, h, rgb = png_decode(png)
+        pdf = png_to_pdf(w, h, rgb, a.page_px)
+    else:
+        pdf = png_to_pdf_direct(png)
     pages = pdf.count(b"/Type /Page ")
     out = a.out or ("%s-%s.pdf" % (short, (period.split(" ~ ")[0] or "report").strip()))
     with open(out, "wb") as f:
