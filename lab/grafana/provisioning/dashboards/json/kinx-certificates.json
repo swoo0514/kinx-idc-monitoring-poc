@@ -80,7 +80,7 @@
     "type": "alexanderzobnin-zabbix-datasource",
     "uid": "zabbix"
    },
-   "description": "인증서 관련 활성 문제 전부. 만료 임박·유효하지 않음·점검 불가 세 종류가 한 화면에 심각도 색으로 나타난다. 호스트는 이름 접두사(cert-)로 고른다 — 그룹이 아니라 접두사로 거르므로 고객 그룹에 흩어져 있어도 모인다.",
+   "description": "인증서 관련 활성 문제 전부. 만료 임박·유효하지 않음·점검 불가 세 종류가 한 화면에 심각도 색으로 나타난다. 호스트 이름이 아니라 트리거 이름으로 고른다 — Zabbix 데이터소스는 기술명(cert-*)이 아니라 표시명으로 매칭하므로 접두사 필터가 통하지 않는다(2026-07-31 실측).",
    "fieldConfig": {
     "defaults": {},
     "overrides": []
@@ -180,7 +180,7 @@
      },
      "hide": false,
      "host": {
-      "filter": "/^cert-/"
+      "filter": "/.*/"
      },
      "item": {
       "filter": ""
@@ -229,7 +229,7 @@
      },
      "textFilter": "",
      "trigger": {
-      "filter": ""
+      "filter": "/[Cc]ertificate|인증서 점검/"
      }
     }
    ],
@@ -241,7 +241,7 @@
     "type": "alexanderzobnin-zabbix-datasource",
     "uid": "zabbix"
    },
-   "description": "도메인별 만료 시점 전수. 문제가 없는 도메인도 나오므로 '언제 무엇이 죽는가'를 미리 본다. 값이 비어 있으면 그 도메인은 점검이 되지 않는 상태이며 위 패널에 '점검 불가' 로 잡힌다. Zabbix 는 초 단위 유닉스 시각을 주므로 scale(1000) 으로 밀리초 변환한 뒤 dateTimeFromNow 로 표시한다.",
+   "description": "도메인별 만료 시점 전수. 호스트 필터 없이 아이템 이름(Expires on)으로 고른다 — 그 아이템은 인증서 템플릿에만 있으므로 그것만으로 대상이 특정된다. 값이 비어 있으면 그 도메인은 점검이 되지 않는 상태이며 위 패널에 '점검 불가' 로 잡힌다. Zabbix 는 초 단위 유닉스 시각을 주므로 scale(1000) 으로 밀리초 변환한 뒤 dateTimeFromNow 로 표시한다.",
    "fieldConfig": {
     "defaults": {
      "mappings": [],
@@ -311,7 +311,7 @@
       "filter": "$group"
      },
      "host": {
-      "filter": "/^cert-/"
+      "filter": "/.*/"
      },
      "item": {
       "filter": "/Expires on/"
