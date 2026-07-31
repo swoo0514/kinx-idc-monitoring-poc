@@ -56,8 +56,8 @@
     "definition": "",
     "refresh": 1,
     "sort": 1,
-    "regex": "",
     "options": [],
+    "regex": "/^(?!.*(?:월간 리포트|인증서)).*$/",
     "includeAll": true,
     "allValue": ".+",
     "multi": true,
@@ -1346,7 +1346,7 @@
    },
    "gridPos": {
     "h": 7,
-    "w": 12,
+    "w": 8,
     "x": 0,
     "y": 35
    },
@@ -1409,8 +1409,8 @@
    },
    "gridPos": {
     "h": 7,
-    "w": 12,
-    "x": 12,
+    "w": 8,
+    "x": 8,
     "y": 35
    },
    "targets": [
@@ -1457,6 +1457,21 @@
   },
   {
    "id": 18,
+   "type": "text",
+   "title": "이 두 패널이 비어 있다면",
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 16,
+    "y": 35
+   },
+   "options": {
+    "mode": "markdown",
+    "content": "**빈 패널은 '이상 없음'이 아니다.**\n\n왼쪽 두 패널은 Wazuh 를 직접 조회한다. 값이 없다면 그 고객 호스트에 `wazuh-agent` 가 배포되지 않은 것이다. 기술 제약이 아니라 배포 여부의 문제이며, `ansible/deploy_agents.yml` 이 3종을 한 번에 깐다.\n\n반면 위쪽 **보안 집계 상태** 항목은 봇이 집계한 값이고, 조회에 실패하면 숫자를 만들지 않고 '조회 불가'라고 적는다 — 실패를 0건으로 보이게 하지 않기 위해서다.\n\n에이전트를 못 까는 고객은 프록시에 Wazuh syslog 수신을 얹는 대안이 있다. 단 그 구간이 PSK/TLS 없는 일반 인터넷이면 암호화 적용과 묶어야 한다."
+   }
+  },
+  {
+   "id": 19,
    "type": "row",
    "title": "4. 로그 (Loki) — 근거",
    "collapsed": false,
@@ -1469,7 +1484,7 @@
    "panels": []
   },
   {
-   "id": 19,
+   "id": 20,
    "type": "logs",
    "title": "로그 — $host",
    "datasource": {
@@ -1506,9 +1521,9 @@
    }
   },
   {
-   "id": 20,
+   "id": 21,
    "type": "row",
-   "title": "5. 자원 — 수치는 얼마였나 (호스트마다 자동 반복)",
+   "title": "5. 자원 — $host",
    "collapsed": false,
    "gridPos": {
     "h": 1,
@@ -1516,10 +1531,11 @@
     "x": 0,
     "y": 51
    },
-   "panels": []
+   "panels": [],
+   "repeat": "host"
   },
   {
-   "id": 21,
+   "id": 22,
    "type": "timeseries",
    "title": "서버 부하도 — $host",
    "datasource": {
@@ -1593,12 +1609,10 @@
      "mode": "multi",
      "sort": "none"
     }
-   },
-   "repeat": "host",
-   "repeatDirection": "h"
+   }
   },
   {
-   "id": 22,
+   "id": 23,
    "type": "timeseries",
    "title": "CPU 사용률 — $host",
    "datasource": {
@@ -1675,7 +1689,7 @@
    }
   },
   {
-   "id": 23,
+   "id": 24,
    "type": "timeseries",
    "title": "메모리 사용률 — $host",
    "datasource": {
@@ -1752,7 +1766,7 @@
    }
   },
   {
-   "id": 24,
+   "id": 25,
    "type": "timeseries",
    "title": "디스크 사용률 — $host",
    "datasource": {
