@@ -1,0 +1,354 @@
+{
+ "annotations": {
+  "list": []
+ },
+ "editable": true,
+ "fiscalYearStartMonth": 0,
+ "graphTooltip": 0,
+ "links": [],
+ "preload": false,
+ "refresh": "5m",
+ "schemaVersion": 41,
+ "tags": [
+  "kinx",
+  "certificate"
+ ],
+ "templating": {
+  "list": [
+   {
+    "allValue": "/.*/",
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    },
+    "definition": "",
+    "description": "호스트그룹. KINX 운영자는 All 로 전체를 본다. 고객 계정은 중첩 그룹 권한 상속에 따라 자기 그룹만 목록에 나타나므로 같은 대시보드에서 자기 인증서만 보인다.",
+    "includeAll": true,
+    "label": "호스트그룹",
+    "name": "group",
+    "options": [],
+    "query": {
+     "application": "",
+     "group": "/.*/",
+     "host": "",
+     "item": "",
+     "itemTag": "",
+     "queryType": "group",
+     "showDisabledItems": false
+    },
+    "refresh": 1,
+    "regex": "",
+    "sort": 1,
+    "type": "query"
+   }
+  ]
+ },
+ "time": {
+  "from": "now-24h",
+  "to": "now"
+ },
+ "timepicker": {},
+ "timezone": "browser",
+ "title": "KINX 인증서 만료 감시",
+ "uid": "kinx-certificates",
+ "version": 1,
+ "panels": [
+  {
+   "gridPos": {
+    "h": 5,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "id": 1,
+   "options": {
+    "code": {
+     "language": "plaintext",
+     "showLineNumbers": false,
+     "showMiniMap": false
+    },
+    "content": "## 인증서는 두 가지를 따로 묻는다\n\n**① 곧 죽는가** — `SSL certificate expires soon`(Warning) · `SSL certificate is invalid`(High).\n대상에 도달했고 인증서를 읽었다. 만료일을 알기 때문에 미리 경고할 수 있다.\n\n**② 보고 있기는 한가** — `인증서 점검 불가`(Average).\n대상에 도달하지 못했다. `web.certificate.get` 은 **인증서 오류를 제외한 TLS 핸드셰이크 실패에서 아이템이 unsupported 가 되어** 값이 멈춘다. 만료 트리거는 마지막 값을 보므로 발화하지 않는다 — 즉 이 트리거가 없으면 **\"인증서 정상\"과 \"서비스가 죽어 아무것도 못 봄\"이 똑같이 조용하다.**\n\n포트 체크(443)는 **만료된 인증서도 통과시킨다.** 그래서 포트 감시만으로는 이 화면을 대신할 수 없다.\n\n_대상 추가 = `ansible/certs.yml` 에 한 줄. 임계값 기본 30일(발급 리드타임 고려, 템플릿 기본 7일은 늦다)._",
+    "mode": "markdown"
+   },
+   "pluginVersion": "11.6.16",
+   "title": "",
+   "transparent": true,
+   "type": "text"
+  },
+  {
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "description": "인증서 관련 활성 문제 전부. 만료 임박·유효하지 않음·점검 불가 세 종류가 한 화면에 심각도 색으로 나타난다. 호스트는 이름 접두사(cert-)로 고른다 — 그룹이 아니라 접두사로 거르므로 고객 그룹에 흩어져 있어도 모인다.",
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 9,
+    "w": 24,
+    "x": 0,
+    "y": 5
+   },
+   "id": 2,
+   "options": {
+    "ackEventColor": "rgb(56, 219, 156)",
+    "ackField": true,
+    "ageField": true,
+    "allowDangerousHTML": false,
+    "customLastChangeFormat": false,
+    "customTagColumns": "",
+    "descriptionAtNewLine": false,
+    "descriptionField": true,
+    "fontSize": "100%",
+    "highlightBackground": false,
+    "highlightNewEvents": false,
+    "highlightNewerThan": "1h",
+    "hostField": true,
+    "hostGroups": true,
+    "hostProxy": false,
+    "hostTechNameField": false,
+    "lastChangeFormat": "",
+    "layout": "table",
+    "markAckEvents": false,
+    "okEventColor": "rgb(56, 189, 113)",
+    "opdataField": false,
+    "pageSize": 20,
+    "problemTimeline": false,
+    "resizedColumns": [],
+    "severityField": true,
+    "showDatasourceName": false,
+    "showTags": true,
+    "sortProblems": "priority",
+    "statusField": true,
+    "statusIcon": false,
+    "triggerSeverity": [
+     {
+      "color": "rgb(108, 108, 108)",
+      "priority": 0,
+      "severity": "Not classified",
+      "show": true
+     },
+     {
+      "color": "rgb(120, 158, 183)",
+      "priority": 1,
+      "severity": "Information",
+      "show": true
+     },
+     {
+      "color": "rgb(175, 180, 36)",
+      "priority": 2,
+      "severity": "Warning",
+      "show": true
+     },
+     {
+      "color": "rgb(255, 137, 30)",
+      "priority": 3,
+      "severity": "Average",
+      "show": true
+     },
+     {
+      "color": "rgb(255, 101, 72)",
+      "priority": 4,
+      "severity": "High",
+      "show": true
+     },
+     {
+      "color": "rgb(215, 0, 0)",
+      "priority": 5,
+      "severity": "Disaster",
+      "show": true
+     }
+    ]
+   },
+   "pluginVersion": "6.5.0",
+   "targets": [
+    {
+     "application": {
+      "filter": ""
+     },
+     "countTriggersBy": "",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "evaltype": "0",
+     "functions": [],
+     "group": {
+      "filter": "$group"
+     },
+     "hide": false,
+     "host": {
+      "filter": "/^cert-/"
+     },
+     "item": {
+      "filter": ""
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "options": {
+      "acknowledged": 2,
+      "count": false,
+      "disableDataAlignment": false,
+      "hostsInMaintenance": false,
+      "limit": 1001,
+      "minSeverity": 0,
+      "severities": [
+       0,
+       1,
+       2,
+       3,
+       4,
+       5
+      ],
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "sortProblems": "default",
+      "useTimeRange": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "queryType": "5",
+     "refId": "A",
+     "resultFormat": "time_series",
+     "schema": 12,
+     "showProblems": "problems",
+     "table": {
+      "skipEmptyValues": false
+     },
+     "tags": {
+      "filter": ""
+     },
+     "textFilter": "",
+     "trigger": {
+      "filter": ""
+     }
+    }
+   ],
+   "title": "활성 인증서 문제 — 만료 임박 · 유효하지 않음 · 점검 불가",
+   "type": "alexanderzobnin-zabbix-triggers-panel"
+  },
+  {
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "description": "도메인별 만료 시점 전수. 문제가 없는 도메인도 나오므로 '언제 무엇이 죽는가'를 미리 본다. 값이 비어 있으면 그 도메인은 점검이 되지 않는 상태이며 위 패널에 '점검 불가' 로 잡힌다. Zabbix 는 초 단위 유닉스 시각을 주므로 scale(1000) 으로 밀리초 변환한 뒤 dateTimeFromNow 로 표시한다.",
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [],
+     "unit": "dateTimeFromNow"
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 14
+   },
+   "id": 3,
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value_and_name"
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "application": {
+      "filter": ""
+     },
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "functions": [
+      {
+       "def": {
+        "category": "Transform",
+        "defaultParams": [
+         100
+        ],
+        "name": "scale",
+        "params": [
+         {
+          "name": "factor",
+          "options": [
+           100,
+           0.01,
+           10,
+           -1
+          ],
+          "type": "float"
+         }
+        ]
+       },
+       "params": [
+        1000
+       ],
+       "text": "scale(1000)"
+      }
+     ],
+     "group": {
+      "filter": "$group"
+     },
+     "host": {
+      "filter": "/^cert-/"
+     },
+     "item": {
+      "filter": "/Expires on/"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "queryType": "0",
+     "refId": "A",
+     "resultFormat": "time_series",
+     "schema": 12,
+     "table": {
+      "skipEmptyValues": false
+     },
+     "tags": {
+      "filter": ""
+     },
+     "textFilter": "",
+     "trigger": {
+      "filter": ""
+     }
+    }
+   ],
+   "title": "만료 재고 — 도메인별 만료 시점 (문제 없는 것 포함 전수)",
+   "type": "stat"
+  }
+ ]
+}
