@@ -9,6 +9,8 @@
   vars:
     ansible_zabbix_auth_key: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
     cert_template: "Website certificate by Zabbix agent 2"
+    cert_common_group: "Certificates"
+    cert_nodata_window: "30m"
   tasks:
     - name: 감시 대상이 비어 있지 않은지 확인
       ansible.builtin.assert:
@@ -17,17 +19,20 @@
           - cert_checker_dns is defined and cert_checker_dns | length > 0
         fail_msg: "certificates 목록과 cert_checker_dns 가 필요하다 (-e @certs.local.yml)"
 
-    - name: 호스트그룹 생성 (목록에 등장하는 그룹 일괄)
+    - name: 호스트그룹 생성 (목록의 그룹 + 공통 그룹)
       community.zabbix.zabbix_group:
         state: present
-        host_groups: "{{ certificates | map(attribute='host_group') | unique | list }}"
+        host_groups: >-
+          {{ (certificates | map(attribute='host_group') | list + [cert_common_group])
+             | unique | list }}
 
     - name: 도메인별 감시 호스트 등록
       community.zabbix.zabbix_host:
         host_name: "cert-{{ item.domain }}"
         visible_name: "{{ item.domain }} 인증서"
-        host_groups:
-          - "{{ item.host_group }}"
+        # 두 그룹에 넣는다. 권한 상속용(고객 그룹) + 전용 대시보드 필터용(공통 그룹).
+        # 이유·부작용은 DEPLOY_GUIDE "cert 호스트를 두 그룹에 넣는 이유".
+        host_groups: "{{ [item.host_group, cert_common_group] | unique | list }}"
         status: enabled
         state: present
         interfaces:
@@ -47,4 +52,26 @@
             value: "{{ item.expiry_warn | default(cert_expiry_warn_default) }}"
       loop: "{{ certificates }}"
       loop_control:
-        label: "{{ item.domain }} → {{ item.host_group }}"
+        label: "{{ item.domain }} → {{ item.host_group }} + {{ cert_common_group }}"
+
+    # 만료 임박 트리거(템플릿 기본)와 짝을 이루는 두 번째 축.
+    # "곧 죽는가"와 "보고 있기는 한가"는 다른 사건이다 — 근거·계기는 DEPLOY_GUIDE
+    # "트리거가 둘인 이유". 핸드셰이크 실패 시 아이템이 unsupported 가 되어 값이 멈추므로
+    # 만료 트리거만으로는 서비스 다운과 정상이 똑같이 조용하다.
+    - name: 점검 불가 트리거 (수집이 멈춘 것을 만료 정상과 구분)
+      community.zabbix.zabbix_trigger:
+        state: present
+        host_name: "cert-{{ item.domain }}"
+        name: "인증서 점검 불가 — {{ item.domain }}"
+        params:
+          severity: average
+          expression: >-
+            nodata(/cert-{{ item.domain }}/web.certificate.get[{$CERT.WEBSITE.HOSTNAME},{$CERT.WEBSITE.PORT},{$CERT.WEBSITE.IP}],{{ cert_nodata_window }})=1
+          description: >-
+            {{ cert_nodata_window }} 동안 인증서 정보가 수집되지 않았다. 만료 여부를 알 수 없는
+            상태이므로 "이상 없음"으로 읽지 말 것. 원인 후보 — 대상 서비스 다운(TLS 핸드셰이크
+            실패 시 아이템이 unsupported 가 된다), 점검 에이전트 정지, DNS·방화벽, 프록시 경유
+            (WebCertificate 플러그인은 프록시를 지원하지 않는다).
+      loop: "{{ certificates }}"
+      loop_control:
+        label: "{{ item.domain }}"

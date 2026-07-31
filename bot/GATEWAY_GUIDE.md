@@ -525,12 +525,46 @@ attributes of the alert anywhere in the workflow: `{{ alert.name }}`" 이며 `{{
 5. 게이트웨이 로그에서 `route=remediate` 와 `remediation queued ...` 확인
 6. Keep UI에서 조치 후보 알림 확인 → Run Workflow(승인) → Ansible 실행·재검증 결과 확인
 
-### 미확인 항목
+### 랩 실증 완료 — 2026-07-29 17:12~17:34
 
-**수동 실행(Run Workflow) 시 알림 컨텍스트가 실리는지**는 공식 문서에 명시가 없다. 알림
-행에서 실행하면 실릴 가능성이 높지만 확인이 필요하다. 4~6번 절차에서 명령이 실제 호스트·서비스
-값으로 치환됐는지 SSH 실행 로그로 확인할 것. 만약 비어 있으면 대안은 트리거를 `type: alert` +
-CEL 필터로 바꾸고 승인 단계를 워크플로 안에 두는 것이다.
+절차 1~6이 랩에서 처음부터 끝까지 관통했다. 사람이 손댄 것은 **Run 버튼 한 번**뿐이다.
+
+| 근거 | 확인된 것 |
+|---|---|
+| `private/img/img_63.png` | Keep 알림 "chronyd is not running" **High**, **Service 필드 = `chronyd`** → `service` 태그가 웹훅을 타고 실제 전달됨 |
+| `private/img/img_65.png` | 워크플로 실행 성공 + Ansible 출력 **`before: inactive -> after: active`** |
+| `private/img/img_66.png` | SSH 독립 검증 — `inactive`(07-28 17:14:58) → `active`(07-29 17:34:17) |
+
+### 해소된 미확인 항목 — 수동 실행에도 알림 컨텍스트가 실린다
+
+**공식 문서에 명시가 없어 미확인으로 뒀던 것이 실측으로 확정됐다.** img_65의 워크플로 로그
+원문이 근거다.
+
+```
+Action run-ansible-remediation evaluated to run! Reason:
+'service_restart' == 'service_restart' evaluated to true.
+```
+
+`if: "'{{ alert.playbook }}' == 'service_restart'"` 의 좌변이 **`service_restart` 로 치환된 뒤
+비교됐다**는 뜻이다. `-e target_host=` · `-e service_name=` 도 실제 값으로 들어갔고, Ansible
+출력에 `host: vm-p3-target-002.novalocal  service: chronyd` 가 찍혔다.
+
+→ **대안(`type: alert` + CEL 필터로 바꿔 승인을 워크플로 안에 두는 방식)은 불필요하다.**
+수동 승인(Run) 구조를 그대로 유지한다 — 사람이 승인하는 자리가 화면에 남는 편이 데모에서
+설명하기도 쉽다.
+
+### 재테스트 판정 (2026-07-31, 변경분 전수 확인)
+
+7/29 실증 이후 분류기가 **선언 우선**으로 바뀌었으므로(`class` 태그 / `rule.groups`) "룰 형식이
+바뀌었으니 다시 돌려야 하는가"를 확인했다. **불필요하다.**
+
+| 파일 | 7/29 17:37 이후 |
+|---|---|
+| `router.py`(라우팅 판단) · `severity.py`(SEV 매핑) · `remediate_service.yml` · `remediate_service_workflow.yml` | **무변경** |
+| `keep.py` | 선택 파라미터 3종(`classes`·`alert_count`·`merge`) 추가 — 기본값 있어 기존 호출 무영향 |
+| `app.py` | ① `classify(alert_name, tags, groups)` — **`incident_class`(병합용)만** 바뀌고 route는 `router.decide()` 소관이라 무관 ② `digest`·`dashboard_only` 분기 신설 — `if/elif` 체인의 **서로 다른 route 값**이라 `remediate` 를 가리지 않음 |
+
+**바뀐 것은 분류·병합 층이고, 데모 B는 7/29 시점에 이미 태그 기반이었다.**
 
 ## 15. 교차 소스 조회 상태 — "신호 없음"과 "조회 실패"의 구분 (G1, 2026-07-29)
 
