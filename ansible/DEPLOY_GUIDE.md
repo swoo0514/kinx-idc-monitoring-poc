@@ -758,6 +758,54 @@ TLS 핸드셰이크 실패 시 아이템이 unsupported 가 된다"*. 공식 근
 **부수 효과**: 점검 에이전트 자체가 죽은 경우도 이 트리거가 잡는다. 감시 대상 28개가 통째로
 안 보이는 상황인데 종래 구조로는 완전한 침묵이었다. 이는 §3-7 "감시자를 감시한다" 의 확장이다.
 
+#### 창을 12h 로 둔 이유 — 처음 30m 로 잡았다가 고쳤다
+
+**처음에 `nodata(30m)` 으로 썼는데 그대로 뒀으면 정상 호스트 28개가 전부 상시 발화했다.**
+랩 템플릿 실측(2026-07-31)이 그것을 막았다.
+
+| 실측값 | 값 |
+|---|---|
+| 마스터 아이템 `web.certificate.get` 수집 주기 | **15m** |
+| 전처리 `Discard unchanged with heartbeat` | **6h** |
+
+인증서 JSON 은 몇 달간 바뀌지 않으므로 **값이 계속 버려지고, heartbeat 때문에 6시간에 한 번만
+통과한다.** 즉 **정상 상태의 최대 침묵이 `6h + 15m`** 이다. 30m 창은 이 정상 침묵을 장애로
+읽는다 — 우리가 진단한 "Warning 99.5% 노이즈" 를 새 축에서 그대로 재현하는 것이다.
+
+**규칙: 창 = heartbeat × 2 = 12h.** heartbeat 가 바뀌면 이 규칙으로 다시 계산한다.
+인증서 감시의 본체는 30일 경고 창이므로 12시간 탐지 지연은 그 1.7% 이고, **놓치는 것보다
+12시간 늦게 아는 편이 낫다.**
+
+도메인별로 `nodata_window` 를 주어 덮을 수 있다(랩 시연은 짧게).
+
+#### 공식 확인 사항 3건 (2026-07-31)
+
+| 확인 | 결과 | 출처 |
+|---|---|---|
+| `nodata()` 가 unsupported 아이템에서도 계산되는가 | **된다.** *"The referenced item must be in a supported state (**except for nodata() function**, which is calculated for unsupported items as well)"* — 이 예외가 없었으면 이 트리거는 성립하지 않는다 | [Trigger expression](https://www.zabbix.com/documentation/current/en/manual/config/triggers/expression) |
+| 신규 아이템에서의 동작 | *"The function will display an error if, within the period: ... **there's no data and the item was added or re-enabled**"* → 호스트를 막 만든 직후 첫 창 동안은 **발화가 아니라 오류(unknown) 상태**다. 창이 지나야 판정된다 | [History functions](https://www.zabbix.com/documentation/current/en/manual/appendix/functions/history) |
+| 프록시 경유 시 | 기본은 프록시 가용성에 민감해 재연결 후 지연분을 건너뛴다. 즉시 발화가 필요하면 3번째 인자 `"strict"` | 〃 |
+
+**알려진 거친 지점**: Zabbix 이슈 트래커에 **[ZBXNEXT-9481 "nodata(), unsupported items and
+discard with heartbeat"](https://support.zabbix.com/projects/ZBXNEXT/issues/ZBXNEXT-9481)** 가
+기능 요청으로 올라와 있다 — **우리가 쓰는 조합 그대로**다. 지금 구조로 동작은 하지만 이
+조합이 완전히 매끄러운 영역은 아니라는 뜻이므로, 실환경 적용 시 창 값을 한 번 더 실측한다.
+
+**`strict` 를 기본으로 넣지 않은 이유**: 랩 점검 에이전트는 서버 직수집이라 프록시 민감도가
+무관하다. 실환경에서 점검 에이전트를 프록시 뒤에 두면 그때 `"strict"` 를 검토한다 —
+다만 프록시 재연결 직후 오탐이 늘 수 있어 트레이드오프가 있다.
+
+#### 두 실패가 서로 다르게 잡히는 것이 이 설계의 증명이다
+
+| 대상 | 무슨 일 | 데이터 | 발화하는 트리거 |
+|---|---|---|---|
+| 만료된 인증서 | 핸드셰이크는 **성공**, 인증서가 invalid | **들어온다** | `SSL certificate is invalid` (High) |
+| 도달 불가 도메인 | 핸드셰이크 **실패** → 아이템 unsupported | **안 들어온다** | **`인증서 점검 불가`** (Average) |
+
+공식 문서의 *"turns unsupported if TLS handshake fails with any error **except an invalid
+certificate**"* 가 이 두 줄을 가른다. **만료는 알 수 있고, 도달 불가는 알 수 없다** — 그래서
+트리거가 둘이어야 한다. 랩 검증도 이 두 도메인으로 한다.
+
 **호스트마다 트리거 1개가 부채 아닌가.** 위 "알려진 한계"에서 커스텀 트리거 28개를 부채라
 불렀으므로 스스로 모순인지 짚어 둔다. 우리가 진단에서 부채라 부른 것은 **사람이 손으로 복붙해
 정의가 28군데로 흩어진 것**이다. 여기서는 정의가 `certificates.yml` **한 곳**에 있고 28개는
