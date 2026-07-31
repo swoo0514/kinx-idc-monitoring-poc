@@ -52,6 +52,14 @@ def png_chunks(data: bytes):
         i += 8 + ln + 4
 
 
+def png_size(data: bytes):
+    for typ, body in png_chunks(data):
+        if typ == b"IHDR":
+            w, h = struct.unpack(">II", body[:8])
+            return w, h
+    raise ValueError("IHDR 가 없다")
+
+
 def png_decode(data: bytes):
     """반환 (width, height, RGB 픽셀 바이트). 8비트·비인터레이스만 다룬다.
 
@@ -442,6 +450,7 @@ def main():
     print("렌더: %s  (%dx%d, %d일)  via %s" % (a.customer, a.width, a.height, a.days,
                                                render_base))
     png = render(render_base, a.uid, a.customer, a.width, a.height, a.days)
+    w, h = png_size(png)
     if a.split:
         # 인쇄용으로 페이지를 나눈다. 언필터링을 파이썬으로 하므로 느리다(수십 초).
         w, h, rgb = png_decode(png)
