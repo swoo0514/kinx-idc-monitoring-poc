@@ -361,13 +361,29 @@ def _holmes_gate_checks() -> int:
         assert holmes.should_investigate("SEV2", False, zbx, merged=False)[0] is False
         # MSP 는 마스킹 없으면 신규여도 금지 (테넌트 경계가 우선)
         assert holmes.should_investigate("SEV2", False, ["zabbix-msp"], verdict="신규")[0] is False
+
+        # 조사 질문이 "무슨 사건인지"를 담는가 (2026-07-31 회귀).
+        # 종래에는 "{n}건이 1개 사건 · {host}" 만 넘겨서, 에이전틱인 홈즈가 사건과 무관하게
+        # 그 순간 활성인 아무 문제를 조사했다(SSH 브루트포스 사건에 MySQL buffer pool 회신).
+        q = holmes.build_question(
+            ["sshd: brute force trying to get access to the system. Non existent user.",
+             "Multiple authentication failures followed by a success."],
+            {"auth_security"}, 17.2)
+        assert "brute force" in q, q                 # 알림 이름이 실려야 한다
+        assert "authentication failures" in q, q
+        assert "auth_security" in q, q               # 유형도
+        assert "17" in q                             # 관측창
+        assert "ONLY" in q and "Do NOT" in q, q      # 범위 고정 지시
+        assert q.startswith("Incident:")             # 호출부가 접두를 덧붙이지 않는다
+        # 비어 있어도 죽지 않는다(알림명 없는 경로)
+        assert "(unnamed)" in holmes.build_question([""], set(), 0)
     finally:
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-    return 12
+    return 19
 
 
 def _incident_checks() -> int:

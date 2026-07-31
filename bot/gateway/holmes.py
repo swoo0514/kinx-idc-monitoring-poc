@@ -53,6 +53,30 @@ def should_investigate(sev: str, degraded: bool, sources, merged: bool = False,
     return False, "criteria-not-met"
 
 
+def build_question(alert_names, classes, window_s: float) -> str:
+    """홈즈에게 넘길 사건 서술.
+
+    **왜 필요한가 (2026-07-31 랩 실측).** 종래에는 `"{n}건이 1개 사건 · {host}"` 만 넘겼다.
+    건수와 호스트뿐이라 **무슨 사건인지가 한 글자도 없다.** 홈즈는 에이전틱이라 스스로 그
+    호스트를 뒤지는데, 그러면 사건과 무관하게 **그 순간 활성인 아무 문제**를 조사한다.
+    실제로 SSH 브루트포스 사건에 대해 MySQL buffer pool 을 조사해 왔다 — 조사 품질은 높았으나
+    **다른 사건**이었다.
+
+    그래서 알림 이름·유형·관측창을 넘기고 "이것만 보라"를 명시한다. 홈즈가 스스로 조회하는
+    능력(우리 봇에 없는 강점)은 그대로 두되 **조사 대상만 고정**한다.
+    """
+    names = "; ".join("(%d) %s" % (i + 1, n) for i, n in enumerate(alert_names) if n)
+    cls = ", ".join(sorted(c for c in (classes or []) if c))
+    return (
+        "Incident: %d alert(s) merged on this host within a %.0f second window ending just now. "
+        "Alert names: %s. Incident type(s): %s. "
+        "Investigate ONLY these alerts and this time window. "
+        "Do NOT report on unrelated problems that merely happen to be active on this host — "
+        "if you find such problems, ignore them."
+        % (len(alert_names), window_s, names or "(unnamed)", cls or "(unclassified)")
+    )
+
+
 def investigate(host: str, question: str) -> dict:
     """HolmesGPT HTTP API로 심층조사(읽기 전용). 블로킹·분 단위 — 호출측이 백그라운드로 감쌀 것."""
     url = os.environ.get("HOLMES_URL", "").rstrip("/")

@@ -160,8 +160,13 @@ async def run_incident(inc) -> dict:
                                                  verdict=incident_mod.dominant_verdict(context))
     if fire_h:
         log.info("holmes deep-dive scheduled fp=%s reason=%s", fp, reason_h)
-        _spawn_bg(_deep_investigate(inc.host, headline, sev, fp,
-                                    anchor or posted.get("ts")))
+        # headline("N건이 1개 사건 · host")을 넘기면 홈즈가 무슨 사건인지 모른 채 그 호스트에서
+        # 그 순간 활성인 아무 문제를 조사한다(2026-07-31 실측). 알림 이름·유형·관측창을 넘긴다.
+        _spawn_bg(_deep_investigate(
+            inc.host,
+            holmes.build_question([a.alert_name for a in inc.alerts],
+                                  inc.classes(), inc.window_s()),
+            sev, fp, anchor or posted.get("ts")))
 
     timings["total_s"] = round(time.monotonic() - t0, 2)
     log.info("incident triage done fp=%s alerts=%d provider=%s degraded=%s timings=%s",
@@ -172,14 +177,14 @@ async def run_incident(inc) -> dict:
             "thread_ts": posted.get("ts")}
 
 
-async def _deep_investigate(host: str, incident_summary: str, sev: str,
+async def _deep_investigate(host: str, question: str, sev: str,
                             fingerprint: str = "", thread_ts: str = None) -> None:
     """백그라운드 HolmesGPT 심층조사 → (1)Slack 원래 알림 스레드 답글(읽기) (2)Keep 같은
     알림 Note enrich(실행 화면). 별개 알림을 만들지 않아 피드에 사건 1행 유지.
-    블로킹 호출은 to_thread로 감싸 이벤트 루프 비차단. 실패해도 조용히 종료."""
+    블로킹 호출은 to_thread로 감싸 이벤트 루프 비차단. 실패해도 조용히 종료.
+    question 은 holmes.build_question 산출물이며 이미 "Incident: ..." 로 시작한다."""
     t0 = time.monotonic()
-    res = await asyncio.to_thread(holmes.investigate, host,
-                                  f"Incident: {incident_summary}.")
+    res = await asyncio.to_thread(holmes.investigate, host, question)
     took = round(time.monotonic() - t0, 1)
     if not res.get("ok"):
         log.warning("holmes deep-dive no result host=%s took=%ss err=%s",
