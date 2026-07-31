@@ -1,0 +1,1832 @@
+{
+ "uid": "kinx-msp-report",
+ "title": "KINX MSP 월간 리포트",
+ "tags": [
+  "kinx",
+  "msp",
+  "report"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 0,
+ "refresh": "",
+ "time": {
+  "from": "now-30d",
+  "to": "now"
+ },
+ "editable": true,
+ "graphTooltip": 0,
+ "templating": {
+  "list": [
+   {
+    "name": "customer",
+    "label": "고객사",
+    "type": "query",
+    "datasource": {
+     "type": "alexanderzobnin-zabbix-datasource",
+     "uid": "zabbix"
+    },
+    "definition": "",
+    "refresh": 1,
+    "sort": 1,
+    "regex": "",
+    "options": [],
+    "current": {
+     "text": "Customers/Customer-B",
+     "value": "Customers/Customer-B"
+    },
+    "query": {
+     "queryType": "group",
+     "group": "/^Customers.Customer-/",
+     "host": "",
+     "application": "",
+     "item": "",
+     "itemTag": "",
+     "showDisabledItems": false
+    }
+   },
+   {
+    "name": "host",
+    "label": "호스트",
+    "type": "query",
+    "datasource": {
+     "type": "alexanderzobnin-zabbix-datasource",
+     "uid": "zabbix"
+    },
+    "definition": "",
+    "refresh": 1,
+    "sort": 1,
+    "regex": "",
+    "options": [],
+    "includeAll": true,
+    "allValue": ".+",
+    "multi": true,
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    },
+    "query": {
+     "queryType": "host",
+     "group": "$customer",
+     "host": "/.*/",
+     "application": "",
+     "item": "",
+     "itemTag": "",
+     "showDisabledItems": false
+    }
+   }
+  ]
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "row",
+   "title": "1. 이번 달 요약 — 무슨 일이 있었나",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "panels": []
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "원시 알림",
+   "description": "감시 시스템이 낸 알림 수. 오른쪽 '사건'과 짝으로 읽는다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 0,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "월간 알림 수"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "decimals": 0,
+     "unit": "",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "→ 사건 (병합 후)",
+   "description": "봇이 (호스트, 유형)으로 묶어 확정한 사건 수. Zabbix 단독으로는 낼 수 없는 값.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 6,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "월간 사건 수 (병합 후)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "decimals": 0,
+     "unit": "",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "만성 사건",
+   "description": "90일 내 반복. 자동화 1순위 후보.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 12,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "만성 사건 수"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "decimals": 0,
+     "unit": "",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "자동 조치 후보 등록",
+   "description": "'완료'가 아니라 '등록'이다. 실행 여부는 워크플로 기록에 있다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 18,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "자동 조치 후보 등록"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "decimals": 0,
+     "unit": "",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 6,
+   "type": "table",
+   "title": "월간 종합 분석 (승인 후 게시)",
+   "description": "LLM 서사. 승인 전에는 '검토 대기'가 표시된다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 11,
+    "w": 14,
+    "x": 0,
+    "y": 5
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "2",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "월간 종합 분석"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "table",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "left",
+      "filterable": false,
+      "cellOptions": {
+       "type": "auto",
+       "wrapText": true
+      }
+     },
+     "mappings": []
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Item"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 190
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Key"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Host"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ],
+     "countRows": false,
+     "fields": ""
+    }
+   }
+  },
+  {
+   "id": 7,
+   "type": "table",
+   "title": "집계 기간 · 판단 근거 · 보안 집계 상태",
+   "description": "'판단 근거'는 로그·보안을 실제로 조회해 판단한 사건 수다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 10,
+    "x": 14,
+    "y": 5
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "2",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "/집계 기간|판단 근거 커버리지|보안 집계 상태/"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "table",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "left",
+      "filterable": false,
+      "cellOptions": {
+       "type": "auto",
+       "wrapText": true
+      }
+     },
+     "mappings": []
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Item"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 190
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Key"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Host"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ],
+     "countRows": false,
+     "fields": ""
+    }
+   }
+  },
+  {
+   "id": 8,
+   "type": "stat",
+   "title": "초동 대응 중앙값",
+   "description": "원시 알림 → 봇 사건 게시. 측정 짝이 없으면 비며 0으로 만들지 않는다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 10,
+    "x": 14,
+    "y": 11
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "초동 대응 중앙값(초)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "decimals": 1,
+     "unit": "s",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 9,
+   "type": "row",
+   "title": "2. 사건 상세 — 무엇이 반복되나",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 16
+   },
+   "panels": []
+  },
+  {
+   "id": 10,
+   "type": "table",
+   "title": "주요 사건 요약 (승인 후 게시)",
+   "description": "",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 11,
+    "w": 14,
+    "x": 0,
+    "y": 17
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "2",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "주요 사건 요약"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "table",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "left",
+      "filterable": false,
+      "cellOptions": {
+       "type": "auto",
+       "wrapText": true
+      }
+     },
+     "mappings": []
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Item"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 190
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Key"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Host"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ],
+     "countRows": false,
+     "fields": ""
+    }
+   }
+  },
+  {
+   "id": 11,
+   "type": "table",
+   "title": "반복 · 유형 · 심각도",
+   "description": "",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 10,
+    "x": 14,
+    "y": 17
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "2",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "/반복 상위|유형별 분포|심각도 분포/"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "table",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "left",
+      "filterable": false,
+      "cellOptions": {
+       "type": "auto",
+       "wrapText": true
+      }
+     },
+     "mappings": []
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Item"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 190
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Key"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Host"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ],
+     "countRows": false,
+     "fields": ""
+    }
+   }
+  },
+  {
+   "id": 12,
+   "type": "stat",
+   "title": "신규 사건",
+   "description": "",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 10,
+    "x": 14,
+    "y": 23
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "신규 사건 수"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "decimals": 0,
+     "unit": "",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 13,
+   "type": "row",
+   "title": "3. 보안 (Wazuh) — 노출은 어떤가",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 28
+   },
+   "panels": []
+  },
+  {
+   "id": 14,
+   "type": "stat",
+   "title": "설정 준수율",
+   "description": "CIS 벤치마크 통과 비율. Zabbix 에는 이 데이터가 없다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 0,
+    "y": 29
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "설정 준수율(%, 기간 평균)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "decimals": 1,
+     "unit": "percent",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 15,
+   "type": "table",
+   "title": "취약점 · 상위 패키지 · 파일 무결성",
+   "description": "총계가 아니라 '무엇을 고치면 대부분 사라지나'로 낸다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 6,
+    "w": 18,
+    "x": 6,
+    "y": 29
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "2",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "/^report-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "/취약점|파일 무결성 변경/"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "table",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "left",
+      "filterable": false,
+      "cellOptions": {
+       "type": "auto",
+       "wrapText": true
+      }
+     },
+     "mappings": []
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Item"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 190
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Key"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Host"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ],
+     "countRows": false,
+     "fields": ""
+    }
+   }
+  },
+  {
+   "id": 16,
+   "type": "timeseries",
+   "title": "인증 활동 — $host 로그인 실패",
+   "description": "집계값이 아니라 Wazuh 를 직접 조회한 실시간 패널.",
+   "datasource": {
+    "type": "grafana-opensearch-datasource",
+    "uid": "wazuh"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 0,
+    "y": 35
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh"
+     },
+     "alias": "",
+     "format": "table",
+     "luceneQueryType": "Metric",
+     "query": "rule.groups:authentication_failed AND agent.name:/$host/",
+     "queryType": "lucene",
+     "timeField": "@timestamp",
+     "bucketAggs": [
+      {
+       "field": "@timestamp",
+       "id": "2",
+       "type": "date_histogram",
+       "settings": {
+        "interval": "auto",
+        "min_doc_count": "0"
+       }
+      }
+     ],
+     "metrics": [
+      {
+       "id": "1",
+       "type": "count"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   }
+  },
+  {
+   "id": 17,
+   "type": "table",
+   "title": "취약점 재고 — $host 심각도별",
+   "description": "",
+   "datasource": {
+    "type": "grafana-opensearch-datasource",
+    "uid": "wazuh-states"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 12,
+    "y": 35
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh-states"
+     },
+     "alias": "",
+     "format": "table",
+     "luceneQueryType": "Metric",
+     "query": "agent.name:/$host/",
+     "queryType": "lucene",
+     "timeField": "@timestamp",
+     "bucketAggs": [
+      {
+       "field": "vulnerability.severity",
+       "id": "3",
+       "type": "terms",
+       "settings": {
+        "min_doc_count": "0",
+        "order": "desc",
+        "orderBy": "_count",
+        "size": "10"
+       }
+      }
+     ],
+     "metrics": [
+      {
+       "id": "1",
+       "type": "count"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 18,
+   "type": "row",
+   "title": "4. 로그 (Loki) — 근거",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 42
+   },
+   "panels": []
+  },
+  {
+   "id": 19,
+   "type": "logs",
+   "title": "로그 — $host",
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "description": "리포트 문서에는 로그 본문을 싣지 않는다(고객 자산·반출 표면). 화면에서는 같은 자리에서 근거를 바로 확인할 수 있다.",
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 43
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "expr": "{host=~\"$host\"}",
+     "queryType": "range",
+     "direction": "backward",
+     "editorMode": "code"
+    }
+   ],
+   "options": {
+    "showTime": true,
+    "wrapLogMessage": true,
+    "sortOrder": "Descending",
+    "enableLogDetails": true,
+    "dedupStrategy": "none",
+    "prettifyLogMessage": false
+   }
+  },
+  {
+   "id": 20,
+   "type": "row",
+   "title": "5. 자원 — 수치는 얼마였나 (호스트마다 자동 반복)",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 51
+   },
+   "panels": []
+  },
+  {
+   "id": 21,
+   "type": "timeseries",
+   "title": "서버 부하도 — $host",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 0,
+    "y": 52
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "$host"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "/^Load average/"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "repeat": "host",
+   "repeatDirection": "h"
+  },
+  {
+   "id": 22,
+   "type": "timeseries",
+   "title": "CPU 사용률 — $host",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 12,
+    "y": 52
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "$host"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "/CPU utilization/"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   }
+  },
+  {
+   "id": 23,
+   "type": "timeseries",
+   "title": "메모리 사용률 — $host",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 0,
+    "y": 59
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "$host"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "/Memory utilization/"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   }
+  },
+  {
+   "id": 24,
+   "type": "timeseries",
+   "title": "디스크 사용률 — $host",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 12,
+    "y": 59
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "$customer"
+     },
+     "host": {
+      "filter": "$host"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "/Space utilization/"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 8,
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   }
+  }
+ ]
+}
