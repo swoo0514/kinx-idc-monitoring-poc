@@ -23,8 +23,12 @@ def zt(item, host="/^report-/", qtype="0", fmt="time_series"):
             "application": {"filter": ""}, "item": {"filter": item},
             "itemTag": {"filter": ""}, "macro": {"filter": ""}, "proxy": {"filter": ""},
             "functions": [], "textFilter": "", "resultFormat": fmt,
+            # useTrends=false 필수. 데이터소스가 trendsFrom=7d 라 30일 범위는 trends 를 보는데,
+            # 리포트 지표는 월 1회 찍히는 점이라 trends(시간별 집계)에 존재하지 않는다.
+            # default 로 두면 float 아이템(준수율 등)이 조용히 No data 가 된다(2026-07-31 실측:
+            # 30일 frames=0 / 6시간 frames=1 / useTrends=false 30일 frames=1).
             "options": {"showDisabledItems": False, "skipEmptyValues": False,
-                        "useTrends": "default", "useZabbixValueMapping": False}}
+                        "useTrends": "false", "useZabbixValueMapping": False}}
 
 
 def stat(title, item, x, y, w, h, unit="", desc="", dec=0):
@@ -68,9 +72,11 @@ def row(title, y):
 
 
 def ts_zbx(title, item, x, y, w, h, unit="", repeat=None):
+    t = zt(item, host="$host")
+    t["options"]["useTrends"] = "default"   # 자원 그래프는 진짜 시계열이라 trends 가 맞다
     p = {"id": nid(), "type": "timeseries", "title": title, "datasource": ZBX,
          "gridPos": {"h": h, "w": w, "x": x, "y": y},
-         "targets": [zt(item, host="$host")],
+         "targets": [t],
          "fieldConfig": {"defaults": {"unit": unit,
                                       "custom": {"lineWidth": 1, "fillOpacity": 8,
                                                  "showPoints": "never"}},
@@ -119,7 +125,7 @@ P.append(stat("만성 사건", "만성 사건 수", 12, y, 6, 4,
 P.append(stat("자동 조치 후보 등록", "자동 조치 후보 등록", 18, y, 6, 4,
               desc="'완료'가 아니라 '등록'이다. 실행 여부는 워크플로 기록에 있다."))
 y += 4
-P.append(textbl("월간 종합 분석 (승인 후 게시)", "월간 종합 분석", 0, y, 14, 11,
+P.append(textbl("월간 종합 분석 (승인 후 게시)", "/월간 종합 분석/", 0, y, 14, 11,
                 desc="LLM 서사. 승인 전에는 '검토 대기'가 표시된다."))
 P.append(textbl("집계 기간 · 판단 근거 · 보안 집계 상태",
                 "/집계 기간|판단 근거 커버리지|보안 집계 상태/", 14, y, 10, 6,
@@ -130,7 +136,7 @@ y += 11
 
 P.append(row("2. 사건 상세 — 무엇이 반복되나", y))
 y += 1
-P.append(textbl("주요 사건 요약 (승인 후 게시)", "주요 사건 요약", 0, y, 14, 11))
+P.append(textbl("주요 사건 요약 (승인 후 게시)", "/주요 사건 요약/", 0, y, 14, 11))
 P.append(textbl("반복 · 유형 · 심각도", "/반복 상위|유형별 분포|심각도 분포/", 14, y, 10, 6))
 P.append(stat("신규 사건", "신규 사건 수", 14, y + 6, 10, 5))
 y += 11
