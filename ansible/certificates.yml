@@ -30,7 +30,9 @@
     # 템플릿 마스터 아이템은 15m 수집 + "discard unchanged with heartbeat 6h" 라, 정상일 때도
     # 최대 6h15m 침묵한다. 창을 heartbeat 의 2배로 둔다 — 근거는 DEPLOY_GUIDE "점검 불가 트리거".
     cert_nodata_window: "12h"
-    cert_master_key: "web.certificate.get[{$CERT.WEBSITE.HOSTNAME},{$CERT.WEBSITE.PORT},{$CERT.WEBSITE.IP}]"
+    # 마스터(web.certificate.get)가 아니라 종속 아이템을 본다. 마스터는 history 가 꺼져 있어
+    # nodata() 가 "item history is disabled" 로 평가되지 않는다 — DEPLOY_GUIDE 참조.
+    cert_watch_key: "cert.not_after"
   tasks:
     - name: 감시 대상과 점검 에이전트 주소가 있는지 확인
       ansible.builtin.assert:
@@ -105,7 +107,7 @@
           severity: average
           enabled: true
           expression: >-
-            nodata(/cert-{{ item.domain }}/{{ cert_master_key }},{{ item.nodata_window | default(cert_nodata_window) }})=1
+            nodata(/cert-{{ item.domain }}/{{ cert_watch_key }},{{ item.nodata_window | default(cert_nodata_window) }})=1
       loop: "{{ certificates }}"
       loop_control:
         label: "{{ item.domain }} ({{ item.nodata_window | default(cert_nodata_window) }})"
