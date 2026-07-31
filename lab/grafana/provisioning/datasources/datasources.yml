@@ -18,7 +18,12 @@ datasources:
       username: $ZBX_GRAFANA_USER
       trends: true
       trendsFrom: "7d"
-      cacheTTL: "1h"
+      # 호스트·아이템 목록 캐시. 기본 1h 는 이 랩에서 두 번 사고를 냈다 —
+      # Day7 "메트릭 패널이 멈춘 줄 알았던 표시 지연", 2026-07-31 "호스트 표시명을 바꿨는데
+      # 대시보드가 옛 이름을 보고 변수 필터가 안 걸림". 둘 다 설정은 맞는데 화면만 틀린 경우라
+      # 원인을 찾는 데 시간이 걸린다. 온보딩·MaC 로 호스트가 자주 바뀌는 랩에서는 짧게 둔다.
+      # 실환경(321대)에 그대로 가져가면 Zabbix API 호출이 늘므로 도입 시 재검토 대상.
+      cacheTTL: "1m"
     secureJsonData:
       password: $ZBX_GRAFANA_PASSWORD
 
