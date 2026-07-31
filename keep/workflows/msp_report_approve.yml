@@ -1,0 +1,39 @@
+# Keep 워크플로 — 월간 리포트 승인 발송 (프로비저닝 as-code).
+# 사람이 승인 대기 알림에서 초안을 읽고 "Run Workflow"(=승인) → SSH로 core →
+# 저장된 초안 그대로 게시 → PDF 생성 → 메일 발송.
+#
+# 데모 B(조치 승인)와 **같은 화면·같은 방식**이다. 승인 계층을 새로 만들지 않았다는 것이
+# 이 파일의 요점이다 — n8n 같은 GUI 엔진을 추가하지 않는 근거.
+#
+# 전제: Keep UI에 SSH provider(host=core, user=rocky, pkey)를 이름 core-ansible 로 생성
+#       (데모 B에서 이미 만든 것을 그대로 쓴다).
+# 대상·수신자는 봇이 알림에 실어 보낸 값을 쓴다(하드코딩 금지) — msp_report.py 의
+# --draft-to-keep 이 host·customer·host_filter·recipient 를 커스텀 필드로 push 한다.
+workflow:
+  id: msp-report-approve-and-send
+  name: Approve and send MSP monthly report
+  description: Publish the reviewed draft, render PDF, and email it to the customer
+  triggers:
+    - type: manual
+  steps:
+    - name: publish-and-send
+      # 안전 게이트 — 리포트 승인 대기 알림에서만 실행된다. 다른 알림에서 실수로 Run 해도
+      # 아무 일도 일어나지 않는다(데모 B 의 service_restart 게이트와 같은 형태).
+      if: "'{{ alert.playbook }}' == 'report_approve'"
+      provider:
+        type: ssh
+        config: "{{ providers.core-ansible }}"
+        with:
+          # --from-draft 가 핵심이다. 승인 시 집계를 다시 돌리면 LLM 이 새 서사를 만들어
+          # **사람이 읽고 승인한 문장과 다른 글**이 고객에게 간다. 저장된 초안을 그대로 싣는다.
+          # 숫자는 결정적이라 이때 다시 계산해도 같은 값이 나온다.
+          command: >-
+            cd /home/rocky/kinx-idc-monitoring-poc/bot &&
+            set -a && . .env && . ../lab/.env && set +a &&
+            export SMTP_HOST=127.0.0.1 SMTP_PORT=1025 REPORT_FROM=noreply@kinx.local &&
+            ~/bot-venv/bin/python msp_report.py --days 30
+            --host-filter '{{ alert.host_filter }}'
+            --from-draft --send --target '{{ alert.host }}' &&
+            ~/bot-venv/bin/python report_deliver.py
+            --customer '{{ alert.customer }}'
+            --send --to '{{ alert.recipient }}'

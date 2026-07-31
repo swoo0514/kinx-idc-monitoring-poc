@@ -378,7 +378,43 @@ def zbx_send(server: str, port: int, target_host: str, values: dict) -> dict:
     return json.loads(buf[13:13 + need].decode("utf-8"))
 
 
-def _push_draft(target: str, draft: str) -> None:
+def _guess_group(target: str) -> str:
+    """report-Customer-B -> Customers/Customer-B. 우리가 만든 이름 규칙이라 유추해도 된다."""
+    short = target[len("report-"):] if target.startswith("report-") else target
+    return "Customers/%s" % short
+
+
+def draft_path(target: str) -> str:
+    d = os.environ.get("REPORT_DRAFT_DIR") or os.path.join(
+        os.path.expanduser("~"), ".kinx-report-drafts")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", target or "unknown")
+    return os.path.join(d, safe + ".txt")
+
+
+def save_draft(target: str, draft: str) -> str:
+    """승인한 문장과 실제로 나가는 문장이 같아야 한다.
+
+    승인 시 집계를 다시 돌리면 LLM 이 새 서사를 만들어 **사람이 읽고 승인한 것과 다른 글**이
+    고객에게 간다. 그래서 초안을 파일로 굳혀 두고, 승인은 그 파일을 게시한다(--from-draft).
+    숫자는 결정적이므로 그때 다시 계산해도 된다 — 달라지는 것은 서사뿐이다.
+    """
+    p = draft_path(target)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(draft)
+    return p
+
+
+def load_draft(target: str) -> str:
+    p = draft_path(target)
+    if not os.path.exists(p):
+        sys.exit("[!] 승인할 초안이 없다: %s\n"
+                 "    먼저 --draft-to-keep 로 초안을 만들고 사람이 검토해야 한다." % p)
+    with open(p, encoding="utf-8") as f:
+        return f.read()
+
+
+def _push_draft(target: str, draft: str, extra: dict = None) -> None:
     """요약 초안을 Keep 승인 큐에 올린다 — 데모 B 의 조치 후보와 같은 자리, 같은 UI.
 
     playbook 필드에 report_approve 를 실어 Keep 워크플로가 분기할 수 있게 한다.
@@ -395,7 +431,7 @@ def _push_draft(target: str, draft: str) -> None:
             "리포트에 실린다. 미승인이면 %r 로 나간다.\n\n```\n%s\n```" % (target, PENDING, draft))
     res = keep.push_alert("월간 리포트 승인 대기 — %s" % target, "SEV3", target, note,
                           source=REPORT_SOURCE, playbook="report_approve",
-                          fingerprint="msp-report|%s" % target)
+                          fingerprint="msp-report|%s" % target, extra=extra)
     print("[keep] 승인 큐 등록 %s" % ("성공" if res.get("ok") else "실패/스킵: %s" % res))
 
 
@@ -501,6 +537,19 @@ def selftest() -> None:
     ck("부분 집계 (2/3)" in pp["report.security_status"] and "취약점" in pp["report.security_status"],
        "무엇이 빠졌는지 리포트에 안 적었다: %s" % pp["report.security_status"])
 
+    # 초안 왕복 — 승인이 게시하는 문장은 사람이 읽은 그 문장이어야 한다.
+    import tempfile
+    os.environ["REPORT_DRAFT_DIR"] = tempfile.mkdtemp()
+    SEP = "\n\n[월간 종합 분석]\n"
+    body2 = "· 사건 A\n   원인: 가." + SEP + "**1) 한 줄**\n조용한 달."
+    pth = save_draft("report-Customer-B", body2)
+    ck(os.path.exists(pth), "초안 파일이 안 만들어졌다")
+    ck(load_draft("report-Customer-B") == body2, "초안 왕복이 깨졌다")
+    head, tail = body2.split(SEP)
+    ck(tail.startswith("**1)"), "월간 분석 절 분리")
+    ck("[월간 종합 분석]" not in head, "요약에 월간 분석이 섞였다")
+    ck(_guess_group("report-Customer-B") == "Customers/Customer-B", "그룹 유추")
+
     print("ALL OK (%d checks)" % n)
 
 
@@ -515,6 +564,11 @@ def main():
     ap.add_argument("--send", action="store_true", help="실제 전송. 없으면 계산만(드라이런)")
     ap.add_argument("--approve", action="store_true",
                     help="LLM 서사(report.summary)까지 전송. 사람이 초안을 검토한 뒤에만 쓴다")
+    ap.add_argument("--from-draft", action="store_true",
+                    help="저장된 초안을 그대로 게시(승인 실행용). 재생성하지 않는다")
+    ap.add_argument("--customer-group", default="",
+                    help="Grafana 대시보드 변수용 그룹 (예: Customers/Customer-B)")
+    ap.add_argument("--recipient", default="", help="리포트 수신자 메일 (승인 큐에 실어 보냄)")
     ap.add_argument("--allow-unscoped", action="store_true",
                     help="범위 지정 없이 전체 집계를 고객 리포트로 보낸다(랩 시연 전용)")
     ap.add_argument("--insight", action="store_true",
@@ -583,9 +637,22 @@ def main():
 
     draft = res["_summary_draft"] + (("\n\n[월간 종합 분석]\n" + insight) if insight else "")
     if a.draft_to_keep:
-        _push_draft(a.target or "(미지정)", draft)
+        tgt = a.target or "(미지정)"
+        print("[draft] %s" % save_draft(tgt, draft))
+        # 워크플로가 실행에 필요한 값을 알림에서 읽는다 — 워크플로에 고객·수신자를
+        # 하드코딩하지 않기 위해서다(데모 B 가 host·service 를 그렇게 받는다).
+        _push_draft(tgt, draft, extra={
+            "customer": a.customer_group or _guess_group(tgt),
+            "host_filter": a.host_filter, "recipient": a.recipient})
 
-    if a.approve:
+    if a.from_draft:
+        # 사람이 읽고 승인한 **그 문장**을 게시한다. 다시 만들면 다른 글이 나간다.
+        saved = load_draft(a.target or "")
+        res["report.summary"] = saved.split("\n\n[월간 종합 분석]\n")[0]
+        if "\n\n[월간 종합 분석]\n" in saved:
+            res["report.insight"] = saved.split("\n\n[월간 종합 분석]\n", 1)[1]
+        print("\n[승인됨] 저장된 초안을 그대로 싣는다 (%s)" % draft_path(a.target or ""))
+    elif a.approve:
         # 사람이 위 초안을 읽고 승인한 경우에만 서사가 실린다. 고객에게 나가는 문서이므로
         # 시스템 변경(Ansible 조치)과 같은 등급으로 다룬다 — 읽기=자동/쓰기=승인.
         res["report.summary"] = res["_summary_draft"]

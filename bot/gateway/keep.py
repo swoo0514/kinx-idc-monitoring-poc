@@ -20,7 +20,7 @@ def push_alert(name: str, sev: str, host: str, analysis: str,
                prejudge: str = "", service: str = "", source: str = "kinx-bot",
                fingerprint: str = "", playbook: str = "",
                classes: str = "", alert_count: int = 0, merge: str = "",
-               sources: str = "") -> dict:
+               sources: str = "", extra: dict = None) -> dict:
     """분석 담은 알림을 Keep에 전송. 실패해도 예외를 던지지 않음(봇 흐름 보호).
     fingerprint 지정 시 Keep이 그 값으로 디듑 → 같은 사건은 한 행에 모임(홈즈 enrich 대상).
     source: 빠른 봇 분석=kinx-bot / HolmesGPT 심층조사=holmesgpt 로 구분.
@@ -57,6 +57,11 @@ def push_alert(name: str, sev: str, host: str, analysis: str,
         payload["merge"] = merge
     if sources:
         payload["sources"] = sources
+    # 워크플로가 `{{ alert.<키> }}` 로 읽을 임의 필드. 실행에 필요한 값을 알림에 실어
+    # 보내면 워크플로에 대상·수신자를 하드코딩하지 않아도 된다(데모 B 와 같은 방식).
+    for k, v in (extra or {}).items():
+        if v:
+            payload[k] = v
     try:
         r = httpx.post(f"{url}/alerts/event/keep",
                        headers={"Content-Type": "application/json", "x-api-key": key},
