@@ -432,9 +432,16 @@ def main():
     else:
         print("[!] ZABBIX_URL/ZABBIX_TOKEN 미설정 — 승인 상태를 확인하지 못한다")
 
-    base = os.environ.get("GRAFANA_URL", "http://127.0.0.1:3000")
-    print("렌더: %s  (%dx%d, %d일)" % (a.customer, a.width, a.height, a.days))
-    png = render(base, a.uid, a.customer, a.width, a.height, a.days)
+    # 주소가 둘이다. **렌더는 내부 주소**로 가져오고(서버가 자기 공인 IP 로 되돌아
+    # 접속하면 헤어핀 NAT 가 없어 그냥 멈춘다 — 2026-07-31 실측으로 2분 타임아웃),
+    # **링크는 사람이 클릭할 주소**를 쓴다. "식별은 이름, 접속은 IP" 와 같은 종류의 구분.
+    render_base = (os.environ.get("GRAFANA_RENDER_URL")
+                   or os.environ.get("GRAFANA_INTERNAL_URL")
+                   or "http://127.0.0.1:3000")
+    link_base = os.environ.get("GRAFANA_URL", render_base)
+    print("렌더: %s  (%dx%d, %d일)  via %s" % (a.customer, a.width, a.height, a.days,
+                                               render_base))
+    png = render(render_base, a.uid, a.customer, a.width, a.height, a.days)
     if a.split:
         # 인쇄용으로 페이지를 나눈다. 언필터링을 파이썬으로 하므로 느리다(수십 초).
         w, h, rgb = png_decode(png)
@@ -448,7 +455,7 @@ def main():
     print("PDF: %s  (%d x %d px -> %d페이지, %.1f KB)" % (out, w, h, pages, len(pdf) / 1024))
 
     link = "%s/d/%s?var-customer=%s&from=now-%dd&to=now" % (
-        base.rstrip("/"), a.uid, urllib.parse.quote(a.customer), a.days)
+        link_base.rstrip("/"), a.uid, urllib.parse.quote(a.customer), a.days)
     print("링크: %s" % link)
     if not a.send:
         print("\n[드라이런] 발송하지 않았다. 보내려면 --send --to <주소>")
