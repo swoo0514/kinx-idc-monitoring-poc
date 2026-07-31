@@ -40,6 +40,27 @@ Keep 워크플로 → SSH(core `~/ansible-venv`) → `ansible-playbook -i invent
 remediate_service.yml -e target_host=vm-p3-target-002 -e service_name=chronyd` end-to-end 성공
 (changed=1, before/after active). 상세: keep_evaluation_plan.md §4-1b.
 
+## 두 번째 승인 — 월간 리포트 발송 (`msp_report_approve.yml`, 2026-07-31)
+
+승인 계층을 **새로 만들지 않았다.** 조치 승인(데모 B)과 리포트 발송 승인이 같은 화면,
+같은 방식(manual 트리거 + "Run Workflow")이다. n8n 같은 GUI 엔진을 더하지 않는 근거가
+여기 있다 — 필요한 승인 UI 는 이미 있었다.
+
+| | 데모 B | 월간 리포트 |
+|---|---|---|
+| 안전 게이트 | `alert.playbook == 'service_restart'` | `alert.playbook == 'report_approve'` |
+| 알림이 실어 오는 값 | `host`, `service` | `host`, `customer`, `host_filter`, `recipient` |
+| 하는 일 | Ansible 서비스 재기동 | 초안 게시 → PDF → 메일 |
+
+**`--from-draft` 가 핵심이다.** 승인할 때 집계를 다시 돌리면 LLM 이 새 서사를 만들어
+**사람이 읽고 승인한 문장과 다른 글**이 고객에게 간다. 초안을 파일로 굳혀 두고
+(`~/.kinx-report-drafts/<호스트>.txt`) 승인은 그 파일을 그대로 게시한다. 숫자는 결정적이라
+그때 다시 계산해도 같은 값이 나온다 — 달라질 수 있는 것은 서사뿐이므로 서사만 고정한다.
+
+**실측 (2026-07-31)**: 초안 등록 → 워크플로가 실행할 명령을 그대로 실행 →
+`processed: 15; failed: 0` → PDF 373KB → 메일 수신 확인. 그리고 **게시된 서사가 저장된
+초안과 문자열까지 일치**하는 것을 Zabbix 아이템 값과 대조해 확인했다(요약·월간 분석 둘 다).
+
 ## 알려진 마찰 (도입 리스크)
 
 - Keep UI "새 워크플로 생성"이 일부 상황에서 `workflow_raw_data: null`로 실패 → 프로비저닝(파일)
