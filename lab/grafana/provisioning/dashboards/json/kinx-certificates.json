@@ -55,7 +55,7 @@
  "panels": [
   {
    "gridPos": {
-    "h": 5,
+    "h": 4,
     "w": 24,
     "x": 0,
     "y": 0
@@ -67,12 +67,12 @@
      "showLineNumbers": false,
      "showMiniMap": false
     },
-    "content": "## 인증서는 두 가지를 따로 묻는다\n\n**① 곧 죽는가** — `SSL certificate expires soon`(Warning) · `SSL certificate is invalid`(High).\n대상에 도달했고 인증서를 읽었다. 만료일을 알기 때문에 미리 경고할 수 있다.\n\n**② 보고 있기는 한가** — `인증서 점검 불가`(Average).\n대상에 도달하지 못했다. `web.certificate.get` 은 **인증서 오류를 제외한 TLS 핸드셰이크 실패에서 아이템이 unsupported 가 되어** 값이 멈춘다. 만료 트리거는 마지막 값을 보므로 발화하지 않는다 — 즉 이 트리거가 없으면 **\"인증서 정상\"과 \"서비스가 죽어 아무것도 못 봄\"이 똑같이 조용하다.**\n\n포트 체크(443)는 **만료된 인증서도 통과시킨다.** 그래서 포트 감시만으로는 이 화면을 대신할 수 없다.\n\n_대상 추가 = `ansible/certs.yml` 에 한 줄. 임계값 기본 30일(발급 리드타임 고려, 템플릿 기본 7일은 늦다)._",
+    "content": "**① 곧 죽는가** — `SSL certificate expires soon`(Warning) · `SSL certificate is invalid`(High). 대상에 도달해 인증서를 읽었고, 만료일을 알기에 미리 경고한다.\n\n**② 보고 있기는 한가** — `인증서 점검 불가`(Average). 대상에 도달하지 못했다. TLS 핸드셰이크가 실패하면(인증서 오류는 제외) 아이템이 unsupported 가 되어 값이 멈추고, 만료 트리거는 마지막 값을 보므로 발화하지 않는다. **이 트리거가 없으면 \"정상\"과 \"아무것도 못 봄\"이 똑같이 조용하다.**\n\n포트 체크(443)는 만료된 인증서도 통과시킨다. 대상 추가 = `ansible/certs.yml` 에 한 줄.",
     "mode": "markdown"
    },
    "pluginVersion": "11.6.16",
-   "title": "",
-   "transparent": true,
+   "title": "인증서는 두 가지를 따로 묻는다",
+   "transparent": false,
    "type": "text"
   },
   {
@@ -86,10 +86,10 @@
     "overrides": []
    },
    "gridPos": {
-    "h": 9,
+    "h": 7,
     "w": 24,
     "x": 0,
-    "y": 5
+    "y": 4
    },
    "id": 2,
    "options": {
@@ -114,9 +114,18 @@
     "markAckEvents": false,
     "okEventColor": "rgb(56, 189, 113)",
     "opdataField": false,
-    "pageSize": 20,
+    "pageSize": 10,
     "problemTimeline": false,
-    "resizedColumns": [],
+    "resizedColumns": [
+     {
+      "id": "host",
+      "value": 260
+     },
+     {
+      "id": "problem",
+      "value": 420
+     }
+    ],
     "severityField": true,
     "showDatasourceName": false,
     "showTags": true,
@@ -244,31 +253,64 @@
    "description": "도메인별 만료 시점 전수. 호스트 필터 없이 아이템 이름(Expires on)으로 고른다 — 그 아이템은 인증서 템플릿에만 있으므로 그것만으로 대상이 특정된다. 값이 비어 있으면 그 도메인은 점검이 되지 않는 상태이며 위 패널에 '점검 불가' 로 잡힌다. Zabbix 는 초 단위 유닉스 시각을 주므로 scale(1000) 으로 밀리초 변환한 뒤 dateTimeFromNow 로 표시한다.",
    "fieldConfig": {
     "defaults": {
-     "mappings": [],
-     "unit": "dateTimeFromNow"
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "inspect": false
+     },
+     "mappings": []
     },
-    "overrides": []
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "만료 시점"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "dateTimeFromNow"
+       },
+       {
+        "id": "custom.width",
+        "value": 260
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "도메인"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 420
+       }
+      ]
+     }
+    ]
    },
    "gridPos": {
-    "h": 8,
+    "h": 9,
     "w": 24,
     "x": 0,
-    "y": 14
+    "y": 11
    },
    "id": 3,
    "options": {
-    "colorMode": "none",
-    "graphMode": "none",
-    "justifyMode": "auto",
-    "orientation": "auto",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ],
+    "cellHeight": "sm",
+    "footer": {
+     "countRows": false,
      "fields": "",
-     "values": false
+     "reducer": [
+      "sum"
+     ],
+     "show": false
     },
-    "textMode": "value_and_name"
+    "showHeader": true
    },
    "pluginVersion": "11.6.16",
    "targets": [
@@ -347,8 +389,45 @@
      }
     }
    ],
-   "title": "만료 재고 — 도메인별 만료 시점 (문제 없는 것 포함 전수)",
-   "type": "stat"
+   "title": "만료 재고 — 임박 순 (문제 없는 도메인 포함 전수)",
+   "type": "table",
+   "transformations": [
+    {
+     "id": "renameByRegex",
+     "options": {
+      "regex": "(.*) 인증서: Expires on",
+      "renamePattern": "$1"
+     }
+    },
+    {
+     "id": "reduce",
+     "options": {
+      "reducers": [
+       "lastNotNull"
+      ]
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "renameByName": {
+       "Field": "도메인",
+       "Last *": "만료 시점"
+      }
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "sort": [
+       {
+        "desc": false,
+        "field": "만료 시점"
+       }
+      ]
+     }
+    }
+   ]
   }
  ]
 }
