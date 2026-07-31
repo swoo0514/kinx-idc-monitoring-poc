@@ -515,6 +515,8 @@ def main():
     ap.add_argument("--send", action="store_true", help="실제 전송. 없으면 계산만(드라이런)")
     ap.add_argument("--approve", action="store_true",
                     help="LLM 서사(report.summary)까지 전송. 사람이 초안을 검토한 뒤에만 쓴다")
+    ap.add_argument("--allow-unscoped", action="store_true",
+                    help="범위 지정 없이 전체 집계를 고객 리포트로 보낸다(랩 시연 전용)")
     ap.add_argument("--insight", action="store_true",
                     help="월간 종합 분석 LLM 1회 호출(고객당 월 1회). 승인 게이트 아래에 있다")
     ap.add_argument("--draft-to-keep", action="store_true",
@@ -598,6 +600,15 @@ def main():
         return
     if not a.target:
         sys.exit("[!] --send 에는 --target 이 필요하다")
+    # 고객 리포트에 **다른 고객·사내 호스트**가 섞이는 것을 막는다. 범위를 좁히지 않으면
+    # 집계는 전체를 훑으므로, 서사에 남의 호스트명·IP 가 그대로 실린다(2026-07-31 실측:
+    # Customer-B 리포트에 사내 VM 이름과 사설 IP 가 들어갔다). 화면상 아무 문제가 없어
+    # 보이는 종류의 사고라 기본값을 거부로 둔다.
+    if not (a.host_filter or a.agent_filter) and not a.allow_unscoped:
+        sys.exit("[!] 범위가 지정되지 않았다 — --host-filter 없이 보내면 다른 고객·사내 "
+                 "호스트가 이 고객 리포트에 실린다.\n"
+                 "    고객별: --host-filter <이 고객 호스트 접두>\n"
+                 "    랩 시연처럼 알고도 전체를 넣으려면: --allow-unscoped")
     r = zbx_send(a.zabbix_server, a.zabbix_port, a.target, res)
     print("\n[send] %s -> %s" % (a.target, r.get("info", r)))
     # Zabbix 는 실패해도 HTTP 200 대신 info 문자열로 알린다 — failed 를 눈으로 봐야 한다.
