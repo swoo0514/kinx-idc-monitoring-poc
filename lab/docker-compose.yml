@@ -45,11 +45,29 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}   # 최초 스키마 생성에 root 필요(공식)
+      # 예약 리포트(MSP 월간 리포트). /report 경로는 필수이고 기본 포트는 10053.
+      # StartReportWriters 가 0 이면 리포트 생성이 비활성이다(범위 1~100).
+      ZBX_WEBSERVICEURL: http://zabbix-web-service:10053/report
+      ZBX_STARTREPORTWRITERS: 3
     ports:
       - "10051:10051"
     depends_on:
       mariadb:
         condition: service_healthy
+    networks:
+      - lab_net
+    restart: unless-stopped
+
+  # 예약 리포트 렌더러. 대시보드를 헤드리스 Chrome 으로 그려 PDF 로 만든다(공식 이미지에
+  # Chrome 포함). ZBX_ALLOWEDIP 기본값이 "zabbix-server" 라 우리 컨테이너명과 일치해 생략.
+  # 근거·설정은 ansible/DEPLOY_GUIDE.md "MSP 월간 리포트".
+  zabbix-web-service:
+    image: zabbix/zabbix-web-service:alpine-7.0.27
+    container_name: kinx-zabbix-web-service
+    environment:
+      ZBX_ALLOWEDIP: zabbix-server
+    depends_on:
+      - zabbix-server
     networks:
       - lab_net
     restart: unless-stopped
