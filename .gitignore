@@ -32,3 +32,7 @@ kinx_demo_dump.sql
 *_dump.sql
 ansible/certs.local.yml
 *.stackdump
+
+# 생성된 고객 리포트 — 고객사 데이터가 담긴 산출물이라 커밋 금지.
+# report_deliver.py 는 기본 출력을 리포 밖(REPORT_OUT_DIR)으로 두지만, 그래도 이중 방어.
+*.pdf

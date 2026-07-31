@@ -461,7 +461,16 @@ def main():
     else:
         pdf = png_to_pdf_direct(png)
     pages = pdf.count(b"/Type /Page ")
-    out = a.out or ("%s-%s.pdf" % (short, (period.split(" ~ ")[0] or "report").strip()))
+    # 기본 출력을 **리포 밖**에 둔다. 고객 데이터가 담긴 산출물이 작업 디렉토리에 떨어지면
+    # 실수로 커밋된다(2026-07-31 실측: 워크플로 실행 후 bot/ 에 PDF 가 생겨 git status 에 떴다).
+    out_dir = os.environ.get("REPORT_OUT_DIR") or os.path.join(
+        os.path.expanduser("~"), "msp-reports")
+    if a.out:
+        out = a.out
+    else:
+        os.makedirs(out_dir, exist_ok=True)
+        out = os.path.join(out_dir, "%s-%s.pdf"
+                           % (short, (period.split(" ~ ")[0] or "report").strip()))
     with open(out, "wb") as f:
         f.write(pdf)
     print("PDF: %s  (%d x %d px -> %d페이지, %.1f KB)" % (out, w, h, pages, len(pdf) / 1024))
