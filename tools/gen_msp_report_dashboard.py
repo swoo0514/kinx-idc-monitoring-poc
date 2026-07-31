@@ -39,11 +39,18 @@ GOOD = [{"color": "text"}, {"color": "blue", "value": 1}]
 SCORE = [{"color": "red"}, {"color": "orange", "value": 50}, {"color": "green", "value": 80}]
 
 
+# 봇이 산출 못 한 값은 -1 로 온다. 안 보내면 Zabbix 에 옛 값이 남아 "미산출" 옆에
+# 지난달 숫자가 그대로 뜬다(2026-07-31 실측). 여기서 -1 을 글자로 바꿔 준다.
+NOT_MEASURED_MAP = [{"type": "value",
+                     "options": {"-1": {"text": "미산출", "color": "text", "index": 0}}}]
+
+
 def stat(title, item, x, y, w, h, unit="", desc="", dec=0, steps=None, spark=True):
     return {"id": nid(), "type": "stat", "title": title, "description": desc,
             "datasource": ZBX, "gridPos": {"h": h, "w": w, "x": x, "y": y},
             "targets": [zt(item)],
-            "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [],
+            "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+                                         "mappings": NOT_MEASURED_MAP,
                                          "decimals": dec, "unit": unit,
                                          "thresholds": {"mode": "absolute",
                                                         "steps": steps or NEUTRAL}},

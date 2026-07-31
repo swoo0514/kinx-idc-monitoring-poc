@@ -58,6 +58,12 @@ def verdict_of(a: dict) -> str:
 
 PENDING = "검토 대기 — 승인 후 게시됩니다"
 
+# 숫자 지표의 "없음" 표식. 값을 **안 보내면 Zabbix 에 이전 값이 그대로 남는다** —
+# 랩 실측(2026-07-31)에서 범위를 좁힌 뒤 "준수율 미산출" 옆에 지난 집계의 52.0% 가
+# 그대로 떠 있었다. 0 을 보내면 "전부 실패" 로 읽히고, 안 보내면 옛 값이 남는다.
+# 그래서 **없음을 명시적으로 보낸다.** 대시보드가 값 매핑으로 "미산출" 로 표시한다.
+NOT_MEASURED = -1
+
 # 봇 분석은 번호 절로 강제돼 있다("**2) 추정 원인**", 때로 "**② …**").
 # 새 LLM 호출 없이 이미 만들어진 분석에서 절만 잘라 쓴다(Day8 결의 ⑥ "데모 C 출력 재활용만").
 _SEC = {
@@ -197,11 +203,12 @@ def posture_items(p: dict) -> dict:
     if p.get("status") != "ok":
         why = {"disabled": "보안 연동 미설정 — 이 절은 집계 대상이 아님",
                "unavailable": "조회 불가 — 이 절의 수치는 집계되지 않음"}.get(p.get("status"), "상태 미상")
-        return {"report.security_status": why}
+        # 텍스트는 상태를 말하고, 숫자는 "없음" 을 보낸다 — 안 보내면 옛 값이 남는다.
+        return {"report.security_status": why, "report.compliance": NOT_MEASURED}
 
-    out = {}
-    if p.get("compliance") is not None:
-        out["report.compliance"] = p["compliance"]
+    # 산출 못 했으면 옛 값이 남지 않도록 "없음" 을 명시적으로 보낸다.
+    out = {"report.compliance": p.get("compliance")
+           if p.get("compliance") is not None else NOT_MEASURED}
     if "fim_all" in p:
         out["report.fim"] = "승격 룰 %d건 / 전체 파일 변경 %d건" % (p["fim_promoted"], p["fim_all"])
     if "vuln" in p:
@@ -229,7 +236,8 @@ def posture_items(p: dict) -> dict:
             out["report.vuln_top"] = ("%s — 상위 3개가 전체의 %.0f%%"
                                       % (" / ".join("%s %d건" % (k, n) for k, n in top), share))
 
-    ok_n = len(out)
+    ok_n = sum(1 for k in ("report.compliance", "report.fim", "report.vuln")
+               if k in out and out[k] != NOT_MEASURED)
     note = "정상 집계 (점검 대상 %d대)" % p.get("scanned", 0)
     if p.get("compliance") is None and "설정 준수율" not in " ".join(p.get("errors", [])):
         note = "설정 점검 결과 없음 — 준수율 미산출"
@@ -296,8 +304,8 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
                  if r.get("host") == inc.get("host") and _ts(r) <= t_inc]
         if prior:
             gaps.append((t_inc - max(prior)).total_seconds())
-    # 짝이 하나도 없으면 값을 만들지 않는다. 0.0 을 보내면 "초동 대응 0초" 로 읽혀
-    # 실제보다 좋아 보인다 — 조회 실패를 정상으로 오독시키는 것과 같은 종류의 거짓이다.
+    # 짝이 하나도 없으면 0.0 을 보내지 않는다 — "초동 대응 0초" 로 읽혀 실제보다 좋아
+    # 보인다. 대신 NOT_MEASURED 를 보낸다(안 보내면 지난달 값이 그대로 남는다).
     response = round(statistics.median(gaps), 1) if gaps else None
 
     # 서사는 심각도가 높고 최근인 것부터 3건. 분석 본문이 있는 것만 — 없으면 쓸 게 없다.
@@ -350,8 +358,7 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
         "_window_alerts": len(win),
         "_gaps": len(gaps),
     }
-    if response is not None:
-        out["report.response_s"] = response
+    out["report.response_s"] = response if response is not None else NOT_MEASURED
     return out
 
 
@@ -477,7 +484,8 @@ def selftest() -> None:
     ck(r["report.response_s"] > 0, "초동 대응 중앙값이 0")
     # 짝지을 원시 알림이 없으면 값을 만들지 않는다 — 0.0 은 "0초 대응" 으로 읽힌다.
     r_no = aggregate([mk(BOT_SOURCE, name="사건만", prejudge="신규", analysis="x")], 30)
-    ck("report.response_s" not in r_no, "측정 불가인데 초동 대응 값을 만들었다")
+    ck(r_no["report.response_s"] == NOT_MEASURED,
+       "측정 불가를 0 으로 냈거나 아예 안 보냈다(안 보내면 옛 값이 남는다)")
 
     # 승인 게이트 — 고객에게 나가는 문서이므로 기본값이 미승인이어야 한다.
     ck(r["report.summary"] == PENDING, "승인 전에 LLM 서사가 전송 대상에 실렸다")
@@ -502,8 +510,9 @@ def selftest() -> None:
     # 안전 신호로 읽히므로, 실패를 정상으로 오독시키는 것은 침묵보다 나쁘다.
     for st in ("unavailable", "disabled"):
         p = posture_items({"status": st})
-        ck("report.vuln" not in p and "report.compliance" not in p and "report.fim" not in p,
-           "%s 인데 보안 숫자를 만들었다" % st)
+        ck("report.vuln" not in p and "report.fim" not in p, "%s 인데 보안 숫자를 만들었다" % st)
+        ck(p["report.compliance"] == NOT_MEASURED,
+           "%s 인데 준수율에 옛 값이 남을 수 있다" % st)
         ck("report.security_status" in p, "%s 상태를 리포트에 알리지 않았다" % st)
     p = posture_items({"status": "ok", "compliance": 52.4, "scanned": 4,
                        "fim_all": 107, "fim_promoted": 3,
@@ -526,7 +535,7 @@ def selftest() -> None:
     # 점검 결과가 없으면 준수율을 0% 로 만들지 않는다(0% 는 "전부 실패" 로 읽힌다).
     p0 = posture_items({"status": "ok", "compliance": None, "scanned": 0,
                         "fim_all": 0, "fim_promoted": 0, "vuln": Counter()})
-    ck("report.compliance" not in p0, "점검 결과 없음을 준수율 0 으로 냈다")
+    ck(p0["report.compliance"] == NOT_MEASURED, "점검 결과 없음을 준수율 0 으로 냈다")
 
     # 한 절이 실패해도 나머지는 살아야 한다. 취약점 인덱스 하나 때문에 SCA·FIM 을
     # 통째로 버리던 실측 결함(2026-07-31)의 회귀 검사.
