@@ -144,6 +144,8 @@ services:
       MP_MAX_MESSAGES: 200
     ports:
       - "8025:8025"
+      # SMTP 는 **루프백에만** 연다. 0.0.0.0 으로 열면 인증 없는 오픈 릴레이가 된다.
+      - "127.0.0.1:1025:1025"
     networks:
       - lab_net
     restart: unless-stopped
