@@ -36,6 +36,11 @@
       - {key: "report.auto_candidates", name: "자동 조치 후보 등록", vtype: "numeric_unsigned"}
       - {key: "report.top_repeat", name: "반복 상위 3종", vtype: "text"}
       - {key: "report.by_class", name: "유형별 분포", vtype: "text"}
+      - {key: "report.by_severity", name: "심각도 분포", vtype: "text"}
+      - {key: "report.response_s", name: "초동 대응 중앙값(초)", vtype: "numeric_float"}
+      # 이 항목만 LLM 이 만든 서사다. 고객에게 나가는 문서이므로 승인 전에는
+      # "검토 대기" 가 들어간다 — 읽기=자동/쓰기=승인 원칙의 세 번째 적용.
+      - {key: "report.summary", name: "주요 사건 요약 (승인 필요)", vtype: "text"}
       - {key: "report.period", name: "집계 기간", vtype: "text"}
   tasks:
     - name: 리포트 호스트그룹 생성 (고객 그룹 + 공통)
