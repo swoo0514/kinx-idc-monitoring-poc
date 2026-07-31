@@ -853,8 +853,41 @@ Zabbix 호스트는 다중 그룹 소속이 되므로 충돌이 없다. 더불�
 
 ```bash
 export ZABBIX_API_TOKEN='<조회·쓰기 토큰>'
-ansible-playbook -i inventory.local.ini ansible/certificates.yml -e @ansible/certs.local.yml
+ansible-playbook -i ansible/inventory.ini ansible/certificates.yml -e @ansible/certs.local.yml
 ```
+
+> **인벤토리는 `inventory.ini`(커밋본)다.** 이 플레이북의 대상은 SSH 호스트가 아니라 **Zabbix
+> API** 이고, 그 정의(`[zabbix]` + httpapi vars)가 커밋본에 있다. `inventory.local.ini` 는
+> SSH 대상(`[targets]`) 용이라 `[zabbix]` 그룹이 없을 수 있다.
+
+#### 도입 리스크 실측 — Ansible 은 대상이 없어도 "성공"한다 (2026-07-31, 두 번째 사례)
+
+`inventory.local.ini` 로 실행했더니 이렇게 나왔다.
+
+```
+[WARNING]: Could not match supplied host pattern, ignoring: zabbix
+PLAY [Onboard TLS certificate monitoring (Zabbix objects)] ***
+skipping: no hosts matched
+PLAY RECAP ***
+                       (비어 있음)
+```
+
+**경고 한 줄뿐이고 종료 코드는 0 이다.** 호스트도 트리거도 하나 안 만들고 성공으로 끝난다.
+플레이 안에 넣어 둔 `assert` 도 함께 건너뛴다 — 그 assert 가 `hosts: zabbix` 플레이 소속이기
+때문이다.
+
+**같은 함정을 2026-07-29 데모 B 에서 이미 밟았다.** 그때는 인벤토리 호스트명이 FQDN 이 아니라
+`remediate_service.yml` 이 조치를 통째로 건너뛰고도 승인 화면에 "성공"으로 보였다. 그래서 그
+플레이북에 사전 확인 플레이(`hosts: localhost` + assert)를 넣었는데, **인증서 플레이북에는
+넣지 않아 같은 일이 반복됐다.**
+
+→ **규칙: Zabbix API 를 대상으로 하는 플레이북은 `hosts: localhost` 사전 확인 플레이를 먼저
+둔다.** 대상 그룹이 비면 거기서 실패시킨다. `certificates.yml` 에 적용했고, `onboard.yml` ·
+`link_mysql_template.yml` · `autoregister_action.yml` 도 같은 패턴이 필요하다(미적용 — 후속).
+
+자동화가 "아무것도 안 하고 성공"하는 것은 조용한 실패 중에서도 나쁜 축이다. 사람은 초록색
+결과를 보고 넘어가기 때문이다. 이는 게이트웨이 G1(조회 실패와 신호 없음을 구분) · 인증서
+점검 불가 트리거와 **같은 결함 계열**이며, 세 번 모두 "실패가 성공·정상처럼 보인다"가 본질이다.
 
 실 도메인 목록은 **커밋하지 않는다.** `ansible/certs.local.yml`(gitignored)에 두고 `-e` 로
 주입한다. 리포의 `certs.yml` 은 형식을 보여주는 예시(RFC 2606 예약 도메인)다.

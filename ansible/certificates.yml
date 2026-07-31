@@ -1,6 +1,23 @@
 ---
 # 인증서 만료 감시 — certs.yml 목록을 읽어 도메인마다 Zabbix 호스트를 만들고 표준 템플릿을 링크.
 # 근거·운영 기준은 ansible/DEPLOY_GUIDE.md "인증서 만료 감시".
+# 사전 확인. 인벤토리에 [zabbix] 그룹이 없으면 ansible-playbook 은 "skipping: no hosts matched"
+# 를 출력하고도 종료 코드 0 을 준다. 아래 플레이의 assert 도 함께 건너뛰므로 "아무것도 안 하고
+# 성공"이 된다(2026-07-31 실측). remediate_service.yml 이 같은 이유로 사전 확인을 갖고 있다.
+- name: 사전 확인 — Zabbix API 대상이 인벤토리에 있는가
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: 인벤토리에 [zabbix] 그룹이 있는지 확인
+      ansible.builtin.assert:
+        that: "'zabbix' in groups and groups['zabbix'] | length > 0"
+        fail_msg: >-
+          인벤토리에 [zabbix] 그룹이 없어 아무 작업도 수행하지 않고 중단합니다.
+          이 플레이북은 SSH 가 아니라 Zabbix API 를 대상으로 하며, 리포의 inventory.ini 에
+          있는 [zabbix] 그룹(httpapi 연결)이 필요합니다. 로컬 인벤토리를 쓴다면 그 블록을
+          복사하십시오. 현재 인벤토리의 그룹 - {{ groups.keys() | list | join(', ') }}
+        success_msg: "[zabbix] 그룹 확인 - {{ groups['zabbix'] | join(', ') }}"
+
 - name: Onboard TLS certificate monitoring (Zabbix objects)
   hosts: zabbix
   gather_facts: false
