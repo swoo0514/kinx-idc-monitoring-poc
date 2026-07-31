@@ -59,7 +59,7 @@
     "options": [],
     "regex": "/^(?!.*(?:월간 리포트|인증서)).*$/",
     "includeAll": true,
-    "allValue": ".+",
+    "allValue": "",
     "multi": true,
     "current": {
      "text": "All",
