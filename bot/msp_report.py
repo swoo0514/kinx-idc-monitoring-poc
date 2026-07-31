@@ -175,9 +175,15 @@ def security_posture(agent_filter: str, days: int) -> dict:
 
     try:
         # 취약점은 시계열이 아니라 **현재 재고 스냅샷**이라 기간 조건을 걸지 않는다.
-        out["vuln"] = _terms("wazuh-states-vulnerabilities-*",
-                             {"bool": {"must": who}} if who else {"match_all": {}},
-                             "vulnerability.severity")
+        idx = "wazuh-states-vulnerabilities-*"
+        base = {"bool": {"must": who}} if who else {"match_all": {}}
+        out["vuln"] = _terms(idx, base, "vulnerability.severity")
+        # 재고 총계만 실으면 읽는 사람이 쓸 수 없다(랩 3대에 14,177건). 두 가지를 더한다 —
+        # 이번 달 새로 탐지된 것(무엇이 늘었나)과 패키지 상위(무엇을 고치면 대부분 사라지나).
+        new_q = {"bool": {"must": who + [{"range": {"vulnerability.detected_at":
+                                                    {"gte": "now-%dd" % days}}}]}}
+        out["vuln_new"] = _terms(idx, new_q, "vulnerability.severity")
+        out["vuln_pkg"] = _terms(idx, base, "package.name")
     except Exception as e:
         out["errors"].append("취약점: %s" % str(e)[:100])
 
@@ -199,8 +205,21 @@ def posture_items(p: dict) -> dict:
     if "fim_all" in p:
         out["report.fim"] = "승격 룰 %d건 / 전체 파일 변경 %d건" % (p["fim_promoted"], p["fim_all"])
     if "vuln" in p:
-        v = " / ".join("%s %d" % (s, p["vuln"][s]) for s in SEV_ORDER if p["vuln"].get(s))
-        out["report.vuln"] = v or "해당 심각도 취약점 없음"
+        def sev_line(c):
+            return " / ".join("%s %d" % (s, c[s]) for s in SEV_ORDER if c.get(s))
+        new = p.get("vuln_new") or Counter()
+        total = sum(p["vuln"].values())
+        # 실행 가능한 숫자를 앞에 둔다 — "이번 달 새로 생긴 것" 이 먼저고 재고 총계는 뒤다.
+        out["report.vuln"] = ("이번 달 신규 %d건 (%s) · 전체 재고 %d건 (%s)"
+                              % (sum(new.values()), sev_line(new) or "없음",
+                                 total, sev_line(p["vuln"]) or "없음")) if total \
+            else "취약점 재고 없음"
+        pkg = p.get("vuln_pkg") or Counter()
+        if pkg:
+            top = pkg.most_common(3)
+            share = 100 * sum(n for _, n in top) / total if total else 0
+            out["report.vuln_top"] = ("%s — 상위 3개가 전체의 %.0f%%"
+                                      % (" / ".join("%s %d건" % (k, n) for k, n in top), share))
 
     ok_n = len(out)
     note = "정상 집계 (점검 대상 %d대)" % p.get("scanned", 0)
@@ -444,9 +463,17 @@ def selftest() -> None:
         ck("report.security_status" in p, "%s 상태를 리포트에 알리지 않았다" % st)
     p = posture_items({"status": "ok", "compliance": 52.4, "scanned": 4,
                        "fim_all": 107, "fim_promoted": 3,
-                       "vuln": Counter({"High": 10, "Critical": 13, "Low": 5})})
+                       "vuln": Counter({"High": 10, "Critical": 13, "Low": 5}),
+                       "vuln_new": Counter({"Critical": 2}),
+                       "vuln_pkg": Counter({"kernel": 14, "glibc": 8, "curl": 4, "vim": 2})})
     ck(p["report.compliance"] == 52.4 and "4대" in p["report.security_status"], "정상 집계 형식")
-    ck(p["report.vuln"].startswith("Critical 13 / High 10"), "취약점 심각도 정렬: %s" % p["report.vuln"])
+    # 실행 가능한 숫자(이번 달 신규)가 앞, 재고 총계가 뒤. 재고만 내면 읽는 사람이 못 쓴다.
+    ck(p["report.vuln"].startswith("이번 달 신규 2건 (Critical 2)"),
+       "신규가 앞에 안 왔다: %s" % p["report.vuln"])
+    ck("전체 재고 28건 (Critical 13 / High 10 / Low 5)" in p["report.vuln"],
+       "재고 심각도 정렬: %s" % p["report.vuln"])
+    ck(p["report.vuln_top"].startswith("kernel 14건 / glibc 8건 / curl 4건")
+       and "93%" in p["report.vuln_top"], "상위 패키지 형식: %s" % p["report.vuln_top"])
     ck("승격 룰 3건" in p["report.fim"], "FIM 형식")
     # 점검 결과가 없으면 준수율을 0% 로 만들지 않는다(0% 는 "전부 실패" 로 읽힌다).
     p0 = posture_items({"status": "ok", "compliance": None, "scanned": 0,

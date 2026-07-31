@@ -47,7 +47,10 @@
       - {key: "report.security_status", name: "보안 집계 상태", vtype: "text"}
       - {key: "report.compliance", name: "설정 준수율(%, 기간 평균)", vtype: "numeric_float"}
       - {key: "report.fim", name: "파일 무결성 변경", vtype: "text"}
-      - {key: "report.vuln", name: "취약점 재고 (현재 스냅샷)", vtype: "text"}
+      # 재고 총계만으로는 고객이 쓸 수 없다(랩 3대에 14,177건). 신규분과 패키지 상위를
+      # 함께 낸다 — "무엇이 늘었나" 와 "무엇을 고치면 대부분 사라지나".
+      - {key: "report.vuln", name: "취약점 (신규 · 재고)", vtype: "text"}
+      - {key: "report.vuln_top", name: "취약점 상위 패키지", vtype: "text"}
       # 아래 둘만 LLM 이 만든 서사다. 고객에게 나가는 문서이므로 승인 전에는
       # "검토 대기" 가 들어간다 — 읽기=자동/쓰기=승인 원칙의 세 번째 적용.
       - {key: "report.summary", name: "주요 사건 요약 (승인 필요)", vtype: "text"}

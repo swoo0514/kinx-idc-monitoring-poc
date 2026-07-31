@@ -127,8 +127,8 @@ def build_pages(ids: dict) -> list:
         tile(i("report.compliance"), "설정 준수율", 0, 0, 24, 6, "%")
         if i("report.compliance") else None,
         T([("report.security_status", "보안 집계 상태")], 24, 0, 48, 6, "MR301", vertical=False),
-        T([("report.fim", "파일 무결성 변경"), ("report.vuln", "취약점 재고")],
-          0, 6, 72, 8, "MR302"),
+        T([("report.vuln", "취약점 (신규 · 재고)"), ("report.vuln_top", "상위 패키지"),
+           ("report.fim", "파일 무결성 변경")], 0, 6, 72, 9, "MR302"),
     ])
     pages = [("1. 이번 달 요약", p1), ("2. 사건 상세", p2), ("3. 보안", p3)]
     return [{"name": n, "widgets": w} for n, w in pages if w]
@@ -175,7 +175,7 @@ ALL_KEYS = ("report.alerts", "report.incidents", "report.chronic", "report.novel
             "report.auto_candidates", "report.top_repeat", "report.by_class",
             "report.by_severity", "report.response_s", "report.evidence",
             "report.security_status", "report.compliance", "report.fim", "report.vuln",
-            "report.summary", "report.insight", "report.period")
+            "report.summary", "report.insight", "report.period", "report.vuln_top")
 
 
 def selftest() -> None:
