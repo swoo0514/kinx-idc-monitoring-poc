@@ -1,0 +1,52 @@
+---
+# 구버전 zabbix-agent(v1) 잔재 제거. 근거·실측은 ansible/DEPLOY_GUIDE.md "v1 잔재 정리".
+#
+# deploy_agents.yml 안에도 같은 정리가 있지만 그것은 [targets] 에만 돈다. 손설치 호스트와
+# Wazuh 매니저처럼 3종 번들 배포 대상이 아닌 곳에는 닿지 않아 잔재가 남았다(2026-07-31 실측).
+# 그래서 "정리" 를 "배포" 에서 떼어 어디에나 돌릴 수 있게 한다.
+#
+# 실행: ansible-playbook -i inventory.local.ini cleanup_legacy_zabbix_agent.yml
+#       대상을 좁히려면 -e cleanup_hosts=targets
+- name: Remove legacy zabbix-agent(v1) leftovers
+  hosts: "{{ cleanup_hosts | default('all') }}"
+  become: true
+  vars:
+    legacy_paths:
+      - /etc/cron.d/restart_zabbix_agent
+      - /etc/zabbix/scripts/restart_agent.sh
+      - /etc/zabbix/zabbix_md5.cur
+      - /etc/zabbix/zabbix_md5.tmp
+  tasks:
+    - name: 정리 전 잔재 확인
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: before
+      loop: "{{ legacy_paths }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: 잔재 제거
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ legacy_paths }}"
+      loop_control:
+        label: "{{ item }}"
+
+    # 파일만 지우면 그것을 만든 주체가 남아 다시 생긴다. cron 파일이 지워졌으므로 새로 생기지는
+    # 않지만, 이미 실행 중인 것이 있을 수 있어 확인만 한다(제거는 하지 않는다 — 남의 프로세스를
+    # 임의로 죽이지 않는다).
+    - name: 잔재를 만들던 것이 아직 도는지 확인
+      ansible.builtin.shell: |
+        set -o pipefail
+        crontab -l 2>/dev/null | grep -i 'zabbix.*md5\|restart_agent' || true
+        ls -1 /etc/cron.*/*zabbix* 2>/dev/null || true
+      register: residue
+      changed_when: false
+      failed_when: false
+
+    - name: 결과 요약
+      ansible.builtin.debug:
+        msg:
+          - "제거 대상 중 있던 것: {{ before.results | selectattr('stat.exists') | map(attribute='item') | list }}"
+          - "남은 실행 주체(있으면 수동 확인 필요): {{ residue.stdout_lines | default([]) }}"

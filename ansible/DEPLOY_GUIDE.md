@@ -913,6 +913,43 @@ ansible-playbook -i ansible/inventory.ini ansible/certificates.yml -e @ansible/c
 > API** 이고, 그 정의(`[zabbix]` + httpapi vars)가 커밋본에 있다. `inventory.local.ini` 는
 > SSH 대상(`[targets]`) 용이라 `[zabbix]` 그룹이 없을 수 있다.
 
+### v1 잔재 정리 — 자동화가 닿는 곳만 고쳐졌다 (2026-07-31 실측)
+
+**FIM 노이즈의 85.7% 를 만들던 `/etc/zabbix/zabbix_md5.tmp` 를 2026-07-30 에 "근원 제거"
+했다고 기록했는데, 재측정해 보니 4대 중 1대만 적용돼 있었다.**
+
+| 시각(KST) | 호스트 | 이벤트 |
+|---|---|---|
+| 07-31 06:25 | `vm-target-001` | modified — **살아 있음** |
+| 07-31 05:23 | `vm-p3-wazuh-server-001` | modified — **살아 있음** |
+| 07-31 05:23 | `vm-p3-wazuh-server-002` | modified — **살아 있음** |
+| 07-31 03:10 | `vm-p3-target-002` | **deleted** — 조치됨 |
+
+**원인**: 정리 태스크를 `deploy_agents.yml` 안에 넣었고, 그 플레이북은 인벤토리 `[targets]` 에만
+돈다. `vm-target-001` 은 **손으로 설치한 호스트**라 그 그룹에 없고, Wazuh 매니저 2대는 3종 번들
+배포 대상이 아니라 역시 없다. **자동화가 닿는 한 대만 고쳐졌다.**
+
+**이것이 MaC 논거의 실증이다.** 손으로 한 것은 손으로 고쳐야 하고, 그래서 빠진다. 그리고
+빠진 것을 아무도 모른다 — 노이즈는 계속 나는데 기록에는 "조치 완료" 로 남아 있었다. 우리가
+실환경 진단에서 지적한 "커스텀 아이템 37% 비활성 · 좀비 트리거 39%" 도 같은 구조로 쌓인 것이다.
+
+**교훈은 배치가 아니라 분리다.** "정리" 를 "배포" 안에 넣은 것이 잘못이었다. 배포는 대상이
+정해져 있지만 정리는 어디에나 돌아야 한다. 그래서 `cleanup_legacy_zabbix_agent.yml` 로 떼어
+`hosts: all` 기본에 `-e cleanup_hosts=` 로 좁힐 수 있게 했다.
+
+```bash
+ansible-playbook -i inventory.local.ini cleanup_legacy_zabbix_agent.yml
+```
+
+`deploy_agents.yml` 안의 정리 태스크는 그대로 둔다 — 신규 호스트 온보딩 시 첫 배포에서
+바로 걸러지는 편이 낫고, 파일 삭제는 멱등이라 중복 실행이 무해하다.
+
+**함께 확인된 것 — FIM 은 변경 시점이 아니라 스캔 시점에 보고한다.** 우리가 파일을 바꾼
+07-30 저녁(21~24시 KST) 구간의 syscheck 알림은 0 건이었고, 다음 날 새벽 03~09 시에 9 건이
+몰렸다. realtime 으로 지정한 경로(`/root/.ssh` · cron · systemd 유닛)가 아니면 주기 스캔
+때 한꺼번에 나온다. **탐지 지연이 최대 스캔 주기만큼**이라는 뜻이므로 도입 시 감시 경로별로
+realtime 여부를 정할 때 이 값을 함께 본다.
+
 #### `wazuh-control status` 는 정상 상태에서도 rc=1 이다 (2026-07-31)
 
 게이트웨이 배선 플레이북의 마지막 검증에서 **배선은 다 됐는데 실패로 끝났다.**
