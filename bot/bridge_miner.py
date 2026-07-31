@@ -62,8 +62,9 @@ async def fetch_zabbix(days: int) -> list:
         host = (hosts[0] or {}).get("host", "") if hosts else ""
         if not host:
             continue
-        cls = incident.classify(e.get("name", ""), tags=e.get("tags"))
-        out.append((host, cls, int(e.get("clock", 0))))
+        name = e.get("name", "")
+        out.append({"host": host, "cls": incident.classify(name, tags=e.get("tags")),
+                    "ts": int(e.get("clock", 0)), "name": name, "src": "zabbix"})
     print("[zabbix] 이벤트 %d건 → 분류 완료" % len(out), file=sys.stderr)
     return out
 
@@ -96,13 +97,14 @@ def fetch_wazuh(days: int) -> list:
             if not host:
                 continue
             rule = s.get("rule") or {}
-            cls = incident.classify(rule.get("description", ""), groups=rule.get("groups"))
+            name = rule.get("description", "")
+            cls = incident.classify(name, groups=rule.get("groups"))
             ts = s.get("@timestamp", "")
             try:
                 epoch = int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
             except ValueError:
                 continue
-            out.append((host, cls, epoch))
+            out.append({"host": host, "cls": cls, "ts": epoch, "name": name, "src": "wazuh"})
     print("[wazuh] 알림 %d건 → 분류 완료" % len(out), file=sys.stderr)
     return out
 
@@ -114,8 +116,8 @@ def mine(events: list, window_s: int, min_pairs: int, min_lift: float) -> dict:
     독립이면 1. 1보다 크면 우연보다 자주 함께 나온다는 뜻이다.
     """
     by_host = defaultdict(list)
-    for host, cls, ts in events:
-        by_host[host].append((ts, cls))
+    for e in events:
+        by_host[e["host"]].append((e["ts"], e["cls"]))
 
     windows = []              # 각 창에 등장한 class 집합
     for host, seq in by_host.items():
@@ -211,6 +213,23 @@ def report(res: dict, existing: list, min_pairs: int, min_lift: float):
     print("  - other 는 분류 실패 묶음이라 제외한다. other 비중이 크면 분류기를 먼저 고친다.")
 
 
+def report_unclassified(events: list, top: int = 15):
+    """other 로 떨어진 알림명을 빈도순으로. 여기 나온 것이 태그 부여 1순위다.
+
+    가이드가 규정한 대로 other 가 크면 답은 키워드를 늘리는 것이 아니라 소스에 태그를 붙이는
+    것이므로, "무엇에 붙일지" 목록이 곧 처방이 된다.
+    """
+    others = [e for e in events if e["cls"] == "other"]
+    if not others:
+        print("\n[ 미분류(other) 없음 ]")
+        return
+    print()
+    print("[ 미분류(other) 상위 알림명 — 태그 부여 1순위 ]  총 %d/%d건 (%.1f%%)"
+          % (len(others), len(events), 100 * len(others) / len(events)))
+    for name, cnt in Counter(e["name"] for e in others).most_common(top):
+        print("  %6d  %s" % (cnt, name[:90]))
+
+
 def main():
     ap = argparse.ArgumentParser(description="브리지 후보 마이닝 (읽기 전용)")
     ap.add_argument("--days", type=int, default=DEFAULT_DAYS)
@@ -219,19 +238,40 @@ def main():
     ap.add_argument("--min-lift", type=float, default=DEFAULT_MIN_LIFT)
     ap.add_argument("--json", action="store_true", help="원시 결과를 stdout 에 JSON 으로")
     ap.add_argument("--source", choices=["all", "zabbix", "wazuh"], default="all")
+    ap.add_argument("--dump", metavar="FILE",
+                    help="조회 결과를 파일로 저장(실 호스트명·알림명 포함 — private/ 에만 둘 것)")
+    ap.add_argument("--load", metavar="FILE",
+                    help="조회 대신 파일에서 읽는다. 창·임계값을 바꿔가며 재분석할 때 쓴다")
     a = ap.parse_args()
 
-    events = []
-    if a.source in ("all", "zabbix"):
-        events += asyncio.run(fetch_zabbix(a.days))
-    if a.source in ("all", "wazuh"):
-        events += fetch_wazuh(a.days)
+    if a.load:
+        with open(a.load, encoding="utf-8") as f:
+            saved = json.load(f)
+        events = saved["events"]
+        print("[load] %s — %d건 (수집 %s, --days %s)"
+              % (a.load, len(events), saved.get("fetched_at", "?"), saved.get("days", "?")),
+              file=sys.stderr)
+    else:
+        events = []
+        if a.source in ("all", "zabbix"):
+            events += asyncio.run(fetch_zabbix(a.days))
+        if a.source in ("all", "wazuh"):
+            events += fetch_wazuh(a.days)
+
+    if a.dump:
+        with open(a.dump, "w", encoding="utf-8") as f:
+            json.dump({"fetched_at": _iso(datetime.now(timezone.utc).timestamp()),
+                       "days": a.days, "source": a.source, "events": events},
+                      f, ensure_ascii=False)
+        print("[dump] %s — %d건 저장. 실 호스트명·알림명이 들어 있으므로 커밋하지 말 것."
+              % (a.dump, len(events)), file=sys.stderr)
 
     res = mine(events, a.window, a.min_pairs, a.min_lift)
     if a.json:
         print(json.dumps(res, ensure_ascii=False, indent=1))
     else:
         report(res, incident.BRIDGE_GROUPS, a.min_pairs, a.min_lift)
+        report_unclassified(events)
 
 
 if __name__ == "__main__":
