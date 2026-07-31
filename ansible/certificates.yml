@@ -32,12 +32,18 @@
     cert_nodata_window: "12h"
     cert_master_key: "web.certificate.get[{$CERT.WEBSITE.HOSTNAME},{$CERT.WEBSITE.PORT},{$CERT.WEBSITE.IP}]"
   tasks:
-    - name: 감시 대상이 비어 있지 않은지 확인
+    - name: 감시 대상과 점검 에이전트 주소가 있는지 확인
       ansible.builtin.assert:
         that:
           - certificates | default([]) | length > 0
-          - cert_checker_dns is defined and cert_checker_dns | length > 0
-        fail_msg: "certificates 목록과 cert_checker_dns 가 필요하다 (-e @certs.local.yml)"
+          - (cert_checker_ip | default('') | length > 0) or (cert_checker_dns | default('') | length > 0)
+        fail_msg: >-
+          certificates 목록과 점검 에이전트 주소가 필요하다 (-e @certs.local.yml).
+          주소는 cert_checker_ip 를 권장한다 — Zabbix 서버가 컨테이너면 호스트의 /etc/hosts 를
+          물려받지 않아 이름 해석에 실패한다(DEPLOY_GUIDE "점검 에이전트 주소는 IP 로").
+        success_msg: >-
+          점검 에이전트 {{ cert_checker_ip | default(cert_checker_dns) }}
+          ({{ 'IP' if (cert_checker_ip | default('') | length > 0) else 'DNS' }})
 
     - name: 호스트그룹 생성 (목록의 그룹 + 공통 그룹)
       community.zabbix.zabbix_group:
@@ -55,11 +61,14 @@
         host_groups: "{{ [item.host_group, cert_common_group] | unique | list }}"
         status: enabled
         state: present
+        # cert_checker_ip 가 있으면 IP 로 붙는다. 이름 해석은 감시 대상 식별(FQDN 정규화)의
+        # 문제이고, 여기는 접속 경로의 문제라 별개다 — DEPLOY_GUIDE "점검 에이전트 주소는 IP 로".
         interfaces:
           - type: 1
             main: 1
-            useip: 0
-            dns: "{{ cert_checker_dns }}"
+            useip: "{{ 1 if (cert_checker_ip | default('') | length > 0) else 0 }}"
+            ip: "{{ cert_checker_ip | default('') }}"
+            dns: "{{ cert_checker_dns | default('') }}"
             port: "10050"
         link_templates:
           - "{{ cert_template }}"

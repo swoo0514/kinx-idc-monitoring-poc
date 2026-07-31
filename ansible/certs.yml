@@ -1,7 +1,11 @@
 # 인증서 감시 대상 목록. 실 고객 도메인은 커밋하지 않는다 — 아래는 예시(RFC 2606)이고
 # 실 목록은 gitignored certs.local.yml 에 두고 -e @certs.local.yml 로 주입한다.
 # 항목 설명·운영 기준은 ansible/DEPLOY_GUIDE.md "인증서 만료 감시" 참고.
-cert_checker_dns: "cert-checker.example.net"
+# 점검을 수행할 에이전트의 주소. IP 를 권장한다 — Zabbix 서버가 컨테이너면 호스트의
+# /etc/hosts 를 물려받지 않아 이름 해석에 실패한다(DEPLOY_GUIDE "점검 에이전트 주소는 IP 로").
+# 둘 중 하나만 있으면 되고, IP 가 있으면 IP 를 쓴다.
+cert_checker_ip: "192.0.2.16"
+cert_checker_dns: ""
 cert_expiry_warn_default: 30
 
 certificates:
