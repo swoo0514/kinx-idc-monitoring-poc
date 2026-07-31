@@ -22,6 +22,15 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# 한국어 Windows 콘솔은 기본 cp949 라 '—' 같은 문자에서 리포트가 중간에 죽는다(2026-07-31 실측:
+# 30일 실행이 BRIDGE_GROUPS 절에서 UnicodeEncodeError). 조회는 끝났는데 출력에서 실패하는 것이라
+# 원인이 눈에 안 띈다. 출력 스트림을 utf-8 로 고정한다.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from gateway import collector, incident  # noqa: E402
 
 DEFAULT_DAYS = 90
@@ -63,8 +72,18 @@ async def fetch_zabbix(days: int) -> list:
         if not host:
             continue
         name = e.get("name", "")
-        out.append({"host": host, "cls": incident.classify(name, tags=e.get("tags")),
-                    "ts": int(e.get("clock", 0)), "name": name, "src": "zabbix"})
+        tags = e.get("tags") or []
+        # 실환경에 이미 붙어 있는 class 태그 값을 그대로 보관한다. "태그를 붙이면 정확해진다"를
+        # 주장하려면 지금 무엇이 붙어 있는지부터 알아야 하는데, 분류 결과만 저장하면 그것이 사라진다
+        # (2026-07-31 실측에서 알 수 없는 값 'database' 가 발견되어 추가).
+        declared = ""
+        for t in tags:
+            if isinstance(t, dict) and t.get("tag") == incident.CLASS_TAG:
+                declared = str(t.get("value") or "")
+                break
+        out.append({"host": host, "cls": incident.classify(name, tags=tags),
+                    "ts": int(e.get("clock", 0)), "name": name, "src": "zabbix",
+                    "declared": declared})
     print("[zabbix] 이벤트 %d건 → 분류 완료" % len(out), file=sys.stderr)
     return out
 
@@ -213,6 +232,26 @@ def report(res: dict, existing: list, min_pairs: int, min_lift: float):
     print("  - other 는 분류 실패 묶음이라 제외한다. other 비중이 크면 분류기를 먼저 고친다.")
 
 
+def report_declared_tags(events: list):
+    """실환경에 이미 붙어 있는 class 태그 값 현황.
+
+    "팀이 태그를 붙이면 코드 수정 없이 분류가 정확해진다"를 주장하려면 세 가지를 알아야 한다 —
+    지금 몇 %에 태그가 있는가, 어떤 값을 쓰는가, 그중 우리가 모르는 값은 무엇인가.
+    모르는 값은 우리 매핑에 추가하면 되므로 **가장 값싼 개선 대상**이다.
+    """
+    known = incident._KNOWN_CLASSES
+    tagged = [e for e in events if e.get("declared")]
+    print()
+    print("[ 실환경 class 태그 현황 ]  태그 있음 %d/%d건 (%.1f%%)"
+          % (len(tagged), len(events), 100 * len(tagged) / max(len(events), 1)))
+    if not tagged:
+        print("  없음 — 태그가 하나도 붙어 있지 않다. 부여가 곧 처방이다.")
+        return
+    for val, cnt in Counter(e["declared"] for e in tagged).most_common():
+        mark = "인식됨" if val in known else "** 모르는 값 — 매핑 추가 대상 **"
+        print("  %6d  class=%-24s %s" % (cnt, val, mark))
+
+
 def report_unclassified(events: list, top: int = 15):
     """other 로 떨어진 알림명을 빈도순으로. 여기 나온 것이 태그 부여 1순위다.
 
@@ -271,6 +310,7 @@ def main():
         print(json.dumps(res, ensure_ascii=False, indent=1))
     else:
         report(res, incident.BRIDGE_GROUPS, a.min_pairs, a.min_lift)
+        report_declared_tags(events)
         report_unclassified(events)
 
 
