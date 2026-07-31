@@ -31,17 +31,27 @@ def zt(item, host="/^report-/", qtype="0", fmt="time_series"):
                         "useTrends": "false", "useZabbixValueMapping": False}}
 
 
-def stat(title, item, x, y, w, h, unit="", desc="", dec=0):
+# 색은 장식이 아니라 판정이다. 임계값을 주지 않으면 전부 검은 글씨가 되어 어느 숫자를
+# 먼저 봐야 하는지 알 수 없다. steps 는 [기본색, {value: n, color: ...}, ...] 순서다.
+NEUTRAL = [{"color": "text"}]
+WORSE = [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]
+GOOD = [{"color": "text"}, {"color": "blue", "value": 1}]
+SCORE = [{"color": "red"}, {"color": "orange", "value": 50}, {"color": "green", "value": 80}]
+
+
+def stat(title, item, x, y, w, h, unit="", desc="", dec=0, steps=None, spark=True):
     return {"id": nid(), "type": "stat", "title": title, "description": desc,
             "datasource": ZBX, "gridPos": {"h": h, "w": w, "x": x, "y": y},
             "targets": [zt(item)],
             "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [],
                                          "decimals": dec, "unit": unit,
                                          "thresholds": {"mode": "absolute",
-                                                        "steps": [{"color": "text"}]}},
+                                                        "steps": steps or NEUTRAL}},
                             "overrides": []},
-            "options": {"colorMode": "none", "graphMode": "none", "justifyMode": "auto",
-                        "orientation": "auto", "textMode": "value_and_name",
+            # graphMode=area 는 값이 한 점이면 아무것도 안 그리지만, 달이 쌓이면 추세가 붙는다.
+            "options": {"colorMode": "value", "graphMode": "area" if spark else "none",
+                        "justifyMode": "auto", "orientation": "auto",
+                        "textMode": "value_and_name",
                         "reduceOptions": {"calcs": ["lastNotNull"], "fields": "",
                                           "values": False}}}
 
@@ -105,7 +115,15 @@ def wz(title, query, x, y, w, h, ds=WZ, terms=None, desc=""):
                          "luceneQueryType": "Metric", "query": query,
                          "queryType": "lucene", "timeField": "@timestamp",
                          "bucketAggs": buckets, "metrics": [{"id": "1", "type": "count"}]}],
-            "fieldConfig": {"defaults": {}, "overrides": []},
+            # 건수 칸에 배경색. 심각도 표가 숫자만 나열되면 어디를 봐야 할지 알 수 없다.
+            "fieldConfig": {"defaults": {"custom": {"cellOptions": {
+                                "type": "color-background", "mode": "gradient"}},
+                            "color": {"mode": "thresholds"},
+                            "thresholds": {"mode": "absolute", "steps": [
+                                {"color": "green"}, {"color": "yellow", "value": 1},
+                                {"color": "orange", "value": 50}, {"color": "red", "value": 500}]}}
+                            if terms else {},
+                            "overrides": []},
             "options": {"showHeader": True} if terms else
                        {"legend": {"displayMode": "list", "placement": "bottom",
                                    "showLegend": True},
@@ -121,9 +139,9 @@ P.append(stat("원시 알림", "월간 알림 수", 0, y, 6, 4,
 P.append(stat("→ 사건 (병합 후)", "월간 사건 수 (병합 후)", 6, y, 6, 4,
               desc="봇이 (호스트, 유형)으로 묶어 확정한 사건 수. Zabbix 단독으로는 낼 수 없는 값."))
 P.append(stat("만성 사건", "만성 사건 수", 12, y, 6, 4,
-              desc="90일 내 반복. 자동화 1순위 후보."))
+              desc="90일 내 반복. 자동화 1순위 후보.", steps=WORSE))
 P.append(stat("자동 조치 후보 등록", "자동 조치 후보 등록", 18, y, 6, 4,
-              desc="'완료'가 아니라 '등록'이다. 실행 여부는 워크플로 기록에 있다."))
+              desc="'완료'가 아니라 '등록'이다. 실행 여부는 워크플로 기록에 있다.", steps=GOOD))
 y += 4
 P.append(textbl("월간 종합 분석 (승인 후 게시)", "/월간 종합 분석/", 0, y, 14, 11,
                 desc="LLM 서사. 승인 전에는 '검토 대기'가 표시된다."))
@@ -138,13 +156,13 @@ P.append(row("2. 사건 상세 — 무엇이 반복되나", y))
 y += 1
 P.append(textbl("주요 사건 요약 (승인 후 게시)", "/주요 사건 요약/", 0, y, 14, 11))
 P.append(textbl("반복 · 유형 · 심각도", "/반복 상위|유형별 분포|심각도 분포/", 14, y, 10, 6))
-P.append(stat("신규 사건", "신규 사건 수", 14, y + 6, 10, 5))
+P.append(stat("신규 사건", "신규 사건 수", 14, y + 6, 10, 5, steps=WORSE))
 y += 11
 
 P.append(row("3. 보안 (Wazuh) — 노출은 어떤가", y))
 y += 1
 P.append(stat("설정 준수율", "설정 준수율(%, 기간 평균)", 0, y, 6, 6, unit="percent", dec=1,
-              desc="CIS 벤치마크 통과 비율. Zabbix 에는 이 데이터가 없다."))
+              desc="CIS 벤치마크 통과 비율. Zabbix 에는 이 데이터가 없다.", steps=SCORE))
 P.append(textbl("취약점 · 상위 패키지 · 파일 무결성", "/취약점|파일 무결성 변경/", 6, y, 18, 6,
                 desc="총계가 아니라 '무엇을 고치면 대부분 사라지나'로 낸다."))
 y += 6

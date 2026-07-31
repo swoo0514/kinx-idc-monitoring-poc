@@ -166,8 +166,8 @@
     "overrides": []
    },
    "options": {
-    "colorMode": "none",
-    "graphMode": "none",
+    "colorMode": "value",
+    "graphMode": "area",
     "justifyMode": "auto",
     "orientation": "auto",
     "textMode": "value_and_name",
@@ -255,8 +255,8 @@
     "overrides": []
    },
    "options": {
-    "colorMode": "none",
-    "graphMode": "none",
+    "colorMode": "value",
+    "graphMode": "area",
     "justifyMode": "auto",
     "orientation": "auto",
     "textMode": "value_and_name",
@@ -336,7 +336,15 @@
       "mode": "absolute",
       "steps": [
        {
-        "color": "text"
+        "color": "green"
+       },
+       {
+        "color": "orange",
+        "value": 1
+       },
+       {
+        "color": "red",
+        "value": 5
        }
       ]
      }
@@ -344,8 +352,8 @@
     "overrides": []
    },
    "options": {
-    "colorMode": "none",
-    "graphMode": "none",
+    "colorMode": "value",
+    "graphMode": "area",
     "justifyMode": "auto",
     "orientation": "auto",
     "textMode": "value_and_name",
@@ -426,6 +434,10 @@
       "steps": [
        {
         "color": "text"
+       },
+       {
+        "color": "blue",
+        "value": 1
        }
       ]
      }
@@ -433,8 +445,8 @@
     "overrides": []
    },
    "options": {
-    "colorMode": "none",
-    "graphMode": "none",
+    "colorMode": "value",
+    "graphMode": "area",
     "justifyMode": "auto",
     "orientation": "auto",
     "textMode": "value_and_name",
@@ -760,8 +772,8 @@
     "overrides": []
    },
    "options": {
-    "colorMode": "none",
-    "graphMode": "none",
+    "colorMode": "value",
+    "graphMode": "area",
     "justifyMode": "auto",
     "orientation": "auto",
     "textMode": "value_and_name",
@@ -1092,7 +1104,15 @@
       "mode": "absolute",
       "steps": [
        {
-        "color": "text"
+        "color": "green"
+       },
+       {
+        "color": "orange",
+        "value": 1
+       },
+       {
+        "color": "red",
+        "value": 5
        }
       ]
      }
@@ -1100,8 +1120,8 @@
     "overrides": []
    },
    "options": {
-    "colorMode": "none",
-    "graphMode": "none",
+    "colorMode": "value",
+    "graphMode": "area",
     "justifyMode": "auto",
     "orientation": "auto",
     "textMode": "value_and_name",
@@ -1194,7 +1214,15 @@
       "mode": "absolute",
       "steps": [
        {
-        "color": "text"
+        "color": "red"
+       },
+       {
+        "color": "orange",
+        "value": 50
+       },
+       {
+        "color": "green",
+        "value": 80
        }
       ]
      }
@@ -1202,8 +1230,8 @@
     "overrides": []
    },
    "options": {
-    "colorMode": "none",
-    "graphMode": "none",
+    "colorMode": "value",
+    "graphMode": "area",
     "justifyMode": "auto",
     "orientation": "auto",
     "textMode": "value_and_name",
@@ -1448,7 +1476,37 @@
     }
    ],
    "fieldConfig": {
-    "defaults": {},
+    "defaults": {
+     "custom": {
+      "cellOptions": {
+       "type": "color-background",
+       "mode": "gradient"
+      }
+     },
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green"
+       },
+       {
+        "color": "yellow",
+        "value": 1
+       },
+       {
+        "color": "orange",
+        "value": 50
+       },
+       {
+        "color": "red",
+        "value": 500
+       }
+      ]
+     }
+    },
     "overrides": []
    },
    "options": {
