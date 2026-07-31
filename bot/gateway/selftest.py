@@ -147,7 +147,24 @@ def main():
         "syscheck path 의 호스트명이 마스킹되지 않음"
     assert masked["security"][0]["rule_id"] == "5712", "rule_id 가 전송되지 않음"
     assert mk.unmask(mk.mask("lab-web01 at 192.0.2.5")) == "lab-web01 at 192.0.2.5"
-    masking_checks = 9
+
+    # 월간 리포트 경로도 같은 규율을 받는다 — 이쪽은 나가는 곳이 고객 문서라 더 엄격하다.
+    mk2 = masking.Masker()
+    incs = [{"host": "custa-db-01", "name": "복제 지연 on custa-db-01", "prejudge": "만성",
+             "alert_count": 2, "classes": "replication", "sources": "logs:ok",
+             "analysis": "MUST-NOT-LEAK-ANALYSIS", "secret": "MUST-NOT-LEAK-FIELD"}]
+    for a in incs:
+        mk2.register("host", a["host"])
+    mblob = json.dumps(llm.build_monthly_context(
+        {"report.incidents": 1, "report.summary": "MUST-NOT-LEAK-SUMMARY"}, incs, mk2),
+        ensure_ascii=False)
+    assert "custa-db-01" not in mblob, "monthly hostname leaked"
+    assert "MUST-NOT-LEAK-FIELD" not in mblob, "monthly non-whitelisted field leaked"
+    # 사건별 분석 본문은 월간 입력에 넣지 않는다 — 월 단위 판단에 불필요하고 반출만 늘린다.
+    assert "MUST-NOT-LEAK-ANALYSIS" not in mblob, "monthly analysis body leaked"
+    # 승인 전 자리표시자를 LLM 에 넣으면 모델이 그걸 사실로 읽는다.
+    assert "MUST-NOT-LEAK-SUMMARY" not in mblob, "monthly summary placeholder leaked"
+    masking_checks = 13
 
     # 열화 모드 — LLM 어댑터 전멸 시 선판정만으로 회신 (외부 호출 0)
     for k in ("ANTHROPIC_API_KEY", "OLLAMA_URL"):
@@ -279,10 +296,18 @@ def _remediation_checks() -> int:
         ctx = {"alerts": [{"prejudge": {"verdict": "만성"}}]}
         assert triage._push_gated(inc, ctx, "단일 축·교차 신호 없음") == \
             {"ok": False, "skipped": True}
+
+        # 근거 축 기록 — 조회 실패와 신호 없음의 구분(G1)이 Keep 레코드까지 간다.
+        # 이게 비면 월간 리포트의 "로그를 근거로 판단한 사건 수"가 통째로 0이 된다.
+        assert triage._sources_note(
+            {"sources": {"security": "ok", "logs": "unavailable"}}) == \
+            "logs:unavailable,security:ok"
+        assert triage._sources_note({}) == ""
+        assert triage._sources_note({"sources": "깨진값"}) == ""
     finally:
         if saved is not None:
             os.environ["KEEP_URL"] = saved
-    return 8
+    return 11
 
 
 def _fastpath_checks() -> int:

@@ -13,6 +13,17 @@ log = logging.getLogger("gateway.triage")
 _bg_tasks: set = set()
 
 
+def _sources_note(context: dict) -> str:
+    """"logs:ok,security:unavailable" — 이 사건이 어느 축을 실제로 읽었는지 Keep 에 남긴다.
+
+    조회 실패와 신호 없음을 구분하는 G1 계약을 저장까지 밀어낸 것이다. 이 기록이 없으면
+    월간 리포트에서 "로그를 근거로 판단한 사건"을 셀 수 없고, 관제 화면에서도 어느 축이
+    비어 있었는지 사후에 알 수 없다.
+    """
+    s = context.get("sources") or {}
+    return ",".join("%s:%s" % (k, s[k]) for k in sorted(s)) if isinstance(s, dict) else ""
+
+
 def _spawn_bg(coro) -> None:
     task = asyncio.create_task(coro)
     _bg_tasks.add(task)
@@ -55,7 +66,8 @@ async def run(event_id: str, trigger_id: str, sev: str,
     posted = slack.post_triage(name, sev, host, verdict, reply["text"],
                                sources=context.get("sources"))
     timings["slack_s"] = round(time.monotonic() - t2, 2)
-    keep.push_alert(name, sev, host, reply["text"], prejudge=str(verdict))
+    keep.push_alert(name, sev, host, reply["text"], prejudge=str(verdict),
+                    sources=_sources_note(context))
 
     timings["total_s"] = round(time.monotonic() - t0, 2)
     log.info("triage done event=%s provider=%s degraded=%s timings=%s",
@@ -82,7 +94,8 @@ def _push_gated(inc, context: dict, reason: str) -> dict:
     return keep.push_alert(inc.alerts[0].alert_name or "(알림명 없음)",
                            inc.dominant_sev(), inc.host, note,
                            prejudge=verdict, fingerprint=inc.fingerprint(),
-                           classes=classes, alert_count=len(inc.alerts))
+                           classes=classes, alert_count=len(inc.alerts),
+                           sources=_sources_note(context))
 
 
 async def run_incident(inc) -> dict:
@@ -149,7 +162,8 @@ async def run_incident(inc) -> dict:
     # 봇 알림은 사건 fingerprint로 고정 → 홈즈 심층분석이 같은 행에 enrich (별개 알림 방지)
     await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"],
                             chronic, fingerprint=fp, classes=classes,
-                            alert_count=n, merge=merge_note)
+                            alert_count=n, merge=merge_note,
+                            sources=_sources_note(context))
 
     # 심층조사 자동 발동(read=auto 규칙): SEV1/봇 열화 + 비-MSP → 백그라운드 HolmesGPT.
     # 결과는 별개 알림이 아니라 (1)Slack 원래 스레드 답글 (2)Keep 같은 알림 Note enrich 로.

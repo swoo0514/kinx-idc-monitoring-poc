@@ -19,7 +19,8 @@ _SEV = {"SEV1": "critical", "SEV2": "high", "SEV3": "warning", "SEV4": "info", "
 def push_alert(name: str, sev: str, host: str, analysis: str,
                prejudge: str = "", service: str = "", source: str = "kinx-bot",
                fingerprint: str = "", playbook: str = "",
-               classes: str = "", alert_count: int = 0, merge: str = "") -> dict:
+               classes: str = "", alert_count: int = 0, merge: str = "",
+               sources: str = "") -> dict:
     """분석 담은 알림을 Keep에 전송. 실패해도 예외를 던지지 않음(봇 흐름 보호).
     fingerprint 지정 시 Keep이 그 값으로 디듑 → 같은 사건은 한 행에 모임(홈즈 enrich 대상).
     source: 빠른 봇 분석=kinx-bot / HolmesGPT 심층조사=holmesgpt 로 구분.
@@ -31,7 +32,11 @@ def push_alert(name: str, sev: str, host: str, analysis: str,
     prejudge 에는 반드시 **만성/재발/신규 판정**이 들어가야 한다. Keep 에서 이 값으로 필터·facet
     해서 "무엇이 반복 최다인가"를 보고, 그것이 자동화 1순위가 된다. 병합 건수 같은 다른 값을
     넣으면 필터가 통째로 무의미해진다(2026-07-29 이 자리에 "2건 병합"이 들어가고 있었다).
-    merge 는 병합 요약을 따로 담는 필드다."""
+    merge 는 병합 요약을 따로 담는 필드다.
+
+    sources 는 그 사건에서 **어느 축을 실제로 읽었는지**의 기록이다("logs:ok,security:ok").
+    G1 의 3상태 계약을 알림 레코드까지 끌고 온 것이다 — 이게 없으면 나중에 "이 사건은
+    로그를 보고 판단한 것인가"를 알 방법이 없다. 월간 리포트의 근거 커버리지가 여기서 나온다."""
     url = os.environ.get("KEEP_URL", "").rstrip("/")
     if not url:
         log.info("[keep skipped: no KEEP_URL] %s", name)
@@ -50,6 +55,8 @@ def push_alert(name: str, sev: str, host: str, analysis: str,
         payload["alert_count"] = alert_count
     if merge:
         payload["merge"] = merge
+    if sources:
+        payload["sources"] = sources
     try:
         r = httpx.post(f"{url}/alerts/event/keep",
                        headers={"Content-Type": "application/json", "x-api-key": key},

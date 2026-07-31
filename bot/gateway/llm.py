@@ -99,6 +99,77 @@ def build_user_prompt(masked_ctx: dict) -> str:
     return head + json.dumps(masked_ctx, ensure_ascii=False, indent=1)
 
 
+MONTHLY_SYSTEM = """\
+당신은 MSP 월간 운영 리포트의 분석 절을 쓴다. 입력은 한 고객사의 한 달치 **사건 집계**이며,
+개별 사건의 초동 분석은 이미 끝나 있다. 같은 내용을 다시 쓰지 말고, **한 달을 관통하는
+판단**만 쓴다. 읽는 사람은 고객사 담당자다.
+
+반드시 이 네 절만, 이 순서로, 한국어로 쓴다. 전체 900자 이내.
+
+**1) 이번 달 한 줄**
+숫자를 나열하지 말고 이 달의 성격을 한 문장으로.
+
+**2) 반복 패턴과 근본 원인 후보**
+같은 유형이 반복됐다면 무엇이 공통 원인일 수 있는지. 근거가 약하면 "가능성"으로 쓴다.
+
+**3) 다음 달 권고 (최대 3개)**
+고객이 실제로 결정할 수 있는 것만. 우선순위 순.
+
+**4) 판단의 한계**
+집계에서 빠졌거나 근거가 부족한 부분을 스스로 밝힌다.
+
+규칙:
+- 입력에 없는 수치·호스트·원인을 지어내지 않는다. 모르면 "집계 범위 밖"이라고 쓴다.
+- 사건 이름은 입력에 있는 그대로 인용한다. 토큰([host-1] 등)은 그대로 두면 된다.
+- 계약 범위를 넘는 조치(고객 시스템 변경 지시)를 단정하지 않는다. "협의"로 쓴다.
+- 보안 절의 상태가 "조회 불가"면 보안에 대해 안전하다고 쓰지 않는다.
+"""
+
+
+def build_monthly_context(stats: dict, incidents: list, masker: Masker) -> dict:
+    """월간 분석 화이트리스트. 여기 없는 필드는 구조적으로 전송되지 않는다(전송 명세표 원칙).
+
+    개별 로그 라인·보안 경보 원문은 **의도적으로 제외**한다. 월 단위 판단에 필요 없고,
+    고객 문서로 나가는 경로라 반출 표면을 최소로 유지한다.
+    """
+    # 승인 대기 자리표시자("검토 대기")는 넣지 않는다 — 모델이 그것을 사실로 읽는다.
+    skip = ("report.summary", "report.insight")
+    out = {k[len("report."):]: v for k, v in stats.items()
+           if k.startswith("report.") and k not in skip}
+    out["incidents"] = [
+        {"name": masker.mask(str(a.get("name") or "")),
+         "verdict": str(a.get("prejudge") or "")[:20],
+         "alert_count": int(a.get("alert_count") or 1),
+         "classes": str(a.get("classes") or ""),
+         "sources": str(a.get("sources") or "")}
+        for a in incidents[:30]
+    ]
+    return out
+
+
+def monthly_reply(stats: dict, incidents: list) -> dict:
+    """월간 종합 분석 1회. 사건별 분석 재활용과 별개로 '달 전체'를 입력으로 한 번만 부른다."""
+    masker = Masker()
+    for a in incidents:
+        masker.register("host", str(a.get("host") or ""))
+    payload = build_monthly_context(stats, incidents, masker)
+    user = ("다음은 한 고객사의 한 달치 사건 집계다. 월간 리포트의 분석 절을 작성하라.\n\n"
+            + json.dumps(payload, ensure_ascii=False, indent=1))
+    t0 = time.monotonic()
+    for adapter in (ClaudeAdapter(), OllamaAdapter()):
+        if not adapter.available():
+            continue
+        try:
+            text = adapter.complete(MONTHLY_SYSTEM, user)
+            return {"text": masker.unmask(text), "provider": adapter.name,
+                    "elapsed_s": round(time.monotonic() - t0, 2), "degraded": False}
+        except Exception as e:
+            log.warning("monthly adapter %s failed: %s", adapter.name, e)
+    # 열화 — 리포트는 실시간이 아니므로 빈 문장 대신 "생성 실패"를 그대로 남긴다.
+    return {"text": "(월간 분석 생성 실패 — LLM 응답 없음. 집계 수치는 유효하다.)",
+            "provider": "none", "elapsed_s": round(time.monotonic() - t0, 2), "degraded": True}
+
+
 def triage_reply(context: dict, sev: str) -> dict:
     """마스킹 → Claude/Ollama/열화 → 역치환 → 회신 dict. 예외를 위로 던지지 않음."""
     masker = Masker()

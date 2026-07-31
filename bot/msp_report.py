@@ -98,6 +98,96 @@ def summarize(a: dict) -> str:
     return "\n".join(out)
 
 
+SEV_ORDER = ("Critical", "High", "Medium", "Low")
+# 팀 Slack 컷라인(레벨 10) 위로 승격해 둔 파일 무결성 룰. 이 아래는 대시보드용이다.
+FIM_PROMOTED_MIN = 12
+
+
+def _wz_search(index: str, body: dict) -> dict:
+    """Wazuh Indexer 검색. 실패는 예외로 올린다 — 호출측이 '0건'과 구분해야 하기 때문이다."""
+    import httpx
+    url = os.environ.get("WAZUH_INDEXER_URL", "").rstrip("/")
+    if not url:
+        raise RuntimeError("WAZUH_INDEXER_URL 미설정")
+    auth = (os.environ.get("WAZUH_INDEXER_USER", ""),
+            os.environ.get("WAZUH_INDEXER_PASSWORD", ""))
+    # 랩 인덱서는 자체서명 TLS. 프로덕션은 사내 CA 로 verify=True 로 돌려야 한다.
+    r = httpx.post(f"{url}/{index}/_search", json=body, auth=auth, verify=False, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+def _terms(index: str, body: dict, field: str) -> Counter:
+    """terms 집계. 매핑이 text 면 field.keyword 로 한 번 더 시도한다."""
+    for f in (field, field + ".keyword"):
+        b = dict(body, size=0, aggs={"g": {"terms": {"field": f, "size": 20}}})
+        try:
+            buckets = _wz_search(index, b)["aggregations"]["g"]["buckets"]
+            return Counter({str(x["key"]): x["doc_count"] for x in buckets})
+        except Exception:
+            continue
+    raise RuntimeError("terms 집계 실패: %s" % field)
+
+
+def security_posture(agent_filter: str, days: int) -> dict:
+    """SCA 준수율 · 파일 무결성 · 취약점 재고. 상태를 반드시 함께 반환한다.
+
+    **조회에 실패했을 때 0 을 내면 안 된다.** 고객 문서에서 "취약점 0건"은 안전 신호로
+    읽히므로, 조회 실패를 정상으로 오독시키는 것은 침묵보다 나쁘다. G1(조회 실패 != 신호
+    없음)을 리포트에 적용한 것이고, 여기서는 그 오독의 대상이 고객이라 더 엄격하다.
+    """
+    if not os.environ.get("WAZUH_INDEXER_URL"):
+        return {"status": "disabled"}
+    who = [{"wildcard": {"agent.name": "*%s*" % agent_filter}}] if agent_filter else []
+    win = {"range": {"@timestamp": {"gte": "now-%dd" % days}}}
+    try:
+        # 설정 준수율 — SCA 점수는 스캔마다 기록되므로 기간 평균으로 본다.
+        sca = _wz_search("wazuh-alerts-*", {
+            "size": 0, "query": {"bool": {"must": who + [win, {"exists": {"field": "data.sca.score"}}]}},
+            "aggs": {"avg": {"avg": {"field": "data.sca.score"}}, "hosts": {"cardinality": {"field": "agent.id"}}},
+        })
+        agg = sca.get("aggregations", {})
+        score = agg.get("avg", {}).get("value")
+        scanned = agg.get("hosts", {}).get("value") or 0
+
+        # 파일 무결성 — 전체 변경 건수와, 그중 승격 룰에 걸린 건수를 나눠 센다.
+        fim_q = {"bool": {"must": who + [win, {"term": {"rule.groups": "syscheck"}}]}}
+        fim_all = _wz_search("wazuh-alerts-*", {"size": 0, "query": fim_q})["hits"]["total"]["value"]
+        fim_hi = _wz_search("wazuh-alerts-*", {
+            "size": 0, "query": {"bool": {"must": who + [win, {"term": {"rule.groups": "syscheck"}},
+                                                         {"range": {"rule.level": {"gte": FIM_PROMOTED_MIN}}}]}},
+        })["hits"]["total"]["value"]
+
+        # 취약점은 시계열이 아니라 **현재 재고 스냅샷**이라 기간 조건을 걸지 않는다.
+        vuln = _terms("wazuh-states-vulnerabilities-*",
+                      {"query": {"bool": {"must": who}} if who else {"query": {"match_all": {}}}},
+                      "vulnerability.severity")
+    except Exception as e:
+        return {"status": "unavailable", "why": str(e)[:120]}
+
+    return {"status": "ok", "compliance": round(score, 1) if score is not None else None,
+            "scanned": int(scanned), "fim_all": int(fim_all), "fim_promoted": int(fim_hi),
+            "vuln": vuln}
+
+
+def posture_items(p: dict) -> dict:
+    """보안 절을 trapper 값으로. 상태가 ok 가 아니면 **숫자를 만들지 않는다.**"""
+    if p.get("status") != "ok":
+        why = {"disabled": "보안 연동 미설정 — 이 절은 집계 대상이 아님",
+               "unavailable": "조회 불가 — 이 절의 수치는 집계되지 않음"}.get(p.get("status"), "상태 미상")
+        return {"report.security_status": why}
+    if p.get("compliance") is None:
+        comp = {"report.security_status": "설정 점검 결과 없음 — 준수율 미산출"}
+    else:
+        comp = {"report.compliance": p["compliance"],
+                "report.security_status": "정상 집계 (점검 대상 %d대)" % p["scanned"]}
+    vuln = " / ".join("%s %d" % (s, p["vuln"][s]) for s in SEV_ORDER if p["vuln"].get(s))
+    return dict(comp, **{
+        "report.fim": "승격 룰 %d건 / 전체 파일 변경 %d건" % (p["fim_promoted"], p["fim_all"]),
+        "report.vuln": vuln or "해당 심각도 취약점 없음",
+    })
+
+
 def fetch_alerts(keep_url: str, api_key: str) -> list:
     import httpx
     r = httpx.get(f"{keep_url.rstrip('/')}/alerts",
@@ -168,6 +258,14 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
     repeat = Counter(a.get("name") or "(이름 없음)" for a in incidents
                      if verdict_of(a) in ("만성", "재발"))
 
+    # 근거 커버리지 — 로그·보안을 실제로 읽고 판단한 사건이 몇 건인가.
+    # 리포트에 로그 본문을 싣지 않는 대신 이 사실만 싣는다. 실환경 Zabbix 는 log[] 아이템이
+    # 0/321 대라, 이 문장 자체가 기존 리포트에 존재할 수 없는 종류의 내용이다.
+    # sources 필드가 없는 옛 레코드는 세지 않는다 — 모르는 것을 확보로 세면 과장이 된다.
+    with_src = [a for a in incidents if a.get("sources")]
+    ev_logs = sum(1 for a in with_src if "logs:ok" in str(a.get("sources")))
+    ev_sec = sum(1 for a in with_src if "security:ok" in str(a.get("sources")))
+
     return {
         "report.alerts": len(raw),
         "report.incidents": len(incidents),
@@ -180,11 +278,16 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
                            or "분류 없음",
         "report.by_severity": " / ".join(f"{s}:{n}" for s, n in sev.most_common()) or "없음",
         "report.response_s": response,
-        # 승인 전에는 서사가 나가지 않는다. 호출측(--approve)이 이 값을 덮어쓴다.
+        "report.evidence": ("로그 근거 %d건 / 보안 근거 %d건 (근거 기록이 있는 사건 %d건 중)"
+                            % (ev_logs, ev_sec, len(with_src))) if with_src
+                           else "근거 기록 없음 — 이 항목 도입 이전 사건",
+        # 승인 전에는 서사가 나가지 않는다. 호출측(--approve)이 이 두 값을 덮어쓴다.
         "report.summary": PENDING,
+        "report.insight": PENDING,
         "report.period": "%s ~ %s (%d일)" % (since.astimezone().strftime("%Y-%m-%d"),
                                              datetime.now().strftime("%Y-%m-%d"), days),
         "_summary_draft": summary,
+        "_incidents": incidents,
         "_holmes": len(holmes),
         "_merged": len(merged),
         "_folded": sum(int(a.get("alert_count") or 1) for a in merged),
@@ -262,7 +365,7 @@ def selftest() -> None:
         {"lastReceived": (now - timedelta(seconds=30)).isoformat(),
          "source": ["zabbix"], "host": "h1", "name": "원시"},
         mk(BOT_SOURCE, name="사건", prejudge="만성", classes="auth_security",
-           alert_count=3, analysis=body),
+           alert_count=3, analysis=body, sources="logs:ok,security:ok"),
         mk(BOT_SOURCE, name="디스크", prejudge="신규", severity="warning",
            analysis="**② 원인**\n- 로그 급증.\n**④ 권장 조치**\n- 로테이션."),
         mk(BOT_SOURCE, name="형식없음", prejudge="재발", analysis="번호 절 없는 자유 텍스트."),
@@ -289,9 +392,33 @@ def selftest() -> None:
     ck("자유 텍스트" in d, "절 없는 분석의 폴백 실패")
     ck("[만성]" in d, "판정 표기 누락")
 
+    ck(r["report.insight"] == PENDING, "월간 분석도 승인 전에는 나가면 안 된다")
+
+    # 근거 커버리지 — sources 기록이 있는 사건만 센다.
+    ck("로그 근거 1건" in r["report.evidence"] and "보안 근거 1건" in r["report.evidence"],
+       "근거 커버리지 오집계: %s" % r["report.evidence"])
+
     # sender 는 내부 필드를 보내면 안 된다(Zabbix 에 그런 아이템이 없어 failed 로 잡힌다).
     ck(all(not k.startswith("_") for k in r if k.startswith("report.")) and
        any(k.startswith("_") for k in r), "내부 필드 규약 위반")
+
+    # 보안 절 — 조회 실패는 절대 숫자를 만들면 안 된다. 고객 문서에서 "취약점 0건" 은
+    # 안전 신호로 읽히므로, 실패를 정상으로 오독시키는 것은 침묵보다 나쁘다.
+    for st in ("unavailable", "disabled"):
+        p = posture_items({"status": st})
+        ck("report.vuln" not in p and "report.compliance" not in p and "report.fim" not in p,
+           "%s 인데 보안 숫자를 만들었다" % st)
+        ck("report.security_status" in p, "%s 상태를 리포트에 알리지 않았다" % st)
+    p = posture_items({"status": "ok", "compliance": 52.4, "scanned": 4,
+                       "fim_all": 107, "fim_promoted": 3,
+                       "vuln": Counter({"High": 10, "Critical": 13, "Low": 5})})
+    ck(p["report.compliance"] == 52.4 and "4대" in p["report.security_status"], "정상 집계 형식")
+    ck(p["report.vuln"].startswith("Critical 13 / High 10"), "취약점 심각도 정렬: %s" % p["report.vuln"])
+    ck("승격 룰 3건" in p["report.fim"], "FIM 형식")
+    # 점검 결과가 없으면 준수율을 0% 로 만들지 않는다(0% 는 "전부 실패" 로 읽힌다).
+    p0 = posture_items({"status": "ok", "compliance": None, "scanned": 0,
+                        "fim_all": 0, "fim_promoted": 0, "vuln": Counter()})
+    ck("report.compliance" not in p0, "점검 결과 없음을 준수율 0 으로 냈다")
 
     print("ALL OK (%d checks)" % n)
 
@@ -301,10 +428,14 @@ def main():
     ap.add_argument("--selftest", action="store_true", help="Keep 없이 집계·승인 게이트 검사")
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--host-filter", default="", help="이 문자열이 host 에 포함된 알림만")
+    ap.add_argument("--agent-filter", default="",
+                    help="Wazuh agent.name 필터. 생략 시 --host-filter 를 쓴다")
     ap.add_argument("--target", help="값을 받을 Zabbix 호스트명 (예: report-Customer-B)")
     ap.add_argument("--send", action="store_true", help="실제 전송. 없으면 계산만(드라이런)")
     ap.add_argument("--approve", action="store_true",
                     help="LLM 서사(report.summary)까지 전송. 사람이 초안을 검토한 뒤에만 쓴다")
+    ap.add_argument("--insight", action="store_true",
+                    help="월간 종합 분석 LLM 1회 호출(고객당 월 1회). 승인 게이트 아래에 있다")
     ap.add_argument("--draft-to-keep", action="store_true",
                     help="요약 초안을 Keep 승인 큐에 등록(데모 B 와 같은 승인 UI)")
     ap.add_argument("--keep-url", default=os.environ.get("KEEP_URL", ""))
@@ -320,6 +451,11 @@ def main():
         sys.exit("[!] --keep-url 또는 환경변수 KEEP_URL 이 필요하다")
     alerts = fetch_alerts(a.keep_url, os.environ.get("KEEP_API_KEY", ""))
     res = aggregate(alerts, a.days, a.host_filter)
+
+    posture = security_posture(a.agent_filter or a.host_filter, a.days)
+    res.update(posture_items(posture))
+    if posture.get("why"):
+        print("[!] 보안 조회 실패: %s" % posture["why"])
 
     print("=" * 62)
     print("MSP 월간 리포트 집계  (Keep %d건 조회, 창 안 %d건)" % (len(alerts), res["_window_alerts"]))
@@ -342,22 +478,39 @@ def main():
                   "붙는다(로드맵 G11). 만성/신규 수치를 전체로 읽지 말 것.")
     print("  심층조사(홈즈) %d건" % res["_holmes"])
 
+    insight = ""
+    if a.insight:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from gateway import llm
+        r = llm.monthly_reply({k: v for k, v in res.items() if not k.startswith("_")},
+                              res["_incidents"])
+        insight = r["text"]
+        print("\n[llm] 월간 분석 %s (%.1fs)%s"
+              % (r["provider"], r["elapsed_s"], " · 열화" if r["degraded"] else ""))
+
     print()
     print("-" * 62)
-    print("주요 사건 요약 초안  (LLM 서사 — 승인 전에는 전송되지 않는다)")
+    print("승인 대기 초안  (LLM 서사 — 승인 전에는 전송되지 않는다)")
     print("-" * 62)
+    print("[사건 요약]")
     print(res["_summary_draft"])
+    if insight:
+        print("\n[월간 종합 분석]")
+        print(insight)
 
+    draft = res["_summary_draft"] + (("\n\n[월간 종합 분석]\n" + insight) if insight else "")
     if a.draft_to_keep:
-        _push_draft(a.target or "(미지정)", res["_summary_draft"])
+        _push_draft(a.target or "(미지정)", draft)
 
     if a.approve:
         # 사람이 위 초안을 읽고 승인한 경우에만 서사가 실린다. 고객에게 나가는 문서이므로
         # 시스템 변경(Ansible 조치)과 같은 등급으로 다룬다 — 읽기=자동/쓰기=승인.
         res["report.summary"] = res["_summary_draft"]
-        print("\n[승인됨] report.summary 에 서사를 싣는다.")
+        if insight:
+            res["report.insight"] = insight
+        print("\n[승인됨] 서사를 리포트에 싣는다.")
     else:
-        print("\n[미승인] report.summary = %r 로 나간다. 승인하려면 --approve." % PENDING)
+        print("\n[미승인] LLM 서사 항목은 %r 로 나간다. 승인하려면 --approve." % PENDING)
 
     if not a.send:
         print("\n[드라이런] 전송하지 않았다. 보내려면 --send --target <호스트명>")
