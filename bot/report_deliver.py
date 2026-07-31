@@ -237,9 +237,12 @@ def grafana_auth() -> dict:
 
 def render(base: str, uid: str, customer: str, width: int, height: int, days: int) -> bytes:
     q = urllib.parse.urlencode({
-        "orgId": 1, "width": width, "height": height, "kiosk": "", "theme": "light",
+        "orgId": 1, "width": width, "height": height, "theme": "light",
         "from": "now-%dd" % days, "to": "now", "var-customer": customer})
-    url = "%s/render/d/%s/report?%s" % (base.rstrip("/"), uid, q)
+    # kiosk 는 **값 없는 플래그**다. urlencode 로 넣으면 "kiosk=" 가 되어 적용되지 않고
+    # 상단 내비게이션(Home/Dashboards/Export/Share)이 그대로 PDF 에 찍힌다 —
+    # 고객에게 나가는 문서에 우리 도구 UI 가 보이면 안 된다.
+    url = "%s/render/d/%s/report?%s&kiosk" % (base.rstrip("/"), uid, q)
     png = _get(url, grafana_auth())
     if png[:8] != b"\x89PNG\r\n\x1a\n":
         raise RuntimeError("렌더 결과가 PNG 가 아니다(권한·렌더러 확인): %r" % png[:120])
