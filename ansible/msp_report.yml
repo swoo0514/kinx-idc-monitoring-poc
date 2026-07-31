@@ -1,0 +1,82 @@
+---
+# MSP 월간 리포트 — 봇이 계산한 값을 받을 Zabbix trapper 아이템을 고객별로 만든다.
+# 근거·전략은 ansible/DEPLOY_GUIDE.md "MSP 월간 리포트".
+#
+# 왜 Zabbix 인가: 매니저 답변(B-7) 상 팀이 Zabbix Scheduled report 를 이미 운용 중이다.
+# 새 리포트 도구를 만들지 않고 그 파이프에 내용을 채운다 — 학습비용 0, 발송 인프라 0.
+# 값 주입은 bot/msp_report.py (Keep 집계 → sender 프로토콜)가 한다.
+- name: 사전 확인 — Zabbix API 대상이 인벤토리에 있는가
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: 인벤토리에 [zabbix] 그룹이 있는지 확인
+      ansible.builtin.assert:
+        that: "'zabbix' in groups and groups['zabbix'] | length > 0"
+        fail_msg: >-
+          인벤토리에 [zabbix] 그룹이 없어 아무 작업도 하지 않고 중단합니다.
+          이 플레이북의 대상은 SSH 가 아니라 Zabbix API 이므로 리포의 inventory.ini 를 씁니다.
+          현재 인벤토리의 그룹 - {{ groups.keys() | list | join(', ') }}
+
+- name: Create MSP monthly report metric hosts (Zabbix trapper)
+  hosts: zabbix
+  gather_facts: false
+  vars_files:
+    - customers.yml
+  vars:
+    ansible_zabbix_auth_key: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+    # 봇만 계산할 수 있는 값들. Zabbix 자체로는 어느 것도 낼 수 없다 —
+    # 병합·만성판정·조치이력·계약범위는 게이트웨이와 Keep 에만 있다.
+    report_items:
+      - {key: "report.alerts", name: "월간 알림 수", vtype: "numeric_unsigned"}
+      - {key: "report.incidents", name: "월간 사건 수 (병합 후)", vtype: "numeric_unsigned"}
+      - {key: "report.chronic", name: "만성 사건 수", vtype: "numeric_unsigned"}
+      - {key: "report.novel", name: "신규 사건 수", vtype: "numeric_unsigned"}
+      # "완료"가 아니라 "후보 등록"이다 — 실제 실행 여부는 Keep 워크플로 쪽 기록이고
+      # 알림 레코드만으로는 알 수 없다. 이름으로 그 경계를 드러낸다.
+      - {key: "report.auto_candidates", name: "자동 조치 후보 등록", vtype: "numeric_unsigned"}
+      - {key: "report.top_repeat", name: "반복 상위 3종", vtype: "text"}
+      - {key: "report.by_class", name: "유형별 분포", vtype: "text"}
+      - {key: "report.period", name: "집계 기간", vtype: "text"}
+  tasks:
+    - name: 리포트 호스트그룹 생성 (고객 그룹 + 공통)
+      community.zabbix.zabbix_group:
+        state: present
+        host_groups: >-
+          {{ (customers | map(attribute='host_group') | list + ['Reports']) | unique | list }}
+
+    # 고객 그룹에 넣어야 수신자 권한 렌더링이 걸린다(중첩 그룹 권한 상속). Reports 는
+    # 대시보드 위젯이 리포트 호스트만 고르기 위한 공통 필터용이다 — cert 호스트와 같은 방식.
+    - name: 고객별 리포트 호스트 등록
+      community.zabbix.zabbix_host:
+        host_name: "report-{{ item.host_group | regex_replace('^.*/', '') }}"
+        visible_name: "{{ item.host_group | regex_replace('^.*/', '') }} 월간 리포트"
+        host_groups:
+          - "{{ item.host_group }}"
+          - "Reports"
+        status: enabled
+        state: present
+        # trapper 는 값을 밖에서 밀어넣으므로 폴링 인터페이스가 필요 없다.
+        interfaces: []
+      loop: "{{ customers }}"
+      loop_control:
+        label: "report-{{ item.host_group | regex_replace('^.*/', '') }}"
+
+    - name: 리포트 지표 아이템 생성 (고객 × 지표)
+      community.zabbix.zabbix_item:
+        name: "{{ item.1.name }}"
+        host_name: "report-{{ item.0.host_group | regex_replace('^.*/', '') }}"
+        state: present
+        params:
+          type: zabbix_trapper
+          key: "{{ item.1.key }}"
+          value_type: "{{ item.1.vtype }}"
+      loop: "{{ customers | product(report_items) | list }}"
+      loop_control:
+        label: "{{ item.0.host_group | regex_replace('^.*/', '') }} / {{ item.1.key }}"
+
+    - name: 결과 요약
+      ansible.builtin.debug:
+        msg:
+          - "리포트 호스트 {{ customers | length }}개 × 지표 {{ report_items | length }}종"
+          - "값 주입: python bot/msp_report.py --customer <이름> --send"
+          - "다음: Zabbix UI 에서 대시보드 구성 후 Reports > Scheduled reports 등록"
