@@ -209,11 +209,19 @@ def posture_items(p: dict) -> dict:
             return " / ".join("%s %d" % (s, c[s]) for s in SEV_ORDER if c.get(s))
         new = p.get("vuln_new") or Counter()
         total = sum(p["vuln"].values())
-        # 실행 가능한 숫자를 앞에 둔다 — "이번 달 새로 생긴 것" 이 먼저고 재고 총계는 뒤다.
-        out["report.vuln"] = ("이번 달 신규 %d건 (%s) · 전체 재고 %d건 (%s)"
-                              % (sum(new.values()), sev_line(new) or "없음",
-                                 total, sev_line(p["vuln"]) or "없음")) if total \
-            else "취약점 재고 없음"
+        n_new = sum(new.values())
+        if not total:
+            out["report.vuln"] = "취약점 재고 없음"
+        elif n_new >= total * 0.95:
+            # 에이전트를 이번 기간에 처음 붙이면 재고 전량이 "이번 달 탐지" 로 잡힌다.
+            # 그대로 내면 이번 달에 취약점 1.4만 건이 새로 생긴 것처럼 읽힌다 — 기준선이라고 밝힌다.
+            out["report.vuln"] = ("최초 스캔 기준선 — 재고 %d건 (%s). 신규 증분은 다음 기간부터 유효"
+                                  % (total, sev_line(p["vuln"])))
+        else:
+            # 실행 가능한 숫자를 앞에 둔다 — "이번 달 새로 생긴 것" 이 먼저고 재고 총계는 뒤다.
+            out["report.vuln"] = ("이번 달 신규 %d건 (%s) · 전체 재고 %d건 (%s)"
+                                  % (n_new, sev_line(new) or "없음",
+                                     total, sev_line(p["vuln"])))
         pkg = p.get("vuln_pkg") or Counter()
         if pkg:
             top = pkg.most_common(3)
@@ -475,6 +483,10 @@ def selftest() -> None:
     ck(p["report.vuln_top"].startswith("kernel 14건 / glibc 8건 / curl 4건")
        and "93%" in p["report.vuln_top"], "상위 패키지 형식: %s" % p["report.vuln_top"])
     ck("승격 룰 3건" in p["report.fim"], "FIM 형식")
+    # 최초 스캔이면 재고 전량이 신규로 잡힌다 — "이번 달 1.4만 건 발생" 으로 읽히면 안 된다.
+    pb = posture_items({"status": "ok", "compliance": 1.0, "scanned": 1,
+                        "vuln": Counter({"High": 100}), "vuln_new": Counter({"High": 100})})
+    ck(pb["report.vuln"].startswith("최초 스캔 기준선"), "기준선 표기 누락: %s" % pb["report.vuln"])
     # 점검 결과가 없으면 준수율을 0% 로 만들지 않는다(0% 는 "전부 실패" 로 읽힌다).
     p0 = posture_items({"status": "ok", "compliance": None, "scanned": 0,
                         "fim_all": 0, "fim_promoted": 0, "vuln": Counter()})
