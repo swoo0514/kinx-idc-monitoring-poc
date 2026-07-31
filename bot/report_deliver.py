@@ -461,10 +461,11 @@ def main():
     else:
         pdf = png_to_pdf_direct(png)
     pages = pdf.count(b"/Type /Page ")
-    # 기본 출력을 **리포 밖**에 둔다. 고객 데이터가 담긴 산출물이 작업 디렉토리에 떨어지면
+    # 기본 출력은 **private/report/**. 고객 데이터가 담긴 산출물이 작업 디렉토리에 떨어지면
     # 실수로 커밋된다(2026-07-31 실측: 워크플로 실행 후 bot/ 에 PDF 가 생겨 git status 에 떴다).
+    # private/ 는 리포 규칙상 커밋 금지 디렉토리라 실환경 데이터의 정해진 자리다.
     out_dir = os.environ.get("REPORT_OUT_DIR") or os.path.join(
-        os.path.expanduser("~"), "msp-reports")
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "private", "report")
     if a.out:
         out = a.out
     else:
