@@ -95,7 +95,7 @@
          {
           "targetBlank": false,
           "title": "이 호스트 로그 보기",
-          "url": "/d/kinx-overview?var-host=${__value.raw}"
+          "url": "/d/kinx-overview?var-host=${__value.raw}&from=${__from}&to=${__to}"
          }
         ]
        }
@@ -583,7 +583,7 @@
       {
        "targetBlank": true,
        "title": "Wazuh 대시보드에서 심층 조사",
-       "url": "https://WAZUH_DASHBOARD_HOST/app/threat-hunting#/overview/?tab=general&tabView=dashboard&_a=(filters:!(),query:(language:kuery,query:''))&_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-24h,to:now))"
+       "url": "https://1.201.177.127/app/threat-hunting#/overview/?tab=general&tabView=dashboard&_a=(filters:!(),query:(language:kuery,query:''))&_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-24h,to:now))"
       }
      ],
      "mappings": [],
