@@ -23,10 +23,7 @@ def zt(item, host="/^report-/", qtype="0", fmt="time_series"):
             "application": {"filter": ""}, "item": {"filter": item},
             "itemTag": {"filter": ""}, "macro": {"filter": ""}, "proxy": {"filter": ""},
             "functions": [], "textFilter": "", "resultFormat": fmt,
-            # useTrends=false 필수. 데이터소스가 trendsFrom=7d 라 30일 범위는 trends 를 보는데,
-            # 리포트 지표는 월 1회 찍히는 점이라 trends(시간별 집계)에 존재하지 않는다.
-            # default 로 두면 float 아이템(준수율 등)이 조용히 No data 가 된다(2026-07-31 실측:
-            # 30일 frames=0 / 6시간 frames=1 / useTrends=false 30일 frames=1).
+            # useTrends=false 필수 — 월 1회 찍히는 값은 trends 에 없어 조용히 No data 가 된다.
             "options": {"showDisabledItems": False, "skipEmptyValues": False,
                         "useTrends": "false", "useZabbixValueMapping": False}}
 
@@ -236,15 +233,12 @@ DASH = {
          "query": {"queryType": "group", "group": "/^Customers.Customer-/", "host": "",
                    "application": "", "item": "", "itemTag": "",
                    "showDisabledItems": False}},
-        # 고객 그룹에는 실제 감시 대상 외에 **가상 호스트**도 들어 있다 — 리포트 값을 받는
-        # trapper 호스트와 도메인별 인증서 호스트다(둘 다 권한 상속 때문에 일부러 이 그룹에
-        # 넣었다). 자원 그래프를 그것들까지 반복하면 빈 패널이 생기므로 이름으로 걸러낸다.
+        # 고객 그룹에는 가상 호스트(리포트 trapper·인증서)도 있다 — 자원 그래프를 그것들까지
+        # 반복하면 빈 패널이 생기므로 이름으로 걸러낸다.
         {"name": "host", "label": "호스트", "type": "query", "datasource": ZBX,
          "definition": "", "refresh": 1, "sort": 1, "options": [],
          "regex": "/^(?!report-)(?!.*인증서).*$/",
-         # allValue 를 비워 둔다. ".+" 로 두면 '전체'가 **다른 고객 호스트까지** 뜻하게 되어
-         # Wazuh·Loki 패널에 남의 데이터가 들어온다. 비우면 Grafana 가 이 고객의 호스트
-         # 목록을 (a|b) 로 펼치므로 '전체' 가 '이 고객의 전체' 로 한정된다.
+         # allValue 를 비워 둔다 — ".+" 는 '전체'를 '다른 고객까지'로 만든다.
          "includeAll": True, "allValue": "", "multi": True,
          "current": {"text": "All", "value": "$__all"},
          "query": {"queryType": "host", "group": "$customer", "host": "/.*/",

@@ -42,9 +42,8 @@ HOLMES_SOURCE = "holmesgpt"
 # 이 값이 없으면 초안이 원시 알림 1건 + playbook 있으니 자동 조치 후보 1건으로도 세어진다.
 REPORT_SOURCE = "kinx-report"
 
-# prejudge 자리에 판정이 아닌 값이 들어간 옛 레코드가 있다 — "단일", "2건 병합", "deep-dive".
-# keep.py 독스트링이 경고한 바로 그 오염이며 2026-07-29 에 고쳤으나 이전 기록은 남아 있다.
-# 접두로 판정한다: "재발(90일 3회) — 자동화 후보" 처럼 접미사가 붙는 경우가 있다.
+# 접두로 판정한다 — "재발(90일 3회) — 자동화 후보" 처럼 접미사가 붙고, 판정이 아닌 값이
+# 들어간 옛 레코드("단일", "2건 병합")도 섞여 있다.
 VERDICTS = ("만성", "재발", "신규")
 
 
@@ -58,16 +57,9 @@ def verdict_of(a: dict) -> str:
 
 PENDING = "검토 대기 — 승인 후 게시됩니다"
 
-# 숫자 지표의 "없음" 표식. 값을 **안 보내면 Zabbix 에 이전 값이 그대로 남는다** —
-# 랩 실측(2026-07-31)에서 범위를 좁힌 뒤 "준수율 미산출" 옆에 지난 집계의 52.0% 가
-# 그대로 떠 있었다. 0 을 보내면 "전부 실패" 로 읽히고, 안 보내면 옛 값이 남는다.
-# 그래서 **없음을 명시적으로 보낸다.** 대시보드가 값 매핑으로 "미산출" 로 표시한다.
+# "없음"을 명시적으로 보낸다 — 0 은 "전부 실패"로 읽히고, 안 보내면 지난 집계 값이 그대로
+# 남는다. 근거는 DEPLOY_GUIDE "MSP 월간 리포트".
 NOT_MEASURED = -1
-
-# 문장 항목(파일 무결성·취약점·상위 패키지)의 "없음" 표식. 숫자 항목과 같은 이유인데,
-# 실측(2026-08-04)에서 더 나쁘게 드러났다 — customer-b 리포트의 "취약점 상위 패키지" 에
-# 범위를 안 좁혔던 이전 실행의 랩 전체 통계(kernel 2160건 …)가 그대로 남아 있었다.
-# 고객 문서에 **다른 호스트의 숫자**가 실리는 형태라 숫자 항목보다 위험하다.
 NOT_MEASURED_TEXT = "미산출 — 이 범위에서 집계된 데이터 없음"
 
 # 봇 분석은 번호 절로 강제돼 있다("**2) 추정 원인**", 때로 "**② …**").
@@ -297,9 +289,8 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
 
     win = [a for a in win if REPORT_SOURCE not in src(a)]
 
-    # 원시 알림 = 감시 시스템이 낸 것(Keep 이 Zabbix 등에서 받은 provider 알림).
-    # 사건 = 봇이 확정한 인시던트. 둘은 별개 레코드이므로 겹쳐 세지 않는다.
-    # 홈즈는 기존 사건의 심층조사 결과라 어느 쪽도 아니다.
+    # 원시 알림(감시 시스템이 낸 것)과 사건(봇이 확정한 것)은 별개 레코드라 겹쳐 세지 않는다.
+    # 심층조사는 기존 사건에 붙은 것이라 어느 쪽도 아니다.
     incidents = [a for a in win if BOT_SOURCE in src(a)]
     raw = [a for a in win if BOT_SOURCE not in src(a) and HOLMES_SOURCE not in src(a)]
     holmes = [a for a in win if HOLMES_SOURCE in src(a)]
@@ -320,8 +311,7 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
                  if r.get("host") == inc.get("host") and _ts(r) <= t_inc]
         if prior:
             gaps.append((t_inc - max(prior)).total_seconds())
-    # 짝이 하나도 없으면 0.0 을 보내지 않는다 — "초동 대응 0초" 로 읽혀 실제보다 좋아
-    # 보인다. 대신 NOT_MEASURED 를 보낸다(안 보내면 지난달 값이 그대로 남는다).
+    # 짝이 없으면 0.0 을 보내지 않는다 — "초동 대응 0초"로 읽혀 실제보다 좋아 보인다.
     response = round(statistics.median(gaps), 1) if gaps else None
 
     # 서사는 심각도가 높고 최근인 것부터 3건. 분석 본문이 있는 것만 — 없으면 쓸 게 없다.
@@ -336,9 +326,7 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
     repeat = Counter(a.get("name") or "(이름 없음)" for a in incidents
                      if verdict_of(a) in ("만성", "재발"))
 
-    # 근거 커버리지 — 로그·보안을 실제로 읽고 판단한 사건이 몇 건인가.
-    # 리포트에 로그 본문을 싣지 않는 대신 이 사실만 싣는다. 실환경 Zabbix 는 log[] 아이템을
-    # 가진 호스트 비율이 사실상 0 이라, 이 문장 자체가 기존 리포트에 존재할 수 없는 내용이다.
+    # 근거 커버리지 — DEPLOY_GUIDE "MSP 월간 리포트".
     # sources 필드가 없는 옛 레코드는 세지 않는다 — 모르는 것을 확보로 세면 과장이 된다.
     with_src = [a for a in incidents if a.get("sources")]
     ev_logs = sum(1 for a in with_src if "logs:ok" in str(a.get("sources")))
@@ -700,10 +688,7 @@ def main():
         return
     if not a.target:
         sys.exit("[!] --send 에는 --target 이 필요하다")
-    # 고객 리포트에 **다른 고객·사내 호스트**가 섞이는 것을 막는다. 범위를 좁히지 않으면
-    # 집계는 전체를 훑으므로, 서사에 남의 호스트명·IP 가 그대로 실린다(2026-07-31 실측:
-    # Customer-B 리포트에 사내 VM 이름과 사설 IP 가 들어갔다). 화면상 아무 문제가 없어
-    # 보이는 종류의 사고라 기본값을 거부로 둔다.
+    # 범위 게이트 — 기본값을 거부로 둔다. 화면상 아무 문제가 없어 보이는 종류의 사고다.
     if not (a.host_filter or a.agent_filter) and not a.allow_unscoped:
         sys.exit("[!] 범위가 지정되지 않았다 — --host-filter 없이 보내면 다른 고객·사내 "
                  "호스트가 이 고객 리포트에 실린다.\n"

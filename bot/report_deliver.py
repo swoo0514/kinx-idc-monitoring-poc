@@ -239,9 +239,7 @@ def render(base: str, uid: str, customer: str, width: int, height: int, days: in
     q = urllib.parse.urlencode({
         "orgId": 1, "width": width, "height": height, "theme": "light",
         "from": "now-%dd" % days, "to": "now", "var-customer": customer})
-    # kiosk 는 **값 없는 플래그**다. urlencode 로 넣으면 "kiosk=" 가 되어 적용되지 않고
-    # 상단 내비게이션(Home/Dashboards/Export/Share)이 그대로 PDF 에 찍힌다 —
-    # 고객에게 나가는 문서에 우리 도구 UI 가 보이면 안 된다.
+    # kiosk 는 값 없는 플래그라 urlencode 로 넣으면 안 먹고 내비게이션이 PDF 에 찍힌다.
     url = "%s/render/d/%s/report?%s&kiosk" % (base.rstrip("/"), uid, q)
     png = _get(url, grafana_auth())
     if png[:8] != b"\x89PNG\r\n\x1a\n":
@@ -443,9 +441,8 @@ def main():
     else:
         print("[!] ZABBIX_URL/ZABBIX_TOKEN 미설정 — 승인 상태를 확인하지 못한다")
 
-    # 주소가 둘이다. **렌더는 내부 주소**로 가져오고(서버가 자기 공인 IP 로 되돌아
-    # 접속하면 헤어핀 NAT 가 없어 그냥 멈춘다 — 2026-07-31 실측으로 2분 타임아웃),
-    # **링크는 사람이 클릭할 주소**를 쓴다. "식별은 이름, 접속은 IP" 와 같은 종류의 구분.
+    # 주소가 둘이다 — 렌더는 내부 주소(자기 공인 IP 로 되돌아 접속하면 멈춘다),
+    # 링크는 사람이 클릭할 주소.
     render_base = (os.environ.get("GRAFANA_RENDER_URL")
                    or os.environ.get("GRAFANA_INTERNAL_URL")
                    or "http://127.0.0.1:3000")
@@ -461,9 +458,7 @@ def main():
     else:
         pdf = png_to_pdf_direct(png)
     pages = pdf.count(b"/Type /Page ")
-    # 기본 출력은 **private/report/**. 고객 데이터가 담긴 산출물이 작업 디렉토리에 떨어지면
-    # 실수로 커밋된다(2026-07-31 실측: 워크플로 실행 후 bot/ 에 PDF 가 생겨 git status 에 떴다).
-    # private/ 는 리포 규칙상 커밋 금지 디렉토리라 실환경 데이터의 정해진 자리다.
+    # 기본 출력은 private/report/ — 고객 데이터가 작업 디렉토리에 떨어지면 실수로 커밋된다.
     out_dir = os.environ.get("REPORT_OUT_DIR") or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "private", "report")
     if a.out:

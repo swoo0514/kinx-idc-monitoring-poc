@@ -1,14 +1,9 @@
 # Keep 워크플로 — 월간 리포트 승인 발송 (프로비저닝 as-code).
-# 사람이 승인 대기 알림에서 초안을 읽고 "Run Workflow"(=승인) → SSH로 core →
-# 저장된 초안 그대로 게시 → PDF 생성 → 메일 발송.
+# 사람이 초안을 읽고 "Run Workflow"(=승인) → SSH로 core → 게시 → PDF → 메일.
 #
-# 데모 B(조치 승인)와 **같은 화면·같은 방식**이다. 승인 계층을 새로 만들지 않았다는 것이
-# 이 파일의 요점이다 — n8n 같은 GUI 엔진을 추가하지 않는 근거.
-#
-# 전제: Keep UI에 SSH provider(host=core, user=rocky, pkey)를 이름 core-ansible 로 생성
-#       (데모 B에서 이미 만든 것을 그대로 쓴다).
-# 대상·수신자는 봇이 알림에 실어 보낸 값을 쓴다(하드코딩 금지) — msp_report.py 의
-# --draft-to-keep 이 host·customer·host_filter·recipient 를 커스텀 필드로 push 한다.
+# 전제: Keep UI에 SSH provider 를 이름 core-ansible 로 생성(데모 B 에서 만든 것을 그대로).
+# 대상·수신자는 봇이 알림에 실어 보낸 값을 쓴다 — 하드코딩 금지.
+# 설계 근거는 keep/KEEP_GUIDE.md.
 workflow:
   id: msp-report-approve-and-send
   name: Approve and send MSP monthly report

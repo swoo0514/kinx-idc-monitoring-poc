@@ -22,9 +22,8 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# 한국어 Windows 콘솔은 기본 cp949 라 '—' 같은 문자에서 리포트가 중간에 죽는다(2026-07-31 실측:
-# 30일 실행이 BRIDGE_GROUPS 절에서 UnicodeEncodeError). 조회는 끝났는데 출력에서 실패하는 것이라
-# 원인이 눈에 안 띈다. 출력 스트림을 utf-8 로 고정한다.
+# 한국어 Windows 콘솔은 기본 cp949 라 '—' 에서 죽는다. 조회가 끝난 뒤 출력에서 터져 원인이
+# 눈에 안 띈다 — docs/03-pitfalls/build-traps.md.
 for _s in (sys.stdout, sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace")
@@ -73,9 +72,7 @@ async def fetch_zabbix(days: int) -> list:
             continue
         name = e.get("name", "")
         tags = e.get("tags") or []
-        # 실환경에 이미 붙어 있는 class 태그 값을 그대로 보관한다. "태그를 붙이면 정확해진다"를
-        # 주장하려면 지금 무엇이 붙어 있는지부터 알아야 하는데, 분류 결과만 저장하면 그것이 사라진다
-        # (2026-07-31 실측에서 알 수 없는 값 'database' 가 발견되어 추가).
+        # 분류 결과만 저장하면 "지금 실제로 무슨 태그가 붙어 있나"가 사라진다 — 원값을 보관한다.
         declared = ""
         for t in tags:
             if isinstance(t, dict) and t.get("tag") == incident.CLASS_TAG:

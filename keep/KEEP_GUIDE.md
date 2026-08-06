@@ -62,6 +62,27 @@ remediate_service.yml -e target_host=vm-p3-target-002 -e service_name=chronyd` e
 `processed: 15; failed: 0` → PDF 373KB → 메일 수신 확인. 그리고 **게시된 서사가 저장된
 초안과 문자열까지 일치**하는 것을 Zabbix 아이템 값과 대조해 확인했다(요약·월간 분석 둘 다).
 
+## 세 번째 워크플로 — 자동화 후보 표시 (`mark_automation_candidate.yml`)
+
+반복(만성)으로 판정된 사건에 **표시만** 남긴다. "반복 → 자동화 후보" 폐루프에서 빠져 있던
+조각이다.
+
+분업이 이 파일의 요점이다 — **반복 식별의 지능은 우리 층**(90일 빈도로 만성/재발/신규 결정),
+**저장·필터·UI 는 Keep**. 상용 AIOps 가 차별화 기능으로 파는 "무엇을 자동화할지 추천"을 얇은
+층으로 값싸게 갖는다.
+
+**조치는 하지 않는다.** 표시만 남기고 실행은 사람이 조치 워크플로를 Run 해서 한다.
+LLM 분석 텍스트를 자동으로 절차서나 조치로 굳히지 않는다는 원칙과 같은 선이다.
+
+쓰는 법: Keep UI 에서 `automation_candidate = yes` 로 필터하고 `classes` 로 묶어 보면
+**"어떤 유형이 반복 최다인가" = 자동화 1순위**가 나온다.
+
+> 이 랭킹은 만성 판정 횟수에 의존하는데, 그 횟수가 조회 상한에서 포화되는 문제가 있다 —
+> [`docs/03-pitfalls/structural-gaps.md#g3`](../docs/03-pitfalls/structural-gaps.md).
+
+근거(공식): docs.keephq.dev `/workflows/syntax/enrichment` — `enrich_alert` 로 트리거 알림에
+필드를 추가한다.
+
 ## 알려진 마찰 (도입 리스크)
 
 - Keep UI "새 워크플로 생성"이 일부 상황에서 `workflow_raw_data: null`로 실패 → 프로비저닝(파일)
