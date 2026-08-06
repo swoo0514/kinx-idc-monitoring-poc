@@ -8,18 +8,12 @@ from . import collector, holmes, incident as incident_mod, keep, llm, slack
 
 log = logging.getLogger("gateway.triage")
 
-# fire-and-forget 백그라운드 태스크 — 강참조 유지(GC 중도소멸 방지) + 완료 시 정리·예외로깅.
-# 근거: docs.python.org asyncio.create_task "save a reference ... may be garbage collected".
+# fire-and-forget 태스크의 강참조. 안 잡으면 GC 로 조용히 사라진다(공식 문서). 가이드 §17.
 _bg_tasks: set = set()
 
 
 def _sources_note(context: dict) -> str:
-    """"logs:ok,security:unavailable" — 이 사건이 어느 축을 실제로 읽었는지 Keep 에 남긴다.
-
-    조회 실패와 신호 없음을 구분하는 G1 계약을 저장까지 밀어낸 것이다. 이 기록이 없으면
-    월간 리포트에서 "로그를 근거로 판단한 사건"을 셀 수 없고, 관제 화면에서도 어느 축이
-    비어 있었는지 사후에 알 수 없다.
-    """
+    """"logs:ok,security:unavailable" — 이 사건이 어느 축을 실제로 읽었는지 Keep 에 남긴다."""
     s = context.get("sources") or {}
     return ",".join("%s:%s" % (k, s[k]) for k in sorted(s)) if isinstance(s, dict) else ""
 
@@ -45,9 +39,9 @@ async def run(event_id: str, trigger_id: str, sev: str,
     try:
         zbx = collector.ZabbixClient()
         context = await collector.collect_context(zbx, event_id, trigger_id)
-    except Exception as e:   # 수집 실패해도 최소 컨텍스트로 진행
+    except Exception as e:
         log.warning("collect failed for event=%s: %s", event_id, e)
-        # 조회를 못 한 것이므로 "신호 없음"이 아니라 "미상" — LLM·카드가 그렇게 읽어야 한다 (G1)
+        # 조회를 못 한 것이므로 "신호 없음"이 아니라 "미상" — 가이드 §15
         context = {"event": {"name": alert_name}, "trigger": {}, "host": {},
                    "metrics": [], "prejudge": {}, "logs": [], "security": [],
                    "sources": {"logs": collector.SOURCE_UNAVAILABLE,
@@ -78,13 +72,7 @@ async def run(event_id: str, trigger_id: str, sev: str,
 
 
 def _push_gated(inc, context: dict, reason: str) -> dict:
-    """게이트에서 걸러진 사건도 Keep 에는 남긴다 (G5).
-
-    LLM 을 안 부르는 것이 게이트의 목적이고 저장은 LLM 과 무관하므로 비용이 들지 않는다.
-    이걸 빠뜨리면 Keep 에 "분석까지 간 사건"만 쌓인다. 그런데 게이트에 걸리는 것은 정의상
-    단일 축·교차 신호 없음, 곧 만성 노이즈의 전형이라 **만성 반복 랭킹을 하려는 바로 그
-    대상이 저장소에서 빠진다**. 분석 없이 판정과 유형만 실어 보낸다.
-    """
+    """게이트에서 걸러진 사건도 Keep 에는 남긴다 — 근거는 가이드 §14 말미."""
     verdict = incident_mod.dominant_verdict(context) or "미상"
     classes = ", ".join(sorted(inc.classes()))
     note = (f"*분석 생략 — 봇 판단*\n"
@@ -99,10 +87,10 @@ def _push_gated(inc, context: dict, reason: str) -> dict:
 
 
 async def run_incident(inc) -> dict:
-    """병합 인시던트 트리아지 — 창 마감 후 IncidentManager.on_close가 호출. 30초 예산 기준점.
+    """병합 인시던트 트리아지 — 창 마감 후 IncidentManager.on_close 가 호출. 30초 예산 기준점.
 
-    수집(3소스)→LLM(1회)→Slack(1회). LLM·Slack은 블로킹이라 to_thread로 이벤트 루프를
-    막지 않는다(동시 인시던트 타이머 보호). 예외를 위로 던지지 않음.
+    LLM·Slack 은 블로킹이라 to_thread 로 감싼다 — 동시 인시던트 타이머를 막지 않게.
+    예외를 위로 던지지 않는다.
     """
     t0 = time.monotonic()
     timings = {}
@@ -126,7 +114,6 @@ async def run_incident(inc) -> dict:
         }
     timings["collect_s"] = round(time.monotonic() - t0, 2)
 
-    # 발동조건 게이트 — 교차 상관할 게 있을 때만 LLM 호출 (§14 발동조건 게이트)
     fire, reason = incident_mod.should_triage(inc, context)
     if not fire:
         await asyncio.to_thread(_push_gated, inc, context, reason)
@@ -135,7 +122,7 @@ async def run_incident(inc) -> dict:
                  inc.fingerprint(), len(inc.alerts), reason, timings)
         return {"fingerprint": inc.fingerprint(), "alert_count": len(inc.alerts),
                 "gated_out": True, "reason": reason, "timings": timings}
-    # 발동 사유·조회 상태도 남긴다 — 조회 실패로 인한 보수적 발동(G1)을 사후에 구분하려면 필요
+    # 사유와 조회 상태를 함께 남긴다 — 조회 실패로 인한 보수적 발동을 사후에 구분하려면 필요
     log.info("gate fire fp=%s alerts=%d reason=%s sources=%s",
              inc.fingerprint(), len(inc.alerts), reason, context.get("sources"))
 
@@ -147,35 +134,28 @@ async def run_incident(inc) -> dict:
     headline = (f"{n}건이 1개 사건 · {inc.host}" if inc.is_merged()
                 else inc.alerts[0].alert_name)
     merge_note = f"{n}건 병합" if inc.is_merged() else "단일"
-    # Keep 에 실어 보낼 판정은 만성/재발/신규다. Keep 에서 이 값으로 필터해 "반복 최다"를
-    # 뽑는 것이 자동화 후보 랭킹의 재료다(전략 방향 2). 병합 요약은 별도 필드로 보낸다.
     chronic = incident_mod.dominant_verdict(context) or "미상"
     classes = ", ".join(sorted(inc.classes()))
     fp = inc.fingerprint()
     t2 = time.monotonic()
-    # 분석은 원시 신호(P1-A) 스레드의 답글로 붙는다. 앵커가 없으면 최상위 게시로 자연 열화.
+    # 분석은 원시 신호 스레드의 답글로. 앵커가 없으면 최상위 게시로 자연 열화.
     anchor = getattr(inc, "anchor_ts", "") or None
     posted = await asyncio.to_thread(slack.post_triage, headline, sev, inc.host,
                                      f"{merge_note} · {chronic}", reply["text"], anchor,
                                      context.get("sources"))
     timings["slack_s"] = round(time.monotonic() - t2, 2)
-    # 봇 알림은 사건 fingerprint로 고정 → 홈즈 심층분석이 같은 행에 enrich (별개 알림 방지)
+    # fingerprint 고정 → 심층조사가 별개 알림이 아니라 같은 행에 enrich 된다
     await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"],
                             chronic, fingerprint=fp, classes=classes,
                             alert_count=n, merge=merge_note,
                             sources=_sources_note(context))
 
-    # 심층조사 자동 발동(read=auto 규칙): SEV1/봇 열화 + 비-MSP → 백그라운드 HolmesGPT.
-    # 결과는 별개 알림이 아니라 (1)Slack 원래 스레드 답글 (2)Keep 같은 알림 Note enrich 로.
-    # 3.5분 수준이라 30초 예산과 분리, fire-and-forget. 승인 아님(읽기 전용).
     fire_h, reason_h = holmes.should_investigate(sev, reply["degraded"],
                                                  [a.source for a in inc.alerts],
                                                  merged=inc.is_merged(),
                                                  verdict=incident_mod.dominant_verdict(context))
     if fire_h:
         log.info("holmes deep-dive scheduled fp=%s reason=%s", fp, reason_h)
-        # headline("N건이 1개 사건 · host")을 넘기면 홈즈가 무슨 사건인지 모른 채 그 호스트에서
-        # 그 순간 활성인 아무 문제를 조사한다(2026-07-31 실측). 알림 이름·유형·관측창을 넘긴다.
         _spawn_bg(_deep_investigate(
             inc.host,
             holmes.build_question([a.alert_name for a in inc.alerts],
@@ -193,10 +173,7 @@ async def run_incident(inc) -> dict:
 
 async def _deep_investigate(host: str, question: str, sev: str,
                             fingerprint: str = "", thread_ts: str = None) -> None:
-    """백그라운드 HolmesGPT 심층조사 → (1)Slack 원래 알림 스레드 답글(읽기) (2)Keep 같은
-    알림 Note enrich(실행 화면). 별개 알림을 만들지 않아 피드에 사건 1행 유지.
-    블로킹 호출은 to_thread로 감싸 이벤트 루프 비차단. 실패해도 조용히 종료.
-    question 은 holmes.build_question 산출물이며 이미 "Incident: ..." 로 시작한다."""
+    """백그라운드 심층조사 → Slack 스레드 답글 + Keep Note enrich. 회수 경로는 가이드 §17."""
     t0 = time.monotonic()
     res = await asyncio.to_thread(holmes.investigate, host, question)
     took = round(time.monotonic() - t0, 1)
@@ -205,10 +182,8 @@ async def _deep_investigate(host: str, question: str, sev: str,
                     host, took, res.get("error"))
         return
     analysis = res["analysis"]
-    # (1) 읽기: 봇 초동분석이 올라간 Slack 스레드에 심층분석 답글
     await asyncio.to_thread(slack.post_triage, f"[심층조사] {host} — HolmesGPT",
                             sev, host, "심층조사", analysis, thread_ts)
-    # (2) 실행 화면: 원래 Keep 알림에 Note로 첨부(fingerprint 매칭). 별개 알림 아님.
     if fingerprint:
         await asyncio.to_thread(keep.enrich_note, fingerprint, analysis)
     log.info("holmes deep-dive done host=%s took=%ss (slack thread + keep note)", host, took)

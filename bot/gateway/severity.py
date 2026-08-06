@@ -10,7 +10,7 @@ SOURCE_ZABBIX_INTERNAL = "zabbix-internal"
 SOURCE_ZABBIX_MSP = "zabbix-msp"
 SOURCE_WAZUH = "wazuh"
 
-# 사내 Warning(2)→SEV4 / MSP Warning(2)→SEV3 비대칭이 핵심 (근거: severity_map.md)
+# 사내 Warning(2)→SEV4 / MSP Warning(2)→SEV3 비대칭이 핵심 — 근거는 위 문서
 _ZABBIX_INTERNAL = {5: SEV1, 4: SEV2, 3: SEV3, 2: SEV4, 1: SEV4, 0: NONE}
 _ZABBIX_MSP = {5: SEV1, 4: SEV2, 3: SEV3, 2: SEV3, 1: SEV4, 0: NONE}
 

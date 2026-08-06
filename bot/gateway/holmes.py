@@ -1,13 +1,8 @@
-"""HolmesGPT 온디맨드 심층조사 어댑터 — HTTP API(/api/chat) 호출, 읽기 전용·자동 조건부.
+"""HolmesGPT 온디맨드 심층조사 어댑터 — 서버 모드의 HTTP API 호출. 읽기 전용.
 
-HolmesGPT를 서버 모드(컨테이너)로 띄우고 HTTP API를 부른다(subprocess·stdout 파싱 아님).
-응답 JSON의 `analysis` 필드가 최종 조사 결과(마크다운). 서버의 LLM을 마스킹 프록시로 가리키면
-MSP도 허용 가능(task #6). keep.py·slack.py와 동일한 httpx 패턴.
-
-환경변수: HOLMES_ENABLED(1이면 자동 발동), HOLMES_URL(예: http://<holmes>:8000),
-HOLMES_API_KEY(선택), HOLMES_MODEL(서버 modelList의 모델명, 마스킹 프록시면 그 모델 예: masked-claude),
-HOLMES_MASKED(1이면 홈즈 서버 LLM이 마스킹 프록시 경유 → MSP도 심층조사 허용), HOLMES_TIMEOUT_S.
-근거: holmesgpt.dev/dev/reference/http-api/ (POST /api/chat → {analysis,...}). 마스킹 트랙: masking_track.md.
+발동 조건·질문 구성·결과 회수 경로는 bot/GATEWAY_GUIDE.md §17.
+환경변수는 bot/.env.example, 도입 판정은 docs/02-design/decisions/adr-002-holmesgpt.md.
+API 근거: holmesgpt.dev `/dev/reference/http-api/` (POST /api/chat → {analysis,...}).
 """
 
 import logging
@@ -22,18 +17,10 @@ log = logging.getLogger("gateway.holmes")
 
 def should_investigate(sev: str, degraded: bool, sources, merged: bool = False,
                        verdict: str = "") -> tuple:
-    """자동 발동 조건(승인 아님, read=auto 규칙). (bool, reason).
+    """자동 발동 조건(승인 아님 — 읽기 전용이므로). 반환 (bool, reason).
 
-    MSP는 마스킹 프록시(HOLMES_MASKED=1)가 붙어 있을 때만 허용 — 없으면 원문 유출이라 제외.
-    (마스킹 실측·한계는 masking_track.md. 홈즈 서버 LLM을 마스킹 프록시로 가리키고 이 플래그 on.)
-
-    **발동 기준을 지식 공백에 맞춘다 (G9).** 종래에는 병합(=사람이 룰로 넣은 조합)이 주
-    발동 경로였는데, 그러면 가장 비싼 분석이 "이미 아는 문제"에만 돌아간다. 그래서 선판정을
-    양방향으로 쓴다 — 만성(아는 문제)은 억제하고 신규(처음 보는 문제)는 발동시킨다.
-    판정은 prejudge 가 이미 계산해 둔 값이라 새 지능이 필요 없다.
-
-    순서에 의미가 있다. 위중(SEV1)과 봇 열화는 지식 여부와 무관하게 조사가 필요하므로
-    만성 억제보다 앞에 둔다.
+    **조건의 순서에 의미가 있다.** 위중·열화는 지식 여부와 무관하므로 만성 억제보다 앞이고,
+    MSP 테넌트 경계는 그보다도 앞이다. 근거는 가이드 §17.
     """
     if os.environ.get("HOLMES_ENABLED", "") != "1":
         return False, "disabled"
@@ -54,16 +41,9 @@ def should_investigate(sev: str, degraded: bool, sources, merged: bool = False,
 
 
 def build_question(alert_names, classes, window_s: float) -> str:
-    """홈즈에게 넘길 사건 서술.
+    """홈즈에게 넘길 사건 서술 — 조사 대상을 이 사건으로 고정한다.
 
-    **왜 필요한가 (2026-07-31 랩 실측).** 종래에는 `"{n}건이 1개 사건 · {host}"` 만 넘겼다.
-    건수와 호스트뿐이라 **무슨 사건인지가 한 글자도 없다.** 홈즈는 에이전틱이라 스스로 그
-    호스트를 뒤지는데, 그러면 사건과 무관하게 **그 순간 활성인 아무 문제**를 조사한다.
-    실제로 SSH 브루트포스 사건에 대해 MySQL buffer pool 을 조사해 왔다 — 조사 품질은 높았으나
-    **다른 사건**이었다.
-
-    그래서 알림 이름·유형·관측창을 넘기고 "이것만 보라"를 명시한다. 홈즈가 스스로 조회하는
-    능력(우리 봇에 없는 강점)은 그대로 두되 **조사 대상만 고정**한다.
+    건수와 호스트만 넘기면 그 호스트에서 그 순간 활성인 아무 문제나 조사한다(실측). 가이드 §17.
     """
     names = "; ".join("(%d) %s" % (i + 1, n) for i, n in enumerate(alert_names) if n)
     cls = ", ".join(sorted(c for c in (classes or []) if c))

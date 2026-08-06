@@ -1,7 +1,8 @@
 """게이트웨이 순수 로직 셀프테스트 (fastapi 불필요 — severity/router만 검증).
 
 실행: python -m gateway.selftest   (bot/ 디렉토리에서)
-전부 통과하면 'ALL OK'를 출력한다. severity_map.md 표와의 일치가 검증 대상.
+전부 통과하면 'ALL OK'를 출력한다. docs/02-design/severity-normalization.md 표와의
+일치가 검증 대상이다 — 표를 고치면 이 케이스부터 고친다.
 """
 
 import time
@@ -37,7 +38,7 @@ CASES_ROUTER = [
     ("SEV2", [], 1, "triage"),
     ("SEV2", [{"tag": "automate", "value": "service_restart"}], 1, "remediate"),
     ("SEV2", [{"tag": "automate", "value": "service_restart"},
-              {"tag": "scope", "value": "notify_only"}], 1, "triage"),  # 계약이 조치 차단(A-6)
+              {"tag": "scope", "value": "notify_only"}], 1, "triage"),  # 계약이 조치를 차단
     ("SEV3", [], 1, "digest"),
     ("SEV4", [], 1, "dashboard_only"),
     ("NONE", [], 1, "drop"),

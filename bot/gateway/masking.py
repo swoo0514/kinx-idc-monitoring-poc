@@ -56,7 +56,7 @@ def _sources(context: dict) -> dict:
 
 
 def _security_item(s: dict, m) -> dict:
-    """보안 경보 1건의 전송 형태 — 보안 축 화이트리스트. 항목별 근거는 llm_data_spec.md."""
+    """보안 경보 1건의 전송 형태 — 항목별 근거는 위 문서(전송 데이터 계약)."""
     return {"level": s.get("level"), "desc": m(s.get("desc")), "ts": s.get("ts"),
             "rule_id": s.get("rule_id"), "groups": s.get("groups"),
             "path": m(s.get("path")), "change": s.get("change")}
