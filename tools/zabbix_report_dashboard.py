@@ -209,7 +209,7 @@ def selftest() -> None:
         raise AssertionError("공인 주소 쓰기가 막히지 않았다")
     except SystemExit:
         n += 1
-    guard_write("http://192.168.20.26:8080/api_jsonrpc.php")
+    guard_write("http://192.168.0.10:8080/api_jsonrpc.php")   # 사설 주소는 통과
     n += 1
     print("ALL OK (%d checks)" % n)
 

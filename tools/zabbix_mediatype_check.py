@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mediatype.get 1콜 — 커스텀 Slack 스크립트의 발송 경로 판별 (읽기 전용)
 
-목적·판독법은 docs/zabbix_recon_checklist.md §2-1 ② 참조.
+목적·판독법은 tools/RECON_GUIDE.md 참조.
 사용법은 기존 정찰 스크립트와 동일:
   (bash)        export ZABBIX_URL=... ZABBIX_TOKEN=...
   (PowerShell)  $env:ZABBIX_URL="..."; $env:ZABBIX_TOKEN="..."
@@ -86,7 +86,7 @@ def main():
         ))
 
     print()
-    print("판독 힌트 (상세: docs/zabbix_recon_checklist.md §2-1 ②)")
+    print("판독 힌트 (상세: tools/RECON_GUIDE.md)")
     print("- 팀 Slack을 쏘는 스크립트가 Script형 미디어로 목록에 있으면:")
     print("  발송 시 alert.get에 잡히는 구조 → '신규 Slack 발송 0건'은 실제 0건.")
     print("  → 다음 확인: 해당 미디어를 쓰는 액션의 operation 미디어 설정 (§2-2)")
