@@ -73,6 +73,7 @@ LLM이 20초를 넘으면 전체 30초가 위태로움.
 
 ## 결과 기록
 
-측정 결과 수치는 EXECUTION_PLAN/STRATEGY 근거로 쓰이므로, 실행 후 측정 창(일시)과
-함께 `private/docs/`에 기록하고 CLAUDE.md 진행 상태를 갱신할 것. `--json-out`으로
+측정 결과는 LLM 경로 판정의 근거로 쓰이므로, 실행 후 측정 창(일시)과 함께
+[`docs/02-design/decisions/adr-005-llm-path.md`](../docs/02-design/decisions/adr-005-llm-path.md)에
+기록할 것. `--json-out`으로
 원시 데이터를 남겨 재계산 가능하게 함(작업 원칙 6: 수치는 원본에서 재계산 가능해야).

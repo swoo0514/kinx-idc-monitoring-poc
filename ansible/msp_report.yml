@@ -39,8 +39,8 @@
       - {key: "report.by_severity", name: "심각도 분포", vtype: "text"}
       - {key: "report.response_s", name: "초동 대응 중앙값(초)", vtype: "numeric_float"}
       # 로그·보안을 실제로 읽고 판단한 사건 수. 로그 본문은 싣지 않는다(고객 자산 + 반출
-      # 표면 확대). 실환경 Zabbix 는 log[] 아이템이 0/321 대라 이 문장 자체가 기존
-      # 리포트에 존재할 수 없다.
+      # 표면 확대). 실환경 Zabbix 는 log[] 아이템 보유 호스트 비율이 사실상 0 이라
+      # 이 문장 자체가 기존 리포트에 존재할 수 없다.
       - {key: "report.evidence", name: "판단 근거 커버리지", vtype: "text"}
       # 보안 절 — Wazuh. Zabbix 에는 데이터 자체가 없는 영역이다.
       # security_status 가 "조회 불가" 면 아래 세 값은 전송되지 않는다(0 을 만들지 않는다).

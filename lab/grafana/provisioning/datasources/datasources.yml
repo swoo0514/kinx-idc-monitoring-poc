@@ -22,7 +22,7 @@ datasources:
       # Day7 "메트릭 패널이 멈춘 줄 알았던 표시 지연", 2026-07-31 "호스트 표시명을 바꿨는데
       # 대시보드가 옛 이름을 보고 변수 필터가 안 걸림". 둘 다 설정은 맞는데 화면만 틀린 경우라
       # 원인을 찾는 데 시간이 걸린다. 온보딩·MaC 로 호스트가 자주 바뀌는 랩에서는 짧게 둔다.
-      # 실환경(321대)에 그대로 가져가면 Zabbix API 호출이 늘므로 도입 시 재검토 대상.
+      # 감시 호스트가 많은 실환경에 그대로 가져가면 Zabbix API 호출이 늘므로 도입 시 재검토 대상.
       cacheTTL: "1m"
     secureJsonData:
       password: $ZBX_GRAFANA_PASSWORD
@@ -62,7 +62,7 @@ datasources:
             expr: '{host="$${__value.raw}"}'
             queryType: range
 
-  # 취약점 재고 전용(스냅샷 인덱스). 근거는 private/docs/wazuh_enhancement_plan.md §8
+  # 취약점 재고 전용(스냅샷 인덱스). 근거는 docs/02-design/README.md
   - name: Wazuh-States
     uid: wazuh-states
     type: grafana-opensearch-datasource

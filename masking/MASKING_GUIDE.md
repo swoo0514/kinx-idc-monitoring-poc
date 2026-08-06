@@ -2,7 +2,8 @@
 
 외부 LLM으로 나가는 데이터에서 식별자(호스트·IP·고객사·DB명)를 **가역 마스킹**해, HolmesGPT
 같은 마스킹 없는 도구도 MSP 데이터에 쓸 수 있게 하는 계층. **밑바닥 구현이 아니라 OSS 조립** —
-Presidio(탐지·익명화) + LiteLLM(프록시·역치환). 평가 판정은 `private/docs/`에 기록.
+Presidio(탐지·익명화) + LiteLLM(프록시·역치환). 무엇을 내보내고 무엇을 안 내보내는지의 계약은
+[`docs/02-design/llm-data-contract.md`](../docs/02-design/llm-data-contract.md).
 
 ## 왜 이 조합
 

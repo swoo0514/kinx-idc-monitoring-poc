@@ -16,7 +16,7 @@
 | OS | Rocky Linux 9 (실환경 정합) |
 | 네트워크 | 사설 IP(Wazuh 클러스터와 동일 사설망 — 연동 필수) + 공인 IP 1개(대시보드 접근용) |
 
-> 위 사양은 관측 코어 4종 기준 추정치입니다. Profile 확장 시 증설이 필요합니다 — 특히 `--profile chaos`(에이전트 노드·snmpsim)는 +2~4 GB, `--profile ai`(Ollama)는 모델 크기에 따라 별도의 사양·GPU 검토가 필요합니다.
+> 위 사양은 관측 코어 4종 기준 추정치입니다. Profile 확장 시 증설이 필요합니다 — `--profile ha`(복제 슬레이브), `--profile chaos`(snmpsim), `--profile msp`(고객사 컨테이너 세트)를 함께 띄우면 +2~4 GB를 봅니다.
 
 > **네트워크 구성:** 본 VM은 사설 IP와 공인 IP를 함께 사용합니다. 사설 IP는 Grafana가 Wazuh Indexer(사설망 내)에 연동하기 위해 필수이며, 공인 IP는 Zabbix Web·Grafana 대시보드에 브라우저로 접근하기 위한 용도입니다. 공인 IP의 노출 포트(아래 방화벽 항목)는 반드시 작업자 IP로 제한합니다.
 
@@ -110,4 +110,8 @@ lab/
 
 ## 상세 문서
 
-설정별 기술 근거·공식 출처·데이터소스 연동·트러블슈팅·Profile 확장 구조는 내부 구축 가이드에서 관리합니다(내부 인프라 연동 정보 포함으로 비공개).
+설정별 기술 근거·공식 출처·데이터소스 연동·트러블슈팅·Profile 확장 구조·복제 부트스트랩은
+[`docs/01-build/01-observability-core.md`](../docs/01-build/01-observability-core.md)에 있습니다.
+
+랩 전체를 어떤 순서로 세우는지는 [`docs/01-build/README.md`](../docs/01-build/README.md),
+호스트 이름·주소 규약은 [`docs/01-build/hosts.md`](../docs/01-build/hosts.md)를 봅니다.

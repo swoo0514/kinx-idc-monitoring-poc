@@ -3,7 +3,7 @@
 # lag 의 동력은 슬레이브 IO 가 아니라 master 쓰기량 = 슬레이브 단일 SQL 스레드가 대량 쓰기를
 # 못 따라잡아 Seconds_Behind_Master 누적. 여기에 디스크 I/O 포화(백업성 dd)로 재생을 더 늦추고
 # iowait 신호를 만든다 + syslog 백업 마커(Loki 교차신호). "야간 배치가 DB를 덮쳐 IO 포화 +
-# 복제 백로그"라는 현실적 시나리오(복제 자체는 정상). 근거 private/docs/demo_c_scenario.md,
+# 복제 백로그"라는 현실적 시나리오(복제 자체는 정상). 근거 docs/04-demo/scenario-c-replication.md,
 # 절차 lab/mariadb/REPL_VM_GUIDE.md.
 set -uo pipefail
 

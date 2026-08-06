@@ -18,7 +18,7 @@ Wazuh integration ──────┘                                     │
 | 파일 | 역할 |
 |---|---|
 | `gateway/app.py` | FastAPI 앱 — 엔드포인트, 토큰 검증, 멱등, 디스패치 |
-| `gateway/severity.py` | 심각도 정규화 상수 — **private/docs/severity_map.md의 코드 구현** (표 개정 시 문서 먼저) |
+| `gateway/severity.py` | 심각도 정규화 상수 — **`docs/02-design/severity-normalization.md`의 코드 구현** (표 개정 시 문서 먼저) |
 | `gateway/router.py` | 태그 라우팅 — automate/scope 태그로 B·C 경로 분기 |
 | `gateway/selftest.py` | 순수 로직 검증 (fastapi 불필요) |
 | `gateway/zabbix_media_webhook.js` | 랩 Zabbix에 등록할 웹훅 미디어타입 스크립트 |
@@ -92,7 +92,7 @@ Administration → Media types → Create: type=**Webhook**, script=`zabbix_medi
 - **복구 이벤트(event_value=0)는 `resolve` 경로**로 분리 — 통보 스레드 갱신용(후속 구현).
 - **triage/remediate는 현재 스텁**: 다음 단계 = 컨텍스트 수집기(Zabbix API 병렬) +
   만성/신규 선판정 + LLM 어댑터. LLM 호출은 **타임아웃 20s, 재시도 대신 폴백**
-  (실측 근거: private/docs/llm_latency_20260726.md — 총 시간 최대 14.8s, 재시도 시 30s 초과).
+  (실측 근거: `docs/02-design/decisions/adr-005-llm-path.md` — 총 시간 최대 14.8s, 재시도 시 30s 초과).
 - **scope 태그가 automate보다 우선**: MSP 계약 `notify_only`면 automate 태그가 있어도
   조치 경로 차단(A-6 "임의 조치 불가"의 코드화). customer.yml의 scope가 태그로 상속되는
   구조(agent_msp_enhancement A-2 태그 설계)와 연결.
@@ -199,7 +199,7 @@ error_burst/repl_lag 트리거 발화 1건으로 ①~⑤ 응답과 선판정 문
 
 ## 11. LLM 어댑터 + 마스킹 (`llm.py` / `masking.py`)
 
-triage 경로의 분석 계층. 전송 규칙의 원본은 **private/docs/llm_data_spec.md**(코드가 추종).
+triage 경로의 분석 계층. 전송 규칙의 원본은 **`docs/02-design/llm-data-contract.md`**(코드가 추종).
 
 - **체인**: Claude(주 경로, 타임아웃 20s·`max_retries=0` — 실측 근거 llm_latency_20260726.md)
   → Ollama(OLLAMA_URL 설정 시) → **열화 모드**(전멸 시 선판정 문장만 회신 — LLM이 죽어도
@@ -531,9 +531,12 @@ attributes of the alert anywhere in the workflow: `{{ alert.name }}`" 이며 `{{
 
 | 근거 | 확인된 것 |
 |---|---|
-| `private/img/img_63.png` | Keep 알림 "chronyd is not running" **High**, **Service 필드 = `chronyd`** → `service` 태그가 웹훅을 타고 실제 전달됨 |
-| `private/img/img_65.png` | 워크플로 실행 성공 + Ansible 출력 **`before: inactive -> after: active`** |
-| `private/img/img_66.png` | SSH 독립 검증 — `inactive`(07-28 17:14:58) → `active`(07-29 17:34:17) |
+| 증적 ① | Keep 알림 "chronyd is not running" **High**, **Service 필드 = `chronyd`** → `service` 태그가 웹훅을 타고 실제 전달됨 |
+| 증적 ② | 워크플로 실행 성공 + Ansible 출력 **`before: inactive -> after: active`** |
+| 증적 ③ | SSH 독립 검증 — `inactive`(07-28 17:14:58) → `active`(07-29 17:34:17) |
+
+> 증적 캡처 3장은 화면에 랩 주소·호스트명이 찍혀 있어 **비공개 보관**한다(마스킹 비용 대비
+> 실익이 없다고 판단). 깨진 링크가 아니라 의도된 경계이며, 필요하면 사내에서 공유한다.
 
 ### 해소된 미확인 항목 — 수동 실행에도 알림 컨텍스트가 실린다
 

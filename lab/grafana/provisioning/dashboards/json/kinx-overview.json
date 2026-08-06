@@ -50,7 +50,7 @@
     "type": "grafana-opensearch-datasource",
     "uid": "wazuh"
    },
-   "description": "팀 현행 컷라인(레벨 10+)을 넘은 이벤트만. 레벨은 우리 통합 눈금(SEV)으로 표시해 Slack·봇 카드와 같은 언어를 쓴다 — 매핑 원본은 private/docs/severity_map.md. agent.name 을 클릭하면 그 호스트로 대시보드가 좁혀진다.",
+   "description": "팀 현행 컷라인(레벨 10+)을 넘은 이벤트만. 레벨은 우리 통합 눈금(SEV)으로 표시해 Slack·봇 카드와 같은 언어를 쓴다 — 매핑 원본은 docs/02-design/severity-normalization.md. agent.name 을 클릭하면 그 호스트로 대시보드가 좁혀진다.",
    "fieldConfig": {
     "defaults": {
      "color": {
@@ -1620,7 +1620,7 @@
      "showLineNumbers": false,
      "showMiniMap": false
     },
-    "content": "## 보안 축 상세 — Wazuh 모듈별\n위쪽은 데모 A 의 3축 통합 화면(메트릭·로그·보안을 같은 타임라인에), 아래는 **보안 축을 모듈별로 펼친 것**입니다.\n\n심각도는 통합 눈금 **SEV** 로 표시합니다 — `SEV1 즉시` / `SEV2 알림`(팀 컷라인 10+) / `SEV3 다이제스트` / `SEV4 화면만`. Slack 카드·봇 회신과 같은 언어입니다(원본: `private/docs/severity_map.md`).\n\n**FIM·SCA 기본 레벨은 5~9(SEV3·SEV4)라 알림으로 가지 않습니다.** 그래서 여기서 봅니다. 컷라인 위로 올린 것은 인증·권한 핵심 파일 변경과 SCA 회귀 둘뿐입니다.",
+    "content": "## 보안 축 상세 — Wazuh 모듈별\n위쪽은 데모 A 의 3축 통합 화면(메트릭·로그·보안을 같은 타임라인에), 아래는 **보안 축을 모듈별로 펼친 것**입니다.\n\n심각도는 통합 눈금 **SEV** 로 표시합니다 — `SEV1 즉시` / `SEV2 알림`(팀 컷라인 10+) / `SEV3 다이제스트` / `SEV4 화면만`. Slack 카드·봇 회신과 같은 언어입니다(원본: `docs/02-design/severity-normalization.md`).\n\n**FIM·SCA 기본 레벨은 5~9(SEV3·SEV4)라 알림으로 가지 않습니다.** 그래서 여기서 봅니다. 컷라인 위로 올린 것은 인증·권한 핵심 파일 변경과 SCA 회귀 둘뿐입니다.",
     "mode": "markdown"
    },
    "pluginVersion": "11.6.16",

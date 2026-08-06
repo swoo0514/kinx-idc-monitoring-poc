@@ -1,4 +1,4 @@
-"""심각도 정규화 — private/docs/severity_map.md의 코드 구현. 표 개정 시 문서 먼저."""
+"""심각도 정규화 — docs/02-design/severity-normalization.md의 코드 구현. 표 개정 시 문서 먼저."""
 
 SEV1 = "SEV1"
 SEV2 = "SEV2"

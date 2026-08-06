@@ -64,6 +64,12 @@ PENDING = "검토 대기 — 승인 후 게시됩니다"
 # 그래서 **없음을 명시적으로 보낸다.** 대시보드가 값 매핑으로 "미산출" 로 표시한다.
 NOT_MEASURED = -1
 
+# 문장 항목(파일 무결성·취약점·상위 패키지)의 "없음" 표식. 숫자 항목과 같은 이유인데,
+# 실측(2026-08-04)에서 더 나쁘게 드러났다 — customer-b 리포트의 "취약점 상위 패키지" 에
+# 범위를 안 좁혔던 이전 실행의 랩 전체 통계(kernel 2160건 …)가 그대로 남아 있었다.
+# 고객 문서에 **다른 호스트의 숫자**가 실리는 형태라 숫자 항목보다 위험하다.
+NOT_MEASURED_TEXT = "미산출 — 이 범위에서 집계된 데이터 없음"
+
 # 봇 분석은 번호 절로 강제돼 있다("**2) 추정 원인**", 때로 "**② …**").
 # 새 LLM 호출 없이 이미 만들어진 분석에서 절만 잘라 쓴다(Day8 결의 ⑥ "데모 C 출력 재활용만").
 _SEC = {
@@ -203,14 +209,19 @@ def posture_items(p: dict) -> dict:
     if p.get("status") != "ok":
         why = {"disabled": "보안 연동 미설정 — 이 절은 집계 대상이 아님",
                "unavailable": "조회 불가 — 이 절의 수치는 집계되지 않음"}.get(p.get("status"), "상태 미상")
-        # 텍스트는 상태를 말하고, 숫자는 "없음" 을 보낸다 — 안 보내면 옛 값이 남는다.
-        return {"report.security_status": why, "report.compliance": NOT_MEASURED}
+        # 상태를 말하는 데서 끝내지 않고, 숫자·문장 항목 모두 "없음" 을 보낸다.
+        # 안 보내면 조회 불가 옆에 지난 집계의 값이 그대로 남아 정상으로 읽힌다.
+        return {"report.security_status": why, "report.compliance": NOT_MEASURED,
+                "report.fim": NOT_MEASURED_TEXT, "report.vuln": NOT_MEASURED_TEXT,
+                "report.vuln_top": NOT_MEASURED_TEXT}
 
     # 산출 못 했으면 옛 값이 남지 않도록 "없음" 을 명시적으로 보낸다.
     out = {"report.compliance": p.get("compliance")
            if p.get("compliance") is not None else NOT_MEASURED}
     if "fim_all" in p:
         out["report.fim"] = "승격 룰 %d건 / 전체 파일 변경 %d건" % (p["fim_promoted"], p["fim_all"])
+    else:
+        out["report.fim"] = NOT_MEASURED_TEXT
     if "vuln" in p:
         def sev_line(c):
             return " / ".join("%s %d" % (s, c[s]) for s in SEV_ORDER if c.get(s))
@@ -235,9 +246,14 @@ def posture_items(p: dict) -> dict:
             share = 100 * sum(n for _, n in top) / total if total else 0
             out["report.vuln_top"] = ("%s — 상위 3개가 전체의 %.0f%%"
                                       % (" / ".join("%s %d건" % (k, n) for k, n in top), share))
+        else:
+            out["report.vuln_top"] = NOT_MEASURED_TEXT
+    else:
+        out["report.vuln"] = NOT_MEASURED_TEXT
+        out["report.vuln_top"] = NOT_MEASURED_TEXT
 
     ok_n = sum(1 for k in ("report.compliance", "report.fim", "report.vuln")
-               if k in out and out[k] != NOT_MEASURED)
+               if k in out and out[k] not in (NOT_MEASURED, NOT_MEASURED_TEXT))
     note = "정상 집계 (점검 대상 %d대)" % p.get("scanned", 0)
     if p.get("compliance") is None and "설정 준수율" not in " ".join(p.get("errors", [])):
         note = "설정 점검 결과 없음 — 준수율 미산출"
@@ -321,8 +337,8 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
                      if verdict_of(a) in ("만성", "재발"))
 
     # 근거 커버리지 — 로그·보안을 실제로 읽고 판단한 사건이 몇 건인가.
-    # 리포트에 로그 본문을 싣지 않는 대신 이 사실만 싣는다. 실환경 Zabbix 는 log[] 아이템이
-    # 0/321 대라, 이 문장 자체가 기존 리포트에 존재할 수 없는 종류의 내용이다.
+    # 리포트에 로그 본문을 싣지 않는 대신 이 사실만 싣는다. 실환경 Zabbix 는 log[] 아이템을
+    # 가진 호스트 비율이 사실상 0 이라, 이 문장 자체가 기존 리포트에 존재할 수 없는 내용이다.
     # sources 필드가 없는 옛 레코드는 세지 않는다 — 모르는 것을 확보로 세면 과장이 된다.
     with_src = [a for a in incidents if a.get("sources")]
     ev_logs = sum(1 for a in with_src if "logs:ok" in str(a.get("sources")))
@@ -510,7 +526,10 @@ def selftest() -> None:
     # 안전 신호로 읽히므로, 실패를 정상으로 오독시키는 것은 침묵보다 나쁘다.
     for st in ("unavailable", "disabled"):
         p = posture_items({"status": st})
-        ck("report.vuln" not in p and "report.fim" not in p, "%s 인데 보안 숫자를 만들었다" % st)
+        # 숫자를 만들지 않되, 항목 자체는 보낸다 — 안 보내면 지난 집계 값이 그대로 남는다.
+        ck(p["report.fim"] == NOT_MEASURED_TEXT and p["report.vuln"] == NOT_MEASURED_TEXT
+           and p["report.vuln_top"] == NOT_MEASURED_TEXT,
+           "%s 인데 보안 문장 항목에 옛 값이 남을 수 있다" % st)
         ck(p["report.compliance"] == NOT_MEASURED,
            "%s 인데 준수율에 옛 값이 남을 수 있다" % st)
         ck("report.security_status" in p, "%s 상태를 리포트에 알리지 않았다" % st)
@@ -536,13 +555,18 @@ def selftest() -> None:
     p0 = posture_items({"status": "ok", "compliance": None, "scanned": 0,
                         "fim_all": 0, "fim_promoted": 0, "vuln": Counter()})
     ck(p0["report.compliance"] == NOT_MEASURED, "점검 결과 없음을 준수율 0 으로 냈다")
+    # 실측 결함(2026-08-04) 회귀 — 고객 범위에 취약점이 없으면 상위 패키지도 낼 수 없다.
+    # 이 값을 안 보내면 범위 미지정 실행의 랩 전체 통계가 고객 리포트에 그대로 남는다.
+    ck(p0["report.vuln_top"] == NOT_MEASURED_TEXT,
+       "재고 0인데 상위 패키지를 안 보냈다 — 다른 호스트의 옛 값이 남는다")
 
     # 한 절이 실패해도 나머지는 살아야 한다. 취약점 인덱스 하나 때문에 SCA·FIM 을
     # 통째로 버리던 실측 결함(2026-07-31)의 회귀 검사.
     pp = posture_items({"status": "ok", "compliance": 52.4, "scanned": 4,
                         "fim_all": 107, "fim_promoted": 3, "errors": ["취약점: 인덱스 없음"]})
     ck("report.compliance" in pp and "report.fim" in pp, "한 절 실패로 나머지가 버려졌다")
-    ck("report.vuln" not in pp, "실패한 절의 값을 만들었다")
+    ck(pp["report.vuln"] == NOT_MEASURED_TEXT and pp["report.vuln_top"] == NOT_MEASURED_TEXT,
+       "실패한 절에 숫자를 만들었거나, 안 보내서 옛 값이 남는다")
     ck("부분 집계 (2/3)" in pp["report.security_status"] and "취약점" in pp["report.security_status"],
        "무엇이 빠졌는지 리포트에 안 적었다: %s" % pp["report.security_status"])
 

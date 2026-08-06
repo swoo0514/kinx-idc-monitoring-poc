@@ -1,7 +1,8 @@
 # Keep — HITL 자가치유 워크플로 (Keep → SSH → Ansible)
 
 Keep(keephq)을 알림 저장·UI + 승인 + Ansible 실행 허브로 쓰는 데모 B 배선. 평가 근거·판정은
-`private/docs/keep_evaluation_plan.md`. 아키텍처(봇·HolmesGPT 분석이 Keep에 수렴)는 그 문서 참조.
+[`docs/02-design/decisions/adr-001-keep-adopt.md`](../docs/02-design/decisions/adr-001-keep-adopt.md).
+아키텍처(봇·HolmesGPT 분석이 Keep에 수렴)는 그 문서 참조.
 
 ## 구성 요소
 

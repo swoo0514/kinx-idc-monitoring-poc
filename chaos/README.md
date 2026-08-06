@@ -4,16 +4,19 @@
 
 라이브 데모가 실패할 경우를 대비한 사전 녹화, 리허설, 그리고 "누구나 재현"이라는 산출물 가치를 위해 장애 주입을 코드로 관리합니다.
 
+> **시연 전체를 순서대로 돌리려면 [`docs/04-demo/runbook.md`](../docs/04-demo/runbook.md)를 봅니다.** 이 문서는 스크립트
+> 하나하나가 무엇을 하는지를 설명하고, 런북은 관측 코어 기동부터 게이트웨이·Keep 준비, 확인
+> 화면, 되돌리기까지를 시나리오 단위로 이어 놓은 것입니다.
+
 ## 실행 위치
 
 장애의 성격에 따라 실행 위치가 다릅니다. 실제 IP·대상은 인자로 전달하며 스크립트에 하드코딩하지 않습니다(랩 IP 커밋 방지).
 
 - **`ssh_bruteforce.sh`** — 노드의 22번 포트로 접근하는 외부 공격 시뮬이므로, **노드와 같은 사설망 안의 호스트**(예: 관측 코어 VM)에서 대상 IP를 인자로 실행합니다.
-- **`cpu_stress.sh`** — 노드 자신의 CPU를 태우는 것이므로, **SSH로 그 노드에 로그인해 실행**합니다. 작업자 PC에서 SSH 별칭으로 원격 실행하거나(`cpu_stress.sh node1`), 노드에서 직접 실행합니다.
 - **`repl_lag.sh`** — slave DB 복제를 다루므로, **관측 코어 VM의 `lab/` 디렉토리**(docker compose 접근)에서 실행합니다.
 - **`repl_lag_contention.sh`** — 슬레이브 VM(vm-target-002)의 디스크 I/O를 포화시키므로, **그 슬레이브 VM에서 직접** 실행합니다.
 - **`error_burst.sh`** — 노드 로그에 직접 쓰므로, **감시 노드에서 직접** 실행합니다.
-- **`service_down.sh`** — 대상 노드의 서비스를 정지시키므로, **작업자 PC에서 SSH 별칭으로** 실행합니다(`service_down.sh vm-target-002 chronyd`). 관측 코어 VM에는 SSH 별칭이 없어 이름을 못 찾습니다. 이 대상은 이름이 셋이라 헷갈리기 쉽습니다 — SSH 별칭 `vm-target-002` / Zabbix·Loki·Wazuh·Ansible 인벤토리 `vm-p3-target-002.novalocal` / IP `192.168.20.16`.
+- **`service_down.sh`** — 대상 노드의 서비스를 정지시키므로, **작업자 PC에서 SSH 별칭으로** 실행합니다(`service_down.sh vm-target-002 chronyd`). 관측 코어 VM에는 SSH 별칭이 없어 이름을 못 찾습니다. 이 대상은 **이름이 셋이라 헷갈리기 쉽습니다** — 대응표는 [`docs/01-build/hosts.md`](../docs/01-build/hosts.md).
 
 ## 스크립트
 
@@ -37,15 +40,6 @@ SSH 무차별 대입을 시뮬레이션하여 Wazuh 레벨 10(룰 5712) 보안 �
   조치 경로를 탑니다(태그가 없으면 일반 트리아지로 흐릅니다). 계약상 조치 금지 대상이면
   `scope=notify_only` 태그가 조치를 차단합니다.
 - 기본값을 `chronyd`로 둔 이유: 랩에 항상 있고 정지해도 서비스 영향이 없어 반복 시연이 안전합니다.
-
-### `cpu_stress.sh` — 자원 메트릭(CPU) 급등
-
-노드의 전 코어에 busy-loop을 걸어 CPU utilization을 100%로 올립니다(의존성 없이 순수 bash).
-
-- 사용: `./cpu_stress.sh <ssh_대상> [지속초=60]`
-- 원리: 대상의 `nproc` 개수만큼 `while :; do :; done` 워커를 `timeout`으로 실행 → 지정 시간 후 자동 종료
-- 확인: Grafana 메트릭 패널(Zabbix `CPU utilization`) 급등
-- 용도: 데모 A 메트릭 축. 브루트포스와 함께 주입하면 메트릭·로그·보안 세 축이 같은 순간에 반응
 
 ### `repl_lag.sh` — 복제 지연(메트릭 깊이) 유발
 
@@ -84,6 +78,15 @@ snmpsim 에러 데이터를 켰다 껐다 반복해 델타 트리거를 반복 �
 - 원리: `switch1.error.snmprec`(`rate=3`)와 `switch1.clean.snmprec`(`rate=0`)를 번갈아 물리고 snmpsim 재기동 → `ifInErrors`가 증가/고정을 반복 → `change()>2` 트리거가 PROBLEM/OK 반복
 - 확인: Monitoring → Problems 에 반복 발화 누적
 - 용도: 알림 다이어트 Before(노이즈 폭주). After 4종 정비(recovery expression·의존성·이벤트 상관·maintenance)로 1건 수렴 대비
+
+### `seed_security.sh` — 보안 이벤트 시드
+
+파일 무결성(FIM) 승격 룰이 걸린 경로에 마커를 심어 보안 이벤트를 만듭니다. 대시보드·리포트의
+보안 절이 비어 있지 않게 하는 용도입니다.
+
+- 확인: Wazuh 대시보드 → Threat Hunting → `rule.id:100201`(승격 룰) / `rule.groups:syscheck`
+- 인증 실패 축은 별도입니다 — `ssh_bruteforce.sh`를 함께 돌립니다.
+- **설정 파일을 건드리므로 반드시 되돌립니다.** 절차는 스크립트 출력과 런북 §4-B-4.
 
 ## 추가 예정
 

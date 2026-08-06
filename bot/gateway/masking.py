@@ -1,4 +1,4 @@
-"""전송 마스킹·화이트리스트 — private/docs/llm_data_spec.md의 코드 구현. 표 개정 시 문서 먼저."""
+"""전송 마스킹·화이트리스트 — docs/02-design/llm-data-contract.md의 코드 구현. 표 개정 시 문서 먼저."""
 
 import re
 
