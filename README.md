@@ -14,7 +14,7 @@ IDC 파트 모니터링 시스템(Zabbix + Grafana/Alloy + Wazuh) 고도화 **3�
 |---|---|
 | 랩을 처음부터 다시 세운다 | [`docs/01-build/README.md`](docs/01-build/README.md) |
 | 데모를 돌린다 · 리허설한다 | [`docs/04-demo/runbook.md`](docs/04-demo/runbook.md) |
-| 안 돌아간다, 원인을 찾는다 | [`docs/04-demo/runbook.md §6`](docs/04-demo/runbook.md#6-안-될-때-먼저-볼-것) |
+| 안 돌아간다, 원인을 찾는다 | [`docs/04-demo/runbook.md`](docs/04-demo/runbook.md) §7 트러블슈팅 |
 | 왜 이렇게 만들었는지 알아야 한다 | [`docs/02-design/README.md`](docs/02-design/README.md) |
 | 약점·미완을 알아야 한다 | [`docs/03-pitfalls/README.md`](docs/03-pitfalls/README.md) |
 | 이어서 개발한다 | [`docs/05-handover/status.md`](docs/05-handover/status.md) |
@@ -57,7 +57,7 @@ IDC 파트 모니터링 시스템(Zabbix + Grafana/Alloy + Wazuh) 고도화 **3�
 | **보여주는 것** | 메트릭·로그·보안이 같은 타임라인·같은 호스트에 찍히고, 클릭하면 그 호스트 로그로 좁혀진다 | 서비스가 죽고 → 승인 버튼 1회 → Ansible이 고치고 스스로 재검증한다 | 따로 올라온 알림 N건을 한 사건으로 병합하고 "복제 고장이 아니라 자원 경합"으로 재프레이밍한다 |
 | **주입** | `chaos/ssh_bruteforce.sh` | `chaos/service_down.sh` | `chaos/repl_lag_contention.sh` |
 | **확인 화면** | Grafana `kinx-overview` | Keep 승인 큐 → 워크플로 출력 | Slack 스레드 병합 카드 |
-| **런북** | [§3](docs/04-demo/runbook.md#3-시나리오-b--ssh-브루트포스-데모-a-보안-축) | [§4](docs/04-demo/runbook.md#4-시나리오-c--자가-치유-데모-b) | [§2](docs/04-demo/runbook.md#2-시나리오-a--복제-지연-데모-c-하이라이트) |
+| **런북** | [§3 시나리오 B](docs/04-demo/runbook.md) | [§4 시나리오 C](docs/04-demo/runbook.md) | [§2 시나리오 A](docs/04-demo/runbook.md) |
 
 시나리오 설계와 반문 대비는 [`docs/04-demo/`](docs/04-demo/README.md).
 

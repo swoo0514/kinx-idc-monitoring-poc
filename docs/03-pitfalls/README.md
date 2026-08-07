@@ -41,5 +41,5 @@
 
 ## 3. 관련 참조 문서
 
-- 데모 시연 중 장애 발생 시 최우선 조치 가이드: [`../04-demo/runbook.md §6`](../04-demo/runbook.md#6-안-될-때-먼저-볼-것)
+- 데모 시연 중 장애 발생 시 최우선 조치 가이드: [`../04-demo/runbook.md`](../04-demo/runbook.md) §7 트러블슈팅
 - 구축 단계별 주요 함정 요약본: [`../01-build/README.md`](../01-build/README.md)

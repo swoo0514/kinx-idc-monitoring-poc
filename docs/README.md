@@ -8,7 +8,7 @@
 |---|---|
 | 랩 환경을 처음부터 다시 구축할 때 | [`01-build/README.md`](01-build/README.md) |
 | 데모를 실행하거나 시연을 리허설할 때 | [`04-demo/runbook.md`](04-demo/runbook.md) |
-| 정상 동작하지 않는 원인을 분석하고 해결할 때 | [`03-pitfalls/build-traps.md`](03-pitfalls/build-traps.md) → [`04-demo/runbook.md §6`](04-demo/runbook.md#6-안-될-때-먼저-볼-것) |
+| 정상 동작하지 않는 원인을 분석하고 해결할 때 | [`03-pitfalls/build-traps.md`](03-pitfalls/build-traps.md) → [`04-demo/runbook.md`](04-demo/runbook.md) §7 트러블슈팅 |
 | 설계 의도와 배경을 파악해야 할 때 | [`02-design/README.md`](02-design/README.md) |
 | PoC의 한계점 및 미완성 항목을 확인할 때 | [`03-pitfalls/README.md`](03-pitfalls/README.md), [`05-handover/status.md`](05-handover/status.md) |
 | 기존 작업에 이어 후속 개발을 진행할 때 | [`05-handover/next-steps.md`](05-handover/next-steps.md) |
