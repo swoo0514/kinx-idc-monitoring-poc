@@ -209,9 +209,9 @@
 | **Active Response 및 외부 해시 연동** | Active Response 는 위탁 계약상 임의 조치가 금지된 자산이 존재하여 제외. 외부 해시 연동은 데이터 외부 반출 통제 원칙에 위배됨 |
 | **컨테이너 및 클라우드 커넥터 확장** | 현재 관측 대상 인프라(온프레미스 VM 및 물리 서버) 범위를 준수함 |
 | **진행 중 인시던트 데이터 지속화** | 검증된 타이밍 로직 영향 최소화를 위해 프로세스 종료 시 마감(Flush) 처리로 대체함 *(완료된 분석 이력 저장소 구축과는 별개 항목)* |
-| **Keep AI 상관 분석 도입** | 최상위 유료 등급(Commercial Tier) 전용 기능으로 오픈소스 티어 미지원이 확인됨 |
-| **OpenSearch Anomaly Detection 플러그인** | Wazuh 배포판 내 기본 비활성 상태이며 공식 통합 미지원으로 버전 변경 시 파손 위험 존재 |
-| **Aurora (Arvo AI) 솔루션 직접 도입** | 관측 지원 대상이 퍼블릭 클라우드/K8s로 한정되어 온프레미스 물리/VM 인프라 및 Zabbix 연동 불가함 |
+| **Keep AI 상관 분석 도입** `[문서]` | Keep Cloud 및 Enterprise On-Premises 전용 기능으로 **오픈소스 배포판에서는 제공되지 않음** ([docs.keephq.dev/overview/ai-correlation](https://docs.keephq.dev/overview/ai-correlation)) |
+| **OpenSearch Anomaly Detection 플러그인** `[문서]` | Wazuh 가 **완전한 통합을 구현하지 않아 기본 비활성** 상태로 배포함. 수동 설치는 가능하나 공식 통합이 아니므로 버전 변경 시 파손 위험이 남음 |
+| **Aurora (Arvo AI) 솔루션 직접 도입** `[문서]` | **조사 대상이 퍼블릭 클라우드(AWS·Azure·GCP)와 Kubernetes 중심이고 통합 목록에 Zabbix 가 없음** — 우리 스택의 주 수집원을 읽지 못한다. *(온프레미스 배포 자체는 가능하다 — Docker Compose 자체 호스팅과 에어갭 번들을 지원한다. 제외 사유는 배포 방식이 아니라 조사 대상 범위다.)* |
 
 ---
 
