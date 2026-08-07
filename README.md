@@ -23,42 +23,10 @@ IDC 파트 모니터링 시스템(Zabbix + Grafana/Alloy + Wazuh) 고도화 **3�
 
 ## 구조
 
-```mermaid
-flowchart LR
-    subgraph 수집
-      A1[zabbix-agent2<br/>메트릭]
-      A2[Alloy<br/>로그]
-      A3[wazuh-agent<br/>보안]
-    end
-    subgraph 저장·관측
-      B1[(Zabbix<br/>+ MariaDB)]
-      B2[(Loki)]
-      B3[(Wazuh<br/>Indexer)]
-      B4[Grafana]
-    end
-    subgraph 게이트웨이
-      C1[분류 · 심각도 정규화]
-      C2[인시던트 병합]
-      C3[만성/신규 선판정]
-      C4[마스킹]
-      C5[LLM 분석]
-    end
-    subgraph 반출·조치
-      D1[Slack]
-      D2[Keep<br/>승인 큐]
-      D3[Ansible]
-    end
-    A1 --> B1; A2 --> B2; A3 --> B3
-    B1 & B2 & B3 --> B4
-    B1 -- 웹훅 --> C1
-    B3 -- 웹훅 --> C1
-    C1 --> C2 --> C3 --> C4 --> C5
-    C5 --> D1
-    C5 --> D2
-    D2 -- 사람 승인 1회 --> D3
-    B1 & B2 & B3 -. 컨텍스트 조회 .-> C2
-    E([chaos 주입]) -.-> A1 & A2 & A3
-```
+![AIOps 전체 구조](docs/assets/architecture-aiops.png)
+
+가운데 게이트웨이 안의 **점선 상자가 판단 모듈**입니다. 각 칸이 어느 문서에 대응하는지는
+[`docs/00-architecture.md`](docs/00-architecture.md).
 
 세 줄로 요약하면 이렇습니다.
 

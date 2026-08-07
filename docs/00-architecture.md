@@ -3,51 +3,69 @@
 코드를 고치기 전에 이 문서를 봅니다. 세부 배선은 각 디렉토리의 가이드에 있고, 여기는
 **전체 모양과 용어**입니다.
 
-## 1. 랩 토폴로지
+## 1. 전체 구조 한 장
+
+![AIOps 전체 구조](assets/architecture-aiops.png)
+
+**읽는 법** — 왼쪽에서 오른쪽으로 알림 하나가 흐릅니다. 가운데 게이트웨이 안의 **점선 상자가
+판단 모듈**이고, 실선은 그 앞뒤의 수집·통신입니다. 판단이 전부 코드이고 LLM은 그 뒤에서
+설명만 쓴다는 것이 이 그림의 요점입니다.
+
+빠른 분석(Claude/Ollama)과 심층 조사(HolmesGPT)가 **다른 칸에 있는 이유**는 시간 예산이 다르기
+때문입니다. 앞은 30초 안에 사람에게 첫 답을 주고, 뒤는 분 단위로 돌면서 결과를 같은 스레드에
+덧붙입니다. 둘 중 하나를 고른 것이 아니라 역할을 나눈 것입니다.
+
+### 각 칸을 자세히 보려면
+
+이 그림은 지도이고, 실제 정의는 아래 문서들이 갖고 있습니다. **같은 내용을 여기서 다시 쓰지
+않습니다.**
+
+| 그림의 칸 | 무엇을 보나 | 문서 |
+|---|---|---|
+| 수집 (에이전트 3종) | 배포·자동등록·FQDN 정규화 | [`ansible/DEPLOY_GUIDE.md`](../ansible/DEPLOY_GUIDE.md) |
+| 수집 (Zabbix·Loki·Wazuh·Grafana) | 구축 절차·데이터소스·대시보드 | [`01-build/01-observability-core.md`](01-build/01-observability-core.md) |
+| 판단 — 심각도 정규화 | 세 눈금을 SEV 하나로 (사내/MSP 비대칭) | [`02-design/severity-normalization.md`](02-design/severity-normalization.md) |
+| 판단 — 병합·선별·발동 게이트 | 규칙 전수와 순서 | [`02-design/rules-inventory.md`](02-design/rules-inventory.md) |
+| 판단 — 마스킹·소스 상태 | 무엇을 내보내고 무엇을 안 내보내나 | [`02-design/llm-data-contract.md`](02-design/llm-data-contract.md) |
+| 빠른 분석 | 모델 경로·폴백·열화 | [`02-design/decisions/adr-005-llm-path.md`](02-design/decisions/adr-005-llm-path.md) |
+| 심층 조사 | 왜 도입이 아니라 하이브리드인가 | [`02-design/decisions/adr-002-holmesgpt.md`](02-design/decisions/adr-002-holmesgpt.md) |
+| 관제·조치 | 승인 게이트와 조치 후 재검증 | [`keep/KEEP_GUIDE.md`](../keep/KEEP_GUIDE.md) |
+
+이 그림이 **보여주지 않는 것**도 있습니다. 어느 VM에 무엇이 올라가는지는 §2, 시간 순서와
+대기(디바운스)는 §3, 그리고 이 구조의 약점은 [`03-pitfalls/`](03-pitfalls/README.md)입니다.
+
+## 2. 랩 토폴로지
+
+§1이 **신호가 어떻게 흐르는가**라면, 여기는 **그것이 어느 장비에 올라가 있는가**입니다.
 
 ```mermaid
-flowchart TB
-    subgraph W["작업자 PC"]
-      W1[SSH 별칭 · chaos 실행]
-    end
-    subgraph CORE["core — 관측 코어 VM (Docker)"]
-      Z[(Zabbix 7.0 + MariaDB)]
-      L[(Loki)]
-      G[Grafana]
-      B[게이트웨이<br/>uvicorn]
-      A[Ansible control node]
-    end
-    subgraph N1["node1 — 감시 노드"]
-      N1A[zabbix-agent2 · Alloy · wazuh-agent]
-    end
-    subgraph N2["node2 — 복제 슬레이브"]
-      N2A[zabbix-agent2 · Alloy · wazuh-agent]
-      N2D[(MariaDB slave)]
-    end
-    subgraph WZ["Wazuh 6노드 클러스터"]
-      WI[(Indexer ×3)]
-      WM[Server ×2<br/>master · worker]
-      WD[Dashboard]
-    end
-    K[Keep VM<br/>승인 큐]
+flowchart LR
+    W["작업자 PC"]
+    T["감시 대상 VM<br/>에이전트 3종<br/>node2 = MariaDB slave"]
+    C["core VM<br/>Zabbix · Loki · Grafana<br/>게이트웨이 · Ansible control"]
+    WZ["Wazuh 클러스터<br/>VM 6대"]
+    K["Keep VM<br/>승인 큐"]
 
-    N1A --> Z & L & WM
-    N2A --> Z & L & WM
-    N2D -.복제.-> Z
-    WM --> WI --> WD
-    Z & L & WI --> G
-    Z -- 웹훅 --> B
-    WM -- 웹훅 --> B
-    B --> K
-    K -- 승인 --> A
-    A -- SSH --> N1 & N2
-    W1 -.주입.-> N1 & N2
+    W -. chaos 주입 .-> T
+    T -- 지표 · 로그 --> C
+    T -- 보안 --> WZ
+    WZ -- 웹훅 · 조회 --> C
+    C -- 조치 후보 --> K
+    K -- 승인 --> C
+    C -. Ansible SSH .-> T
 ```
+
+| VM | 올라가 있는 것 | 왜 거기인가 |
+|---|---|---|
+| **core** | Zabbix + MariaDB · Loki · Grafana · 게이트웨이 · Ansible control node | 관측 코어를 compose 하나로 묶고, 게이트웨이가 그 API를 로컬에서 부른다. Ansible control 을 여기 둔 것은 **감시 대상에 손대지 않고 코드로 배포**하기 위해서다 |
+| **감시 대상 VM** | zabbix-agent2 · Alloy · wazuh-agent (node2 는 MariaDB slave 추가) | 세 에이전트가 **같은 FQDN**을 쓰도록 배포한다 — 이름이 갈리면 세 축을 한 호스트로 못 본다 |
+| **Wazuh 클러스터** | Indexer ×3 · Server ×2(master/worker) · Dashboard ×1 | 실환경 구성을 1:1로 미러한다. 단일 호스트 컨테이너로 만들면 실환경에 없는 문제가 생긴다 |
+| **Keep VM** | Keep(백엔드·UI·websocket) | 승인 UI 는 관측 코어가 죽어도 살아 있어야 하고, 공식 배포가 별도 compose 다 |
 
 **리포가 있는 곳은 `core`와 Keep VM 둘뿐입니다.** 나머지 VM에서는 스크립트를 그때그때
 올려 씁니다. 호스트 이름·주소 대응표는 [`01-build/hosts.md`](01-build/hosts.md).
 
-## 2. 알림 하나의 생애
+## 3. 알림 하나의 생애
 
 ```mermaid
 sequenceDiagram
@@ -80,7 +98,7 @@ sequenceDiagram
 **여기서 LLM이 등장하는 곳은 한 군데뿐이고, 그 앞뒤가 전부 규칙입니다.**
 어떤 규칙이 어디에 있는지는 [`02-design/rules-inventory.md`](02-design/rules-inventory.md).
 
-## 3. 계층으로 보면
+## 4. 계층으로 보면
 
 | 계층 | 무엇 | 어디 |
 |---|---|---|
@@ -94,7 +112,7 @@ sequenceDiagram
 | **승인** | Keep 워크플로 (시스템 변경 · 고객 발송) | `keep/workflows/` |
 | **주입** | chaos 스크립트 | `chaos/` |
 
-## 4. 용어
+## 5. 용어
 
 | 용어 | 뜻 |
 |---|---|
@@ -110,7 +128,7 @@ sequenceDiagram
 | **scope / automate** | Zabbix 트리거 태그. `scope=notify_only`가 `automate`를 이겨 조치 경로를 차단 |
 | **HITL** | 사람이 승인 버튼을 눌러야 조치가 실행되는 구조 |
 
-## 5. 자주 헷갈리는 구분
+## 6. 자주 헷갈리는 구분
 
 - **알림(alert) ≠ 사건(incident)** — 사건 하나에 알림이 여럿입니다. KPI도 사건 기준입니다.
 - **"3소스"의 두 가지 의미** — 세 곳을 **조회**한다는 뜻이지, 세 시스템의 알림이 한 사건으로
