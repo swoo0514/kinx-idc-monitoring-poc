@@ -1,98 +1,107 @@
-# chaos/ — 장애 주입 스크립트
+# 장애 주입 스크립트 가이드 (chaos/)
 
-데모에서 "장애를 일으켜 관제 화면이 반응하는 것"을 재현하기 위한 스크립트 모음입니다. 모두 **랩 전용**이며, 실환경에서는 실행하지 않습니다.
+## 1. 개요 및 작성 목적
 
-라이브 데모가 실패할 경우를 대비한 사전 녹화, 리허설, 그리고 "누구나 재현"이라는 산출물 가치를 위해 장애 주입을 코드로 관리합니다.
+본 디렉토리는 시연(Demo) 및 검증 환경에서 인프라 장애 상황을 시뮬레이션하고 관제 파이프라인의 탐지, 초동 분석 및 자동 조치 동작을 검증하기 위한 **장애 주입(Chaos Injection) 스크립트 모음**입니다.
 
-> **시연 전체를 순서대로 돌리려면 [`docs/04-demo/runbook.md`](../docs/04-demo/runbook.md)를 봅니다.** 이 문서는 스크립트
-> 하나하나가 무엇을 하는지를 설명하고, 런북은 관측 코어 기동부터 게이트웨이·Keep 준비, 확인
-> 화면, 되돌리기까지를 시나리오 단위로 이어 놓은 것입니다.
+* **주의:** 본 스크립트군은 **실험 인프라(랩) 전용**으로 구현되었으며, 실제 운영(Production) 환경에서의 실행을 엄격히 금지합니다.
+* **코드 기반 장애 관리 (Chaos as Code):** 라이브 시연 실패 리스크 최소화, 리허설 수행, 시스템 동작 재현성(Reproducibility) 확보를 목적으로 장애 주입 절차를 스크립트로 관리합니다.
 
-## 실행 위치
+*(전체 시연 실행 워크플로는 [`docs/04-demo/runbook.md`](../docs/04-demo/runbook.md) 가이드를 참조합니다.)*
 
-장애의 성격에 따라 실행 위치가 다릅니다. 실제 IP·대상은 인자로 전달하며 스크립트에 하드코딩하지 않습니다(랩 IP 커밋 방지).
+---
 
-- **`ssh_bruteforce.sh`** — 노드의 22번 포트로 접근하는 외부 공격 시뮬이므로, **노드와 같은 사설망 안의 호스트**(예: 관측 코어 VM)에서 대상 IP를 인자로 실행합니다.
-- **`repl_lag.sh`** — slave DB 복제를 다루므로, **관측 코어 VM의 `lab/` 디렉토리**(docker compose 접근)에서 실행합니다.
-- **`repl_lag_contention.sh`** — 슬레이브 VM(vm-target-002)의 디스크 I/O를 포화시키므로, **그 슬레이브 VM에서 직접** 실행합니다.
-- **`error_burst.sh`** — 노드 로그에 직접 쓰므로, **감시 노드에서 직접** 실행합니다.
-- **`service_down.sh`** — 대상 노드의 서비스를 정지시키므로, **작업자 PC에서 SSH 별칭으로** 실행합니다(`service_down.sh vm-target-002 chronyd`). 관측 코어 VM에는 SSH 별칭이 없어 이름을 못 찾습니다. 이 대상은 **이름이 셋이라 헷갈리기 쉽습니다** — 대응표는 [`docs/01-build/hosts.md`](../docs/01-build/hosts.md).
+## 2. 스크립트별 실행 위치 매핑
 
-## 스크립트
+장애 유형에 따라 실행 대상 및 위치가 상이합니다. 하드코딩에 의한 잘못된 인프라 수정을 방지하기 위해 대상 IP 및 파라미터는 CLI 인자(Argument)로 수신합니다.
 
-### `ssh_bruteforce.sh` — 보안 이벤트(브루트포스) 주입
+| 스크립트명 | 권장 실행 위치 | 실행 방식 및 목적 |
+|---|---|---|
+| **`ssh_bruteforce.sh`** | 동일 사설망 내 노드 (예: 관측 코어 VM) | 대상 노드 22번 포트 접근 외부 공격 시뮬레이션 |
+| **`repl_lag.sh`** | 관측 코어 VM (`lab/` 디렉토리) | Docker Compose 제어를 통한 Master DB 대량 Write 생성 |
+| **`repl_lag_contention.sh`** | 슬레이브 VM (`vm-target-002`) | 슬레이브 로컬 디스크 I/O 포화를 통한 자원 경합 유발 |
+| **`error_burst.sh`** | 감시 대상 VM 직접 실행 | 로컬 저널/로그 파일 직접 쓰기를 통한 오류율 급증 시뮬레이션 |
+| **`service_down.sh`** | 작업자 PC (SSH 별칭 이용) | SSH 별칭 기반 대상 서비스 정지 (`service_down.sh vm-target-002 chronyd`) |
+| **`snmp_iface_error.sh`** | 관측 코어 VM (`lab/` 디렉토리) | `snmpsim` 컨테이너 제어를 통한 네트워크 에러 카운터 변동 유발 |
+| **`seed_security.sh`** | 감시 대상 VM 직접 실행 | 주요 보안 경로 파일 변조를 통한 FIM 경보 시드 생성 |
 
-SSH 무차별 대입을 시뮬레이션하여 Wazuh 레벨 10(룰 5712) 보안 이벤트를 발생시킵니다.
+*(참고: 호스트명, 사설 IP 및 SSH 별칭 매핑 정보는 [`docs/01-build/hosts.md`](../docs/01-build/hosts.md) 문서를 참조합니다.)*
 
-- 사용: `./ssh_bruteforce.sh <대상_IP> [횟수=12] [계정=badguy]`
-- 원리: 없는 계정으로 반복 로그인 실패 → 룰 5710(level 5) 누적 → 120초 내 8회 초과 시 5712(level 10)로 격상 (Wazuh 상관 분석)
-- 확인: Wazuh 대시보드 → Threat Hunting → `rule.id:5712`
-- 용도: 데모 A 보안 축, 데모 C(AI 트리아지) 입력 소재
+---
 
-### `service_down.sh` — 서비스 정지 (데모 B 입력)
+## 3. 스크립트별 세부 동작 명세
 
-대상 노드의 서비스를 정지시켜 자가 치유 흐름을 처음부터 끝까지 돌립니다.
+### 3-1. `ssh_bruteforce.sh` — SSH 무차별 대입 공격 (보안 축)
 
-- 사용: `./service_down.sh <ssh_대상> [서비스=chronyd]`
-- 흐름: 정지 → Zabbix 서비스 트리거 발화 → 게이트웨이가 `automate` 태그를 보고 조치 후보를
-  Keep 승인 큐에 등록 → 사람이 Run Workflow(승인) → Ansible 이 재기동하고 상태를 재검증
-- 전제: 그 트리거에 `automate=service_restart` 태그와 `service=<서비스명>` 태그가 붙어 있어야
-  조치 경로를 탑니다(태그가 없으면 일반 트리아지로 흐릅니다). 계약상 조치 금지 대상이면
-  `scope=notify_only` 태그가 조치를 차단합니다.
-- 기본값을 `chronyd`로 둔 이유: 랩에 항상 있고 정지해도 서비스 영향이 없어 반복 시연이 안전합니다.
+SSH 로그인 실패 패턴을 시뮬레이션하여 Wazuh 레벨 10 보안 경보를 발생시킵니다.
 
-### `repl_lag.sh` — 복제 지연(메트릭 깊이) 유발
+- **실행 명령:** `./ssh_bruteforce.sh <대상_IP> [시도횟수=12] [계정명=badguy]`
+- **동작 원리:** 미존재 계정 대상 반복 로그인 시도 ➔ Wazuh 룰 5710(Level 5) 발화 ➔ 120초 이내 8회 이상 누적 시 Wazuh 상관 분석 엔진에 의해 룰 5712(Level 10) 경보로 격상
+- **검증 경로:** Wazuh Dashboard ➔ Threat Hunting ➔ `rule.id:5712`
+- **적용 시나리오:** 데모 A 보안 통합 관제, 데모 C 복합 보안 시나리오
 
-master에 대량 쓰기를 걸어 slave 복제 지연을 만듭니다.
+### 3-2. `service_down.sh` — 서비스 중단 (자가 치유)
 
-- 사용: `./repl_lag.sh [배가횟수=14]`
-- 원리: master 대량 쓰기 → slave 단일 SQL 스레드가 재생을 못 따라감 → `Slave_SQL_Running=Yes`를 유지한 채 `Seconds_Behind_Master`만 급등
-- 확인: Grafana `KINX 복제 품질` 대시보드 — 상태 Up(1) 유지, 지연(초) 급등
-- 용도: 메트릭 깊이 1축(상태만 보면 정상, 지연을 봐야 밀림이 보임)
+대상 노드의 시스템 데몬을 정지하여 승인 기반 자가 치유(HITL) 파이프라인 전체 흐름을 테스트합니다.
 
-### `repl_lag_contention.sh` — 복제 지연(자원 경합, 데모 C)
+- **실행 명령:** `./service_down.sh <SSH_별칭> [서비스명=chronyd]`
+- **제어 흐름:** 서비스 정지 ➔ Zabbix 서비스 중단 트리거 발화 ➔ 게이트웨이가 `automate` 태그 확인 후 Keep 승인 큐에 조치 후보 등록 ➔ 관제 담당자 승인(Run Workflow) ➔ Ansible 자동 재기동 및 재검증
+- **전제 조건:** Zabbix 트리거에 `automate=service_restart` 및 `service=<서비스명>` 태그가 부여되어 있어야 라우팅됩니다. (`scope=notify_only` 태그 존재 시 조치 라우팅 차단)
+- **기본 서비스 (`chronyd`):** 인프라 영향도가 적고 복구가 용이하여 안전한 반복 시연이 가능합니다.
 
-슬레이브 VM의 디스크 I/O를 백업성 부하로 포화시켜 복제가 밀리게 합니다. `repl_lag.sh`(master 대량 쓰기)와 달리 **원인이 자원 경합**이라, 데모 C의 "복제 고장인가 자원 경합인가" 재프레이밍의 소재입니다.
+### 3-3. `repl_lag.sh` — DB 복제 지연 (메트릭 축)
 
-- 사용: `DURATION=180 MASTER_HOST=<master 사설 IP> DEMO_WRITER_USER=... DEMO_WRITER_PASSWORD=... ./repl_lag_contention.sh`
-- 실행 위치: 슬레이브 VM(vm-target-002). 사전 구축은 `lab/mariadb/REPL_VM_GUIDE.md`
-- 원리: syslog 백업 마커(Loki 교차신호) + 디스크 I/O 포화(대용량 쓰기·로컬 덤프) + master 가벼운 쓰기(복제 스트림) → iowait↑ + `Seconds_Behind_Master`↑ 가 같은 호스트·시간창에
-- 확인: Zabbix(지연·iowait 급등) + Loki(백업 로그) + Wazuh(경보 없음=침해 배제) → 봇이 1개 인시던트로 병합
-- 용도: 데모 C(AI 트리아지·인시던트 병합) 핵심 시나리오
+Master DB 노드에 대량 쓰기 연산을 발생시켜 Slave 복제 지연을 유발합니다.
 
-### `error_burst.sh` — 오류율(로그 기반) 급등
+- **실행 명령:** `./repl_lag.sh [배가횟수=14]`
+- **동작 원리:** Master 대량 쓰기 발생 ➔ Slave 단일 SQL 스레드의 처리 지연 ➔ `Slave_SQL_Running=Yes` 상태를 유지하면서 `Seconds_Behind_Master` 수치 급증
+- **검증 경로:** Grafana `KINX 복제 품질` 대시보드 (Status=Up(1) 유지, 지연 시간 급증 확인)
+- **적용 시나리오:** 단순 상태 플래그(1/0) 관측과 수치 지표 관측의 깊이 차이 입증
 
-`logger`로 감시 노드 로그에 ERROR를 주입해 Loki 오류율을 급등시킵니다.
+### 3-4. `repl_lag_contention.sh` — 자원 경합 기반 DB 복제 지연 (데모 C 핵심)
 
-- 사용: `./error_burst.sh [건수=300] [태그=payment-api]`
-- 원리: `user.err` 로그 → rsyslog가 `/var/log/messages` 기록 → Alloy(`job=varlogs`) → Loki. `rate`로 오류율 지표화
-- 확인: Grafana Loki 패널 `sum(rate({job="varlogs"} |= "ERROR" [1m]))` 급등
-- 용도: 메트릭 깊이 2축(로그는 수집하는데 오류율을 지표로 안 봄)
+슬레이브 VM의 디스크 I/O를 백업성 부하로 포화시켜 복제 지연을 발생시킵니다.
 
-### `snmp_iface_error.sh` — 인터페이스 에러 노이즈 폭주 (알림 다이어트 Before)
+- **실행 명령:** `DURATION=420 MASTER_HOST=<MASTER_IP> DEMO_WRITER_USER=... DEMO_WRITER_PASSWORD=... ./repl_lag_contention.sh`
+- **실행 위치:** 슬레이브 VM (`vm-target-002`)
+- **동작 원리:** Syslog 백업 마커 생성(Loki 연관 신호) + 로컬 DB 덤프/쓰기 연산으로 디스크 I/O 포화 + Master 가벼운 Write 스트림 전송 ➔ 동일 호스트/동일 타임라인 상에서 `iowait` 상승 및 `Seconds_Behind_Master` 지연 동시 발생
+- **검증 경로:** Zabbix (지연/iowait 상승) + Loki (백업 로그) + Wazuh (침해 흔적 없음) ➔ 게이트웨이 단일 인시던트 자동 병합 및 인과관계 분석
+- **적용 시나리오:** 데모 C (AI 초동 분석 및 인시던트 병합) 핵심 시나리오
 
-snmpsim 에러 데이터를 켰다 껐다 반복해 델타 트리거를 반복 발화시킵니다.
+### 3-5. `error_burst.sh` — 애플리케이션/시스템 로그 에러율 급증
 
-- 사용: `./snmp_iface_error.sh [사이클=6] [체류초=70]`
-- 실행 위치: 관측 코어 VM의 `lab/`(docker compose 접근)
-- 원리: `switch1.error.snmprec`(`rate=3`)와 `switch1.clean.snmprec`(`rate=0`)를 번갈아 물리고 snmpsim 재기동 → `ifInErrors`가 증가/고정을 반복 → `change()>2` 트리거가 PROBLEM/OK 반복
-- 확인: Monitoring → Problems 에 반복 발화 누적
-- 용도: 알림 다이어트 Before(노이즈 폭주). After 4종 정비(recovery expression·의존성·이벤트 상관·maintenance)로 1건 수렴 대비
+`logger` 유틸리티를 통해 시스템 로그에 ERROR 레벨 메시지를 다량 주입합니다.
 
-### `seed_security.sh` — 보안 이벤트 시드
+- **실행 명령:** `./error_burst.sh [건수=300] [태그=payment-api]`
+- **동작 원리:** `user.err` 로그 주입 ➔ rsyslog가 `/var/log/messages` 기록 ➔ Alloy 에이전트 수집 ➔ Loki Push ➔ Log Rate 지표 변동
+- **검증 경로:** Grafana Loki 패널 (`sum(rate({job="varlogs"} |= "ERROR" [1m]))` 지표 스파이크 확인)
+- **적용 시나리오:** 로그 데이터의 지표화(Metricization) 수용성 검증
 
-파일 무결성(FIM) 승격 룰이 걸린 경로에 마커를 심어 보안 이벤트를 만듭니다. 대시보드·리포트의
-보안 절이 비어 있지 않게 하는 용도입니다.
+### 3-6. `snmp_iface_error.sh` — 네트워크 인터페이스 에러 폭주 (알림 노이즈)
 
-- 확인: Wazuh 대시보드 → Threat Hunting → `rule.id:100201`(승격 룰) / `rule.groups:syscheck`
-- 인증 실패 축은 별도입니다 — `ssh_bruteforce.sh`를 함께 돌립니다.
-- **설정 파일을 건드리므로 반드시 되돌립니다.** 절차는 스크립트 출력과 런북 §4-B-4.
+`snmpsim` 에러 데이터를 주기적으로 토글하여 네트워크 에러 트리거를 반복 발화시킵니다.
 
-## 추가 예정
+- **실행 명령:** `./snmp_iface_error.sh [사이클=6] [체류시간=70]`
+- **실행 위치:** 관측 코어 VM (`lab/` 디렉토리)
+- **동작 원리:** `switch1.error.snmprec` (Rate=3)과 `switch1.clean.snmprec` (Rate=0) 응답 파일을 주기적 교체 후 `snmpsim` 재기동 ➔ `ifInErrors` 카운터 증감 반복 ➔ Zabbix `change()>2` 트리거의 PROBLEM/OK 반복 발화
+- **검증 경로:** Zabbix Monitoring ➔ Problems 내 중복 알림 누적 확인
+- **적용 시나리오:** 알림 노이즈 억제 및 필터링 기능 시연 (Before 환경)
 
-| 스크립트 | 주입 내용 | 관제 반응 |
-| --- | --- | --- |
-| `disk_fill.sh` | 디스크 사용률 상승 (fallocate) | 디스크 임계치 트리거 |
-| `service_kill.sh` | 서비스 프로세스 종료 | proc.num 트리거 |
+### 3-7. `seed_security.sh` — 보안 경보 데이터 시드 생성
 
-각 스크립트는 대상·강도를 인자로 받아 재현 가능하게 작성하며, 어떤 관제 화면이 어떻게 반응하는지를 본 README에 명시합니다.
+FIM 승격 룰이 적용된 감시 경로 내 파일을 수정하여 보안 경보 데이터를 생성합니다.
+
+- **동작 원리:** `/etc/ssh/sshd_config` 등 주요 보안 파일 내 마커 구문 삽입 ➔ Wazuh FIM 실시간 탐지 ➔ Level 12 승격 경보 생성
+- **검증 경로:** Wazuh Dashboard ➔ Threat Hunting ➔ `rule.id:100201`
+- **주의 사항:** **시스템 설정 파일이 변경되므로 테스트 완료 후 반드시 복원 절차를 수행합니다.** (복원 방법: [`docs/04-demo/runbook.md`](../docs/04-demo/runbook.md) §5-4 환경 원복 절차 참조)
+
+---
+
+## 4. 추가 개발 로드맵
+
+| 스크립트명 | 주입 장애 내용 | 연동 관제 트리거 및 검증 지표 |
+|---|---|---|
+| **`disk_fill.sh`** | `fallocate` 유틸리티를 활용한 디스크 사용률 포화 | Zabbix 디스크 용량 임계치 트리거 (`vfs.fs.size`) |
+| **`service_kill.sh`** | 특정 서비스 프로세스 강제 종료 (`SIGKILL`) | Zabbix 프로세스 수 관측 트리거 (`proc.num`) |
+
+신규 장애 주입 스크립트 추가 시 대상 파라미터 제어 및 복구(Clean-up) 핸들러를 포함하여 작성하며, 본 README 문서의 동작 사양을 업데이트합니다.

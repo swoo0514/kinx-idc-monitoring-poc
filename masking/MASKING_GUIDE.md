@@ -1,54 +1,83 @@
-# 마스킹 이그레스 프록시 (HolmesGPT/외부LLM MSP 빗장 해제)
+# 마스킹 이그레스 프록시 (Masking Egress Proxy) — 외부 LLM 데이터 보안 파이프라인
 
-외부 LLM으로 나가는 데이터에서 식별자(호스트·IP·고객사·DB명)를 **가역 마스킹**해, HolmesGPT
-같은 마스킹 없는 도구도 MSP 데이터에 쓸 수 있게 하는 계층. **밑바닥 구현이 아니라 OSS 조립** —
-Presidio(탐지·익명화) + LiteLLM(프록시·역치환). 무엇을 내보내고 무엇을 안 내보내는지의 계약은
-[`docs/02-design/llm-data-contract.md`](../docs/02-design/llm-data-contract.md).
+본 문서는 외부 LLM(OpenAI, Anthropic 등)으로 송신되는 관측 텔레메트리 데이터 내 민감 식별자(호스트명, IP 주소, 고객사명, DB 식별자)를 **가역적 가명화(Reversible Masking)**하여 통제하는 이그레스 프록시 계층의 구축 가이드입니다.
 
-## 왜 이 조합
+자체 마스킹 기능이 없는 에이전틱 도구(HolmesGPT 등)도 MSP 테넌트 데이터 분석에 안전하게 활용할 수 있도록 **Presidio(탐지·익명화) + LiteLLM(OpenAI 호환 프록시·역치환)** 오픈소스 조합으로 구성되었습니다.
 
-- HolmesGPT는 내부적으로 **LiteLLM**으로 LLM을 부른다 → 별도 LiteLLM 프록시를 앞에 세우고
-  HolmesGPT를 그 프록시(OpenAI-호환)로 가리키면 자연스럽게 마스킹이 삽입된다.
-- **OpenAI-호환 경로**라, 앞서 확인한 "Anthropic 네이티브 경로 `output_parse_pii` 이슈"를
-  우회할 가능성이 크다(이 우회가 되는지가 핵심 검증점 = task #4).
+*(데이터 송수신 및 마스킹 보안 규약: [`docs/02-design/llm-data-contract.md`](../docs/02-design/llm-data-contract.md) 참조)*
 
-## 체인
+---
 
+## 1. 아키텍처 및 선정 배경
+
+- **LiteLLM 프록시 레이어 활용:** HolmesGPT는 내부적으로 LiteLLM을 통해 LLM 호출을 수행하므로, 전면에 OpenAI API 호환 LiteLLM 프록시를 배치하고 엔드포인트를 지정하면 별도의 코드 수정 없이 마스킹 파이프라인이 투명하게 주입됩니다.
+- **Anthropic 네이티브 파서 이슈 우회:** OpenAI API 호환 응답 규격을 이용함으로써, 기존 Anthropic 네이티브 호출 시 발생하던 `output_parse_pii` 파싱 예외 항목을 구조적으로 회피합니다.
+
+---
+
+## 2. 데이터 처리 체인 (Data Flow)
+
+```text
+HolmesGPT (OpenAI 호환 API)
+   │
+   ▼ (OPENAI_API_BASE=http://<proxy-host>:4000)
+LiteLLM Proxy
+   │
+   ├── [요청 단계] Presidio Anonymizer ➔ 민감 식별자 마스킹 ([IP_ADDRESS], [HOST_NAME])
+   │
+   ▼ (마스킹된 프롬프트 전송)
+Anthropic API (Claude Model)
+   │
+   ▼ (마스킹 상태의 분석 및 Tool-Call 응답 회신)
+LiteLLM Proxy
+   │
+   ├── [응답 단계] Presidio Deanonymizer ➔ 마스킹 토큰을 원본 식별자로 역치환
+   │
+   ▼ (복원된 분석 결과 및 Tool-Call 회신)
+HolmesGPT (실제 식별자 기반 후속 도구 실행 및 조사 완주)
 ```
-HolmesGPT --(OpenAI호환, OPENAI_API_BASE=proxy:4000)--> LiteLLM proxy
-   → Presidio 마스킹(요청)  → Anthropic  → Presidio 역치환(응답, output_parse_pii)  → HolmesGPT
-```
 
-## 기동 (마스킹 프록시 호스트, 예: keep VM)
+---
+
+## 3. 기동 및 배포 절차 (마스킹 프록시 호스트)
 
 ```bash
-export ANTHROPIC_API_KEY=...      # .env source, 로그·커밋 금지
-docker compose up -d              # presidio-analyzer/anonymizer + litellm:4000
-# 헬스: Presidio 탐지 확인
-curl -s -X POST http://localhost:4000/health -H "Authorization: Bearer sk-masking-lab"
+# 환경변수 로드 (로그 및 코드 내 자격 증명 포함 금지)
+set -a; source .env; set +a
+
+# Presidio (Analyzer/Anonymizer) 및 LiteLLM 서비스 기동
+docker compose up -d
+
+# 프록시 헬스체크 및 Presidio 연동 검증
+curl -s -X POST http://localhost:4000/health \
+  -H "Authorization: Bearer sk-masking-lab"
 ```
 
-## HolmesGPT를 프록시 경유로 (core, docker run)
+---
+
+## 4. HolmesGPT 프록시 경유 실행 절차 (`core` 노드)
 
 ```bash
 docker run --rm --net=host \
   -e OPENAI_API_KEY=sk-masking-lab \
-  -e OPENAI_API_BASE=http://<proxy-host>:4000 \
+  -e OPENAI_API_BASE=http://<PROXY_HOST_IP>:4000 \
   -v ~/.holmes:/root/.holmes \
-  <holmes-image> ask "..." --model="openai/masked-opus" --refresh-toolsets
+  <HOLMES_IMAGE_NAME> ask "..." --model="openai/masked-opus" --refresh-toolsets
 ```
 
-## 검증점 (여기가 진짜 평가)
+---
 
-1. **마스킹 발생** — LiteLLM `--detailed_debug` 로그에서 Anthropic으로 나간 프롬프트에 실
-   호스트/IP가 아니라 `<IP_ADDRESS>`·`<PERSON>` 토큰인지.
-2. **역치환(가역) + 에이전틱 루프** — Claude가 마스킹 토큰으로 만든 tool-call이 실행 전 실
-   값으로 역치환돼 HolmesGPT 조사가 **정상 동작**하는지. 안 되면 에이전트가 토큰으로 조회해
-   깨진다 → 이게 앞서 우려한 지점. 여기서 막히면 우회/구현할 곳이 확정된다.
-3. **커버리지** — 기본 엔티티(IP·PERSON)로 파이프라인 증명 후, KINX 커스텀 recognizer
-   (사설 IP 대역·고객사명·DB명) 추가(task #5). fail-closed 정책.
+## 5. 핵심 기술 검증 지표 (Evaluation Criteria)
 
-## 종착점
+1. **송신 프롬프트 가명화 검증 (Masking Ingestion):**  
+   LiteLLM 디버그 로그(`--detailed_debug`) 분석을 통해 외부 API로 전송되는 프롬프트 내의 실체 호스트명/IP 주소가 `<IP_ADDRESS>`, `<PERSON>` 등 마스킹 토큰으로 정상 치환되어 반출되는지 검증합니다.
+2. **응답 역치환 및 에이전틱 루프 정합성 (Deanonymization & Tool-Call Loop):**  
+   Claude가 마스킹된 토큰으로 생성한 Tool-Call 연산이 HolmesGPT 전달 전 프록시 계층에서 원본 식별자로 정상 역치환되어, 후속 조사가 오류 없이 실행 완주되는지 정밀 검증합니다.
+3. **인프라 맞춤형 감지 범위 확장 (Custom Recognizer Coverage):**  
+   기본 엔티티(IP, Person) 검증 후, 사내 전용 Recognizer(사설 IP 대역, MSP 고객사명, DB 인스턴스 식별자)를 추가하여 Fail-closed 보안 정책을 충족시킵니다.
 
-되면 `holmes.py`가 이 프록시를 경유하게 하고, `should_investigate`의 MSP 제외 게이트를 완화
-(마스킹되니 MSP도 허용) → **MSP 데이터로도 HolmesGPT 심층조사 가능**(task #6).
+---
+
+## 6. 기대 효과 및 시스템 적용
+
+검증 완료 시 `holmes.py` 파이프라인의 이그레스 경로를 해당 마스킹 프록시로 일원화하고, 기존 `should_investigate` 내의 **"MSP 테넌트 데이터 심층 조사 제약 조건"을 완화**합니다. 이를 통해 보안 유출 위험 없이 MSP 멀티테넌트 환경에서도 HolmesGPT 기반의 에이전틱 심층 조사를 전면 적용할 수 있습니다.

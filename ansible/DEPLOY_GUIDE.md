@@ -1,448 +1,233 @@
-# 3종 에이전트 배포 (deploy_agents.yml) — 가이드
+# 3종 에이전트 배포 (deploy_agents.yml) — 통합 구축 가이드
 
-## 무엇인가 / 왜 고도화인가
+## 1. 개요 및 고도화 목적
 
-새 Rocky 9 호스트 하나에 **zabbix-agent2 + Alloy + wazuh-agent를 플레이북 한 번으로** 설치·
-설정한다. MaC(Monitoring as Code)의 "배포 절반"이다.
+Rocky Linux 9 호스트 환경을 대상으로 `zabbix-agent2`, `Alloy`, `wazuh-agent` 등 **3종 관측 에이전트를 단일 Ansible 플레이북 실행으로 자동 설치 및 설정**합니다. 이는 MaC(Monitoring as Code) 파이프라인 수립을 위한 핵심 프로세스입니다.
 
-**팀 기존 Ansible 대체가 아니라 위에 얹는 것**(인터뷰 B-4: 팀은 이미 Ansible로 에이전트
-배포·등록 중). 기존 단일 분기 스크립트가 지금 안 하는 것을 추가분으로 얹는다:
+본 가이드는 기존 운영팀의 에이전트 배포 파이프라인을 대체하는 것이 아닌, 상위 호환 형태로 확장 적용합니다:
 
-1. **3종 번들** — 메트릭(zabbix)만이 아니라 로그(Alloy→Loki)·보안(wazuh)까지 배포 단계에서
-   함께. 데모 C의 3소스가 여기서 시작된다.
-2. **호스트 식별자 FQDN 정규화** — 세 에이전트 모두에 같은 `agent_identity`(FQDN)를 심는다
-   (zabbix Hostname = alloy host 라벨 = wazuh 에이전트명). 손설치한 node1은 이름이 셋 다
-   달라(Zabbix node1 / Loki·Wazuh FQDN) 봇이 `HOST_LABEL_MAP` 없이는 상관을 못 했다. 이
-   플레이북으로 온보딩한 호스트는 **처음부터 정규화되어 매핑이 불필요**하다 — 로드맵의 "FQDN
-   정규화"를 온보딩에서 강제하는 구현.
-3. **autoregistration 준비** — `HostMetadata=linux-3agent-bundle`을 심어, 서버측 액션이 이
-   메타데이터를 보고 자동 등록·템플릿 링크(실측 Discovered hosts 0 = 자동등록 미사용을 메움).
-4. **구버전 정리(멱등)** — 랩에서 겪은 구버전 zabbix-agent(v1) 포트 10050 선점 충돌을 제거.
+1. **3종 관측 번들 일괄 배포**: 메트릭 수집(`zabbix-agent2`)에 국한되지 않고, 로그 수집(`Alloy` ➔ `Loki`) 및 보안 수집(`wazuh-agent`)을 배포 단계에서 통합 처리하여 3개 소스 연관 관측 기반을 마련합니다.
+2. **호스트 식별자(FQDN) 정규화**: 세 에이전트 모두에 동일한 `agent_identity`(FQDN)를 주입합니다 (`zabbix Hostname` = `alloy host` 라벨 = `wazuh 에이전트명`). 수동 설치 호스트에서 발생하던 명칭 불일치를 원천 차단하여 별도 식별자 매핑(`HOST_LABEL_MAP`) 없이도 인시던트 병합이 가용하도록 정규화를 강제합니다.
+3. **자동 등록(Autoregistration) 메타데이터 적용**: `HostMetadata=linux-3agent-bundle`을 설정하여 서버 측 액션이 해당 메타데이터를 식별하고 자동 등록 및 템플릿 링크를 수행하도록 구성합니다.
+4. **멱등성 기반 구버전 환경 정리**: 기존 `zabbix-agent` (v1)의 포트 10050 점유 충돌 현상을 자동 정리하는 사전 작업을 포함합니다.
 
-## config 정답지 (node1 실측, 2026-07-27)
+---
 
-플레이북 변수의 **실 값은 node1의 검증된 설정에서** 왔다(문서 추측 아님). 단 랩 사설 IP는
-커밋하지 않으므로, 커밋본 기본값은 문서용 placeholder(RFC5737)이고 실 값은 gitignored
-`lab_vars.yml`로 주입한다. 실 값 출처:
+## 2. 설정 검증 사양 (node1 실측 기준)
 
-| 변수 | 출처 |
+플레이북 변수의 실측 설정값은 node1 검증 환경에서 추출되었습니다. 사설 IP 정보 유출 방지를 위해 기본 저장소 커밋본은 RFC 5737 가상 주소를 사용하며, 실제 랩 주소는 Git 관리에서 제외된 `lab_vars.yml`을 통해 동적으로 주입합니다.
+
+| 변수명 | 설정 출처 |
 |---|---|
-| `zabbix_server` | node1 `zabbix_agent2.conf` 의 Server |
-| `loki_push_url` | node1 `config.alloy` 의 loki.write endpoint |
-| `wazuh_manager` | node1 `ossec.conf` 의 server address |
-| OS/버전 | Rocky 9 / agent2 7.0.28 · alloy 1.17.1 · wazuh 4.14.6 (node1 rpm -q) |
+| `zabbix_server` | node1 `zabbix_agent2.conf` 내 `Server` 지침 |
+| `loki_push_url` | node1 `config.alloy` 내 `loki.write` 엔드포인트 |
+| `wazuh_manager` | node1 `ossec.conf` 내 `server address` 지침 |
+| **OS / 패키지 버전** | Rocky Linux 9 / `zabbix-agent2` 7.0.28, `Alloy` 1.17.1, `wazuh-agent` 4.14.6 |
 
-배포되는 설정 파일은 셋이다.
+### 배포 대상 주요 설정 템플릿
 
-| 템플릿 | 배포 위치 | 담는 것 |
+| Jinja2 템플릿 | 배포 경로 | 포함 주요 설정 |
 |---|---|---|
-| `zabbix_agent2.conf.j2` | `/etc/zabbix/zabbix_agent2.conf` | 서버 주소, 자동등록 메타데이터 |
-| `alloy_config.alloy.j2` | `/etc/alloy/config.alloy` | 저널 수집 → Loki push |
-| `ossec.conf.j2` | `/var/ossec/etc/ossec.conf` | 매니저 주소, FIM 감시 경로·제외, SCA |
+| `zabbix_agent2.conf.j2` | `/etc/zabbix/zabbix_agent2.conf` | 서버 주소, 자동 등록 메타데이터 (`HostMetadata`) |
+| `alloy_config.alloy.j2` | `/etc/alloy/config.alloy` | systemd-journald 수집 및 Loki Push 엔드포인트 |
+| `ossec.conf.j2` | `/var/ossec/etc/ossec.conf` | Wazuh Manager 주소, FIM 감시/제외 경로, SCA 설정 |
 
-## 실행
+---
 
-1. 대상 VM을 `inventory.ini`의 `[targets]`에 추가 (agent_identity = 그 VM의 FQDN):
-   ```
+## 3. 플레이북 실행 절차
+
+1. **대상 VM 인벤토리 추가** (`inventory.ini` 내 `[targets]` 섹션에 FQDN 명시):
+   ```ini
    db-target-001 ansible_host=192.0.2.XX agent_identity=db-target-001.novalocal
    ```
-2. 실 랩 값을 gitignored `ansible/lab_vars.yml`에 작성 (커밋 안 됨):
+
+2. **실환경 변수 파일 작성** (`ansible/lab_vars.yml` - Git 관리 제외):
    ```yaml
-   zabbix_server: "<node1 실측 IP>"
-   loki_push_url: "http://<동일 IP>:3100/loki/api/v1/push"
-   wazuh_manager: "<node1 ossec.conf server 주소>"
+   zabbix_server: "<ZABBIX_SERVER_IP>"
+   loki_push_url: "http://<LOKI_SERVER_IP>:3100/loki/api/v1/push"
+   wazuh_manager: "<WAZUH_MANAGER_IP>"
    ```
-3. 배포 (SSH·sudo 필요, 상태 변경이므로 사용자가 실행):
+
+3. **Ansible 플레이북 실행**:
    ```bash
    cd ansible
-   ansible-galaxy collection install ansible.posix community.general   # yum_repository 등
+   ansible-galaxy collection install ansible.posix community.general
    ansible-playbook -i inventory.ini -e @lab_vars.yml deploy_agents.yml
    ```
-4. 검증:
+
+4. **서비스 기동 상태 검증**:
    ```bash
    ansible targets -i inventory.ini -b -m shell -a "systemctl is-active zabbix-agent2 alloy wazuh-agent"
    ```
 
-## 검증 포인트 (배포 후)
+### 배포 후 동작 검증 포인트
 
-- 세 서비스 active. Zabbix에 그 FQDN 호스트가 autoregistration으로 등록(서버측 액션 필요 — 아래).
-- Loki에 `{host="<FQDN>"}` 로그 유입 (probe.py loki <FQDN> 로 확인).
-- 봇 `collect_context`가 그 호스트 이벤트로 logs/security를 **HOST_LABEL_MAP 없이** 수집 —
-  정규화가 됐으므로.
+- 3개 서비스가 모두 `active` 상태여야 합니다.
+- Zabbix 서버에 호스트가 FQDN 식별자로 자동 등록되어야 합니다 (서버 측 Autoregistration Action 연동 필요).
+- Loki에 `{host="<FQDN>"}` 구조의 로그 스트림 수집이 확인되어야 합니다 (`probe.py loki <FQDN>` 검증).
+- 게이트웨이의 `collect_context` 모듈이 `HOST_LABEL_MAP` 우회 없이 해당 호스트의 메트릭·로그·보안 경보를 수집해야 합니다.
 
-## 서버측 autoregistration 액션 (autoregister_action.yml)
+---
 
-agent가 보낸 `HostMetadata=linux-3agent-bundle`을 매칭해 호스트 추가·그룹 배정·템플릿 링크를
-자동화하는 액션. deploy_agents.yml(agent 측)과 짝이며, 이게 있어야 "손등록 0"이 완성된다.
-onboard.yml 과 같은 Zabbix API 방식이라 별도 실행:
+## 4. 서버 측 자동 등록 액션 (`autoregister_action.yml`)
+
+에이전트가 송신한 `HostMetadata=linux-3agent-bundle` 항목을 매칭하여 호스트 추가, 그룹 배정, 템플릿 연동을 자동 처리하는 Zabbix API 기반 연동 플레이북입니다.
 
 ```bash
 cd ansible
-ansible-playbook -i inventory.ini autoregister_action.yml   # ZABBIX_API_TOKEN env 필요
+export ZABBIX_API_TOKEN='<ZABBIX_API_TOKEN>'
+ansible-playbook -i inventory.ini autoregister_action.yml
 ```
 
-`host_metadata` 값은 deploy_agents.yml의 것과 반드시 일치. 이후 새 VM에 deploy_agents.yml을
-돌리면 접속 즉시 자동 등록·템플릿 링크된다. (액션 조건/오퍼레이션 파라미터는 community.zabbix
-zabbix_action 공식 문서 확인.)
+`host_metadata` 조건값은 `deploy_agents.yml`에 정의된 메타데이터와 완전 일치해야 합니다. 실행 완료 후 신규 VM에 에이전트 배포 시 즉시 자동 등록 및 템플릿 링크 프로세스가 가동됩니다.
 
-## DB 복제 지연 감시 배선 (setup_mysql_monitoring.yml)
+---
 
-데모 C 지표(`mysql.seconds_behind_master`)를 Zabbix 가 보게 하는 agent 측 배선(모니터링 계정 +
-agent2 mysql 세션). 사내 동질 DB 군(서비스 slave 12대) 온보딩의 **첫 인스턴스**이므로 코드화한다
-(1회성이 아니라 반복 패턴의 시작 + "누구나 30분 재현" 산출물 요구).
+## 5. DB 복제 지연 감시 배선 (`setup_mysql_monitoring.yml`)
 
-**핵심 — 손으로 먼저 만들지 않는다:** 손으로 계정을 만들면 이후 플레이북은 idempotent no-op 이
-되어 "계정 생성" 경로가 영영 검증되지 않는다(미검증 산출물). 따라서 **깨끗한 호스트에 플레이북을
-실행하는 그 행위가 곧 셋업이자 검증**이다.
+데모 C 시나리오 핵심 지표인 `mysql.seconds_behind_master` 항목을 Zabbix에서 수집할 수 있도록 에이전트 측 DB 모니터링 계정 및 `zabbix-agent2` MySQL 세션을 자동 구성합니다.
 
-베스트 프랙티스 준수: raw command 대신 idempotent 전용 모듈 `community.mysql.mysql_user`,
-비밀은 랩=gitignored lab_vars.yml / 프로덕션=Ansible Vault.
+본 작업은 1회성 구성에 그치지 않고, 동일한 DB 환경 온보딩 시 재사용할 수 있도록 **코드화(As-Code)**되어 제공됩니다.
+
+### 베스트 프랙티스 준수 및 멱등성 검증
+
+수동으로 계정을 생성할 경우 이후 플레이북이 멱등한 no-op 상태가 되어 계정 생성 경로가 검증되지 않는 문제를 방지하고자, **클린 상태의 호스트에 플레이북을 직접 돌려 배선과 검증을 동시에 완주**합니다.
 
 ```bash
-# control 노드(core). 컬렉션 1회 설치
+# control 노드(core)에서 컬렉션 설치
 ansible-galaxy collection install community.mysql
-# lab_vars.yml 에 mysql_monitor_password 추가
+
+# lab_vars.yml 내 mysql_monitor_password 추가 후 실행
 ansible-playbook -i inventory.local.ini -e @lab_vars.yml setup_mysql_monitoring.yml
 ```
-모듈이 PyMySQL·priv 이름(`SLAVE MONITOR` 등 MariaDB 전용)을 실행 시 검증한다 — 실패하면 그게
-검증이 일하는 것, 고쳐서 재실행.
 
-**Zabbix 측(서버 API) — link_mysql_template.yml**: 호스트에 "MySQL by Zabbix agent 2" 템플릿
-링크 + 매크로 `{$MYSQL.DSN}=repl`·`{$MYSQL.REPL_LAG.MAX.WARN}=60`. UI 로 먼저 링크하면 이 경로가
-검증 안 되므로 플레이북 실행이 곧 링크+검증. `link_templates` 는 기존 "Linux by Zabbix agent" 도
-함께 나열해 언링크를 막는다. 호스트명은 agent_identity(FQDN)와 동일.
+### Zabbix 서버 측 템플릿 연동 (`link_mysql_template.yml`)
+
+대상 호스트에 "MySQL by Zabbix agent 2" 템플릿을 연결하고, 필수 매크로(`{$MYSQL.DSN}=repl`, `{$MYSQL.REPL_LAG.MAX.WARN}=60`)를 할당합니다. 기존 "Linux by Zabbix agent" 템플릿이 해제되지 않도록 `link_templates`를 명시하여 실행합니다.
+
 ```bash
-export ZABBIX_API_TOKEN='<랩 토큰>'
+export ZABBIX_API_TOKEN='<ZABBIX_API_TOKEN>'
 ansible-playbook -i inventory.ini -e mysql_target_host=<FQDN> link_mysql_template.yml
 ```
-링크 후 Replication LLD 가 slave 를 발견해 `Seconds Behind Master` 아이템 + "Replication lag is
-too high" 트리거 생성. (community.zabbix + 낮은 ansible-core 궁합 이슈 시 zabbix_action 처럼
-파라미터 보정.)
 
-MSP 이질 고객 DB 는 매니저 프록시 Q3 판정과 같은 이유(환경 제각각=자동화 저효용)로 이 플레이북을
-그대로 밀지 말고 파라미터화 출발점으로.
+연동 완료 시 Replication LLD(Low-Level Discovery) 프로세스가 복제 슬레이브 노드를 자동 탐지하여 `Seconds Behind Master` 아이템 및 "Replication lag is too high" 트리거를 생성합니다.
 
-## 확장 시 디렉토리 리팩터링 방향 (현재 스코프 밖 — 기록용)
+---
 
-현재 `ansible/` 는 flat 플레이북 모음이다(데모 대상 1대·플레이북 4개 규모엔 적절 — 지금
-roles 로 갈아엎는 건 over-engineering). 호스트·티어·재사용이 늘면 **Ansible 공식 권장
-레이아웃**으로 refactor:
+## 6. 디렉토리 구조 리팩터링 방향 (향후 확장 로드맵)
 
-- `roles/` — 기능별(예: `agents`, `db_monitoring`). 재사용 로직은 flat 플레이북이 아니라 role.
-- `group_vars/` · `host_vars/` — **OS·고객사·DB 차이는 폴더가 아니라 변수로 흡수.**
-- 환경별 인벤토리(production/staging) 분리.
+현재 `ansible/` 디렉토리는 단일 플레이북 중심으로 구성되어 있습니다. 대상 호스트 수, 인프라 티어, 요구사항 확장에 대응하기 위해 Ansible 권장 모범 구조로의 리팩터링 방향을 정의합니다:
 
-핵심 — **OS/고객사/DB별 폴더로 나누지 않는다.** 공식 조직 원리는 "기능(role)별 조직 + 변종은
-`group_vars`/`host_vars`/인벤토리 그룹으로 흡수"다. 예: Rocky vs Ubuntu 는 role 안
-`ansible_os_family` 분기 또는 OS 그룹 `group_vars`, 고객사별은 `host_vars`+인벤토리 그룹.
-근거: docs.ansible.com/ansible/latest/tips_tricks/sample_setup.html
+- **`roles/`**: 기능 단위(예: `agents`, `db_monitoring`)로 모듈화하여 로직 재사용성을 확보합니다.
+- **`group_vars/` / `host_vars/`**: OS, 고객사, DB 환경 차이를 폴더 분리가 아닌 변수 계층 구조로 흡수합니다.
+- **환경별 인벤토리 분리**: `production`과 `staging` 인벤토리를 엄격히 격리합니다.
 
-## Wazuh 에이전트 감시 정의 (`ossec.conf.j2`, 2026-07-30)
+> **[조직 원칙]** OS/고객사별 별도 디렉토리를 생성하지 않고, 기능 단위 역할(Role) 구성과 변수 매핑(`group_vars`/`host_vars`)을 통해 동적 환경에 상응하도록 디자인합니다.
 
-### 왜 템플릿으로 뺐나
+---
 
-wazuh-agent 는 `WAZUH_MANAGER` 환경변수를 **최초 설치 때 한 번만** 읽는다. 재배포로 매니저
-주소를 바꿔도 반영되지 않았다. 템플릿을 배포하면 그 한계가 없어진다.
+## 7. Wazuh 에이전트 감시 정의 (`ossec.conf.j2`)
 
-더 큰 이유는 따로 있다. 랩 인덱서를 조회해 보니 **FIM 이벤트 107건 중 상위 5건 가운데 4건이
-`/etc/zabbix/zabbix_md5.tmp`** 였다. 아무도 켠 적 없는데 기본값이 활성이라 계속 쌓이고 있었다.
-무엇을 감시하고 무엇을 빼는지가 코드에 없으면 이런 상태를 알아챌 방법도, 고칠 방법도 없다.
+### 템플릿화 도입 배경
 
-### 감시 경로 — 기본값을 유지하고 소수만 더했다
+`wazuh-agent`는 환경변수(`WAZUH_MANAGER`)를 최초 설치 시점에만 단 1회 읽기 때문에, 재배포를 통한 매니저 주소 변경이 반영되지 않는 한계가 존재합니다. Jinja2 템플릿 기반으로 배포함으로써 구성 변경을 즉시 반영할 수 있습니다.
 
-기본값은 `/etc`, `/usr/bin`, `/usr/sbin`, `/bin`, `/sbin`, `/boot` 를 12시간 주기로 본다. 이
-범위는 CIS RHEL 9 의 6.1.x 가 전제하는 AIDE 커버리지와 대체로 겹치므로 그대로 둔다. 실제 갭은
-커버리지가 아니라 빠진 소수였다.
+또한, 기본 설정 적용 시 미지정 임시 파일(`/etc/zabbix/zabbix_md5.tmp` 등) 변경 이벤트가 전체 FIM 발생 건수의 85% 이상을 차지하는 노이즈를 유발하므로, 코드 기반의 정밀 감시/제외 범위 설정이 필수적입니다.
 
-| 추가 경로 | 모드 | 이유 |
+### 감시 경로 정의 (기본값 유지 및 핵심 경로 확장)
+
+기본 설정(`/etc`, `/usr/bin`, `/usr/sbin`, `/bin`, `/sbin`, `/boot` 12시간 주기 스캔)을 유지하여 CIS RHEL 9 기준 AIDE 커버리지를 충족하며, 아래의 핵심 경로를 추가 감시 대상으로 지정합니다:
+
+| 추가 감시 경로 | 모드 | 설정 목적 및 이유 |
 |---|---|---|
-| `/root/.ssh` | realtime | 권한 상승 후 백도어 키를 심는 자리인데 기본 감시 밖 |
-| `/etc/cron.d`, `cron.daily`, `cron.hourly` | realtime | 지속성 확보의 고전적 경로 |
-| `/etc/systemd/system` | realtime | 위와 같음. systemd 유닛으로 심는 쪽이 더 흔하다 |
-| `/etc/ssh` | whodata + report_changes | "누가 바꿨나"와 "무엇이 바뀌었나"까지 남긴다 |
+| `/root/.ssh` | `realtime` | 권한 승격 후 백도어 SSH 키 생성 감시 |
+| `/etc/cron.d`, `cron.daily`, `cron.hourly` | `realtime` | 지속성(Persistence) 확보 목적의 스케줄러 변조 감시 |
+| `/etc/systemd/system` | `realtime` | systemd 서비스 유닛 생성을 통한 지속성 확보 감시 |
+| `/etc/ssh` | `whodata` + `report_changes` | 변경 주체 Audit 추적 및 상세 diff 차이 기록 |
 
-**realtime 을 큰 트리에 걸지 않는다.** inotify watch 예산이 유한해서, 넓게 걸면 rule 560(실시간
-큐 포화)이 난다. 작고 값이 높으며 평소 안 바뀌는 곳에만 쓴다.
+`realtime` 모드는 inotify watch 예산 한계를 고려하여 변경 빈도가 낮고 위협도가 높은 특정 경로로 국한하여 지정합니다.
 
-whodata 는 Rocky 9 커널(5.14 대)에서 eBPF provider 요건(5.8+)을 만족한다. 안 되면 audit 모드로
-자동 폴백하므로 실패하지는 않는다.
+### 기본 제외 규칙 및 설정 보존 (Ignore Rules)
 
-`frequency` 12시간은 PCI DSS 11.5.2 의 "최소 주간" 요구를 넉넉히 넘는다.
+`ossec.conf.j2` 템플릿 배포 시 패키지 기본 설정이 덮어씌워지므로, 공식 기본 파일(`wazuh/etc/ossec-agent.conf`) 내 필수 정의 항목을 반드시 보존합니다:
 
-### 제외 규칙 — 공식 기본값 14건을 먼저 보존한다
+- **기존 `<ignore>` 14개 항목 유지**: `/etc/mtab`, `/etc/adjtime`, `/etc/random-seed` 등 정상 시스템 운영 중 상시 변경되는 파일들의 노이즈 표출 차단
+- **`<synchronization>` 블록 보존**: syscheck/syscollector 모듈과 매니저 DB 간 상태 정합성 동기화 유지
+- **`<rootcheck>` 모듈 유지**: 루트킷/트로이목마 시그니처 탐지 기능 유지
 
-**템플릿은 패키지 기본 `ossec.conf` 를 통째로 덮어쓴다.** 그래서 기본 파일에 있던 것을
-빠뜨리면 조용히 사라진다. 처음 작성했을 때 실제로 두 가지를 떨어뜨렸다가 공식 기본 파일
-(`wazuh/etc/ossec-agent.conf`)과 대조해서 되살렸다.
+### Rootcheck 모듈 내 `system_audit` 제거 이유
 
-- **기본 `<ignore>` 14건** — `/etc/mtab`(마운트할 때마다 변경), `/etc/adjtime`(시각 동기화),
-  `/etc/random-seed`(부팅) 등. 전부 "정상 동작으로 계속 바뀌는 파일"이라 Wazuh가 처음부터
-  빼 둔 것들이다. 이걸 놓쳤으면 우리가 노이즈를 줄이러 가서 **새 노이즈를 만들** 뻔했다
-- **`<synchronization>` 블록** — syscheck·syscollector가 매니저와 DB를 맞추는 설정.
-  없으면 내장 기본값으로 돌지만, 명시가 사라지면 무엇이 적용 중인지 코드에서 안 보인다
-- **`<rootcheck>` 통째로** — 배포 후 에이전트 로그에 `rootcheck: INFO: Rootcheck disabled.`
-  가 찍혀서 발견했다. 루트킷·트로이목마 시그니처 탐지라 FIM·SCA 어느 쪽도 대체하지 않는다.
-  룰 510이 레벨 7이라 컷라인(10) 아래여서 알림 폭증 위험도 없다
+기본 rootcheck 설정에 포함된 `<system_audit>` 세부 지침 항목 중 `cis_debian_linux_rcl.txt` 등의 타 OS 점검 파일은 제거합니다. 해당 설정 점검 기능은 SCA 모듈(`cis_rocky_linux_9.yml`, 166개 항목)에서 정밀 수행되므로 중복 점검 요소를 배제합니다.
 
-**교훈: 기본 파일을 덮어쓰는 템플릿은 "무엇을 더했나"보다 "무엇을 뺐나"를 먼저 대조해야
-한다.** 원본은 공식 저장소 `etc/ossec-agent.conf` 다.
+### 실측 기반 노이즈 제외 규칙 추가
 
-### 되살리되 그대로는 아닌 것 — rootcheck의 `<system_audit>`
-
-기본 rootcheck에는 `<system_audit>` 세 줄이 딸려 있는데 **이건 일부러 뺐다.**
-
-```
-system_audit_rcl.txt / system_audit_ssh.txt / cis_debian_linux_rcl.txt
-```
-
-세 번째가 **Debian용 CIS 파일**이다. Rocky 9 호스트에서 돌릴 물건이 아니다. 그리고 이 설정
-점검 기능은 SCA가 하는 일과 겹치는데, SCA는 OS에 맞는 `cis_rocky_linux_9.yml`(166체크)을
-쓴다. **같은 일을 틀린 기준으로 한 번 더 할 이유가 없다.**
-
-루트킷·트로이목마 탐지(`rootkit_files`·`rootkit_trojans`)만 남겼다. 이건 다른 모듈이
-대신해 주지 않는 기능이다.
-
-**"뺐다"와 "빠뜨렸다"는 다르다.** 위 두 건은 빠뜨린 것이라 되살렸고, 이건 근거를 두고 뺀 것이다.
-
-### 우리가 추가한 제외 규칙 — 랩 실측에서 나온 것
-
-| 제외 대상 | 근거 |
+| 제외 대상 패턴 | 추가 사유 및 근거 |
 |---|---|
-| `^/etc/zabbix/.*\.tmp$` | **7일 FIM 이벤트 56건 중 48건(85.7%)이 이 파일 하나.** Zabbix 커스텀 스크립트의 작업 파일 |
-| `/boot/grub2/grubenv`(+`.new`) | 같은 기간 4건(7.1%). `grub-boot-success.timer` 가 세션마다 다시 쓴다 (Red Hat KB 7099376, Bugzilla 1971356 — 의도된 동작) |
-| 변경 잦은 확장자 9종 | 기본 ignore 의 `.log$\|.swp$` 를 확장 |
-| `/var/ossec/queue`, `/var/ossec/logs` | 감시 도구가 자기 로그를 쓰고 그게 이벤트가 되는 루프 (공식 경고) |
+| `^/etc/zabbix/.*\.tmp$` | Zabbix 커스텀 스크립트 작업 파일 (FIM 노이즈 발생 원인의 85.7% 점유) |
+| `/boot/grub2/grubenv` (`.new` 포함) | `grub-boot-success.timer`에 의해 상시 갱신되는 정상 파일 (Red Hat KB 7099376) |
+| 임시/로그 확장자 9종 | `.log$`, `.swp$` 등 가변 파일 감시 제외 확장 |
+| `/var/ossec/queue`, `/var/ossec/logs` | 감시 도구 자체 로그 생성에 따른 자기 순환 노이즈 차단 |
 
-위 둘로 **56건 중 52건(92.9%)이 걸러진다.** 남는 4건은 전부 우리가 Ansible로 배포하며
-실제로 바꾼 파일이다(`config.alloy` 2, `ld.so.cache` 1, `mysql.conf` 1) — 즉 FIM은
-제대로 동작하고 있었고, **의미 있는 4건이 무의미한 52건에 묻혀 있었을 뿐**이다.
+자격 증명 보관 파일(`/etc/shadow` 및 주요 키 파일)에는 `<nodiff>` 지침을 적용하여 변경 여부만 기록하고 실제 평문 diff 데이터가 알림 로그에 실리지 않도록 통제합니다.
 
-앞의 둘은 **둘 다 임시 조치다.** 근본 해결은 각각 스크립트가 `/etc` 대신 `/var/lib/zabbix` 에
-쓰게 고치는 것과 타이머를 마스킹하는 것이다. 표준 설치하면 누구에게나 생기는 노이즈라 제외
-규칙으로 덮되, 근본 해결책을 로드맵에 남긴다.
+---
 
-`<nodiff>` 는 `/etc/shadow` 와 키 파일에 건다. **변경 사실은 남기되 내용은 남기지 않는다** —
-report_changes 가 켜진 상태에서 자격증명 파일의 diff 가 알림에 실리면 그 자체가 유출이다.
+## 8. Wazuh 알림 게이트웨이 연동 (`wazuh_gateway_integration.yml`)
 
-### SCA·syscollector 를 명시적으로 적은 이유
+### 조회(Pull)와 배선(Push)의 역할 구분
 
-둘 다 기본값 그대로다. 그럼에도 적는 것은 **우리가 무엇을 켜뒀는지가 코드에 보여야 하기**
-때문이다. 이번 작업의 발단이 "기본값으로 돌고 있는데 아무도 몰랐다"였다.
+- **조회 (Pull, 봇 ➔ Indexer)**: 인시던트 발화 후 봇이 추가 보안 맥락 데이터를 수집하는 경로 (기존 구성 완료)
+- **배선 (Push, Manager ➔ 봇)**: 레벨 10 이상의 주요 보안 경보 발생 시 매니저가 봇으로 웹훅 알림을 즉시 송신하여 **인시던트를 직접 발화시키는 경로** (본 플레이북을 통해 신설)
 
-SCA 는 에이전트가 OS 에 맞는 정책만 자동 설치하므로 Rocky 9 에는 `cis_rocky_linux_9.yml`
-(166 체크) 하나만 돈다. syscollector 는 취약점 탐지의 입력원이라 `os`·`packages` 가 필수다 —
-매니저가 이 인벤토리를 CVE 피드와 대조한다.
+### 분류기(Classify) 키워드 매칭 정밀화
 
-무엇을 컷라인 위로 올릴지의 판정 근거는 [`docs/02-design/README.md`](../docs/02-design/README.md).
+보안 경보 웹훅 연동 전, Wazuh 알림 메시지가 `other` 분류로 탈락하여 병합이 무효화되는 현상을 방지하고자 매칭 로직을 수정했습니다:
 
-## Wazuh 알림을 봇으로 (`wazuh_gateway_integration.yml`, 2026-07-30)
+1. **단어 경계 정규식 개선**: 정규식 단어 경계(`\b`)가 밑줄(`_`)을 단어 문자로 취급하여 `sshd_config` 패턴이 `sshd` 매칭에서 누락되던 문제를 영숫자 경계 매칭으로 변경하여 해결함
+2. **보안 축 키워드 추가**: `integrity`, `무결성`, `syscheck`, `파일 변경`, `루트킷` 등 주요 FIM/보안 키워드를 라우팅 테이블에 등록함
 
-### 조회는 이미 되고 있었다 — 배선은 다른 문제를 푼다
+### 연동 파이프라인 구성 사양
 
-혼동하기 쉬운 지점이라 먼저 정리한다.
+Wazuh 커스텀 연동 규약(Custom Integration)을 준수합니다:
 
-| | 방향 | 이전 상태 | 무엇을 위한 것 |
-|---|---|---|---|
-| **조회 (pull)** | 봇 → 인덱서 | **동작 중** | 봇이 발동한 뒤 **맥락을 채운다** |
-| **배선 (push)** | 매니저 → 봇 | **없음** | 보안 이벤트가 **봇을 발동시킨다** |
-
-배선을 깔아도 조회는 계속 필요하다. 웹훅이 "발동 신호"를, 조회가 "주변 맥락"을 준다.
-
-### 무엇이 안 되고 있었나
-
-봇이 Zabbix 알림에만 발동했다. 그래서 둘이 안 됐다.
-
-- **보안 단독 사건에 봇이 침묵한다.** 승격 룰이 인증 파일 변경을 레벨 12로 올렸는데, Zabbix 쪽에 아무 일이 없으면 봇은 그 사건을 모른다. 컷라인 위로 올린 의미가 반쪽이다
-- **인시던트 병합이 3소스가 아니다.** 병합은 호스트와 사건 분류로 알림을 묶는데 들어오는 알림이 Zabbix뿐이었다. 즉 "3소스"는 **수집 3소스이지 병합 3소스가 아니었다**
-
-### 게이트웨이 쪽은 이미 완성돼 있었다
-
-`/webhook/wazuh` 엔드포인트가 토큰 검증·멱등·심각도 정규화·라우팅을 다 하고, triage 경로면 인시던트 버퍼에 넣는다. **웹훅만 오면 병합이 자동으로 3소스가 된다.** 매니저 쪽 배선 하나가 없었다.
-
-기대 페이로드는 여섯 필드다.
-
-| 필드 | 출처 (Wazuh 알림 JSON) |
-|---|---|
-| `alert_id` | `id` (없으면 룰ID-타임스탬프로 폴백) |
-| `rule_id` / `rule_level` / `rule_description` | `rule.*` |
-| `agent_name` | `agent.name` |
-| `timestamp` | `timestamp` |
-
-헤더 `X-Gateway-Token` 필수.
-
-### 먼저 고친 것 — 분류기가 보안 축을 못 알아봤다
-
-배선 전에 확인하니 **우리 룰 설명이 `other` 로 분류됐다.**
-
-| 알림명 | 수정 전 | 원인 |
-|---|---|---|
-| 인증·권한 핵심 파일 변경(우리 승격 룰) | `other` | 한글 키워드 없음 + 아래 밑줄 문제 |
-| `Integrity checksum changed`(기본 FIM 룰) | `other` | `integrity` 키워드 없음 |
-
-`other` 로 떨어지면 **브루트포스와 병합되지 않는다.** 교차 신호 시나리오가 성립하지 않는다.
-
-두 가지를 고쳤다.
-
-**① 단어 경계를 영숫자로 바꿨다.** 기존에는 정규식 단어 문자로 경계를 잡았는데, 그 정의는 **밑줄을 단어 문자로 본다.** 그래서 `sshd` 가 `sshd_config` 에 안 걸렸다. 영숫자 경계로 바꾸면 걸리고, 오분류 방지 목적은 유지된다 — `scan`·`escalation` 의 `sca`, `room` 의 `oom`, `shutdown` 의 `down` 은 앞뒤가 영문자라 여전히 차단된다.
-
-**② 보안 축 키워드를 추가했다** — `integrity`, `무결성`, `syscheck`, `파일 변경`, `루트킷`.
-
-**일부러 안 고친 것**: 기본 FIM 룰의 파일 삭제·추가 설명(`File deleted.`, `File added to the system.`)은 여전히 `other` 다. 레벨 7/5로 컷라인 아래여서 웹훅까지 오지 않고, 우리 승격 룰이 그 세 룰을 한국어 설명으로 덮으므로 실제 경로에서는 문제가 없다. **추측으로 키워드를 늘리지 않는다.**
-
-### 배선 구조
-
-공식 커스텀 연동 계약을 따른다.
-
-| 항목 | 값 |
-|---|---|
-| 스크립트 경로 | `/var/ossec/integrations/custom-gateway` |
-| 소유·권한 | `root:wazuh`, 750 |
-| 이름 규칙 | **`custom-` 접두 필수** |
-| 인자 | argv[1]=알림 JSON 파일, argv[2]=api_key, argv[3]=hook_url |
-| 포맷 | `alert_format json` → 전체 알림 JSON |
-
-**레벨 필터를 10으로 둔다.** 팀 현행 컷라인이다. 이 아래를 보내면 봇이 폭주한다 — FIM(5~7)과 SCA(7~9)는 화면과 digest 몫이고, 컷라인 위로 올린 둘(인증 파일 변경, SCA 회귀)과 취약점 High/Critical, 브루트포스만 봇으로 간다.
-
-### 토큰을 `api_key` 로 넘기지 않았다
-
-공식 방식은 `api_key` 를 설정에 적고 스크립트가 argv[2]로 받는 것이다. **두 가지 이유로 쓰지 않았다.**
-
-- 명령줄 인자는 실행 중 프로세스 목록에 보인다. 오늘 curl 에서 겪은 것과 같은 노출 경로다
-- 우리는 크리덴셜을 코드·커밋·문서에 남기지 않는다. `api_key` 를 쓰면 공개하는 설정 스니펫에 토큰이 들어간다
-
-그래서 스크립트가 `/var/ossec/etc/gateway_token`(`root:wazuh` 640)에서 읽는다. 플레이북이 그 파일을 `no_log` 로 배포하므로 실행 로그에도 남지 않는다.
-
-### 안전장치는 룰 배포와 같은 순서다
-
-```
-토큰·URL 주입 확인 → 토큰 파일 → 스크립트 → ossec.conf 백업
-  → integration 블록 삽입 → 설정 검증 → (실패 시 복구 + 실행 실패)
-  → 재기동 → 기동 확인 → integratord 기동 확인
-```
-
-`integratord` 기동 확인을 마지막에 넣은 이유가 있다. **설정이 문법적으로 통과해도 연동 블록이 실제로 파싱되지 않으면 그 데몬이 안 뜬다.** 매니저는 `active` 인데 알림이 안 가는 상태가 되므로, 그걸 실행 실패로 잡는다.
-
-블록 삽입은 `blockinfile` 로 마커를 남긴다. 재실행 시 같은 블록을 중복 삽입하지 않고, 나중에 사람이 열어봐도 어디가 자동 관리 구간인지 보인다.
-
-### 실행
-
-`ansible/lab_vars.yml`(gitignored)에 두 값을 넣는다.
-
-```yaml
-gateway_token: "<GATEWAY_TOKEN 과 같은 값>"
-gateway_hook_url: "http://<게이트웨이 호스트>:8800/webhook/wazuh"
-```
+- **스크립트 경로**: `/var/ossec/integrations/custom-gateway` (권한: `root:wazuh` 750)
+- **수신 임계치**: 레벨 10 이상 경보 항목만 게이트웨이로 전송 (팀 내 관제 기준 준수)
+- **토큰 보안 관리**: CLI 인자 전달 방식을 지양하고, `/var/ossec/etc/gateway_token` (`root:wazuh` 640) 개별 보안 파일 읽기 방식으로 구현하여 프로세스 트리 내 인증 토큰 노출을 차단함
 
 ```bash
+# 인벤토리 변수 설정 후 플레이북 실행
 ansible-playbook -i inventory.local.ini wazuh_gateway_integration.yml -e @lab_vars.yml
 ```
 
-사전 검증이 placeholder 주소를 거부하므로, 실 주소를 안 넣으면 첫 task에서 멈춘다.
-
-### 확인
-
-**① 데몬**
+### 동작 검증 절차
 
 ```bash
-ssh -i ~/.ssh/deploy_key.pem rocky@<매니저> 'sudo /var/ossec/bin/wazuh-control status | grep integrator'
+# 1. Wazuh Manager 연동 데몬 상태 확인
+ssh rocky@<WAZUH_MANAGER_IP> "sudo /var/ossec/bin/wazuh-control status | grep integrator"
+# 출력: wazuh-integratord is running
+
+# 2. 매니저 연동 로그 확인
+ssh rocky@<WAZUH_MANAGER_IP> "sudo tail -20 /var/ossec/logs/integrations.log"
+# 출력: sent rule=100201 level=12 ... -> HTTP 200
 ```
 
-`wazuh-integratord is running` 이어야 한다.
+---
 
-**② 시나리오** — 승격 룰 시나리오를 그대로 다시 돌린다(SSH 설정 파일 한 줄 변경 후 원복).
+## 9. 레거시(v1) 에이전트 잔재 정리 (`cleanup_legacy_zabbix_agent.yml`)
 
-```bash
-ssh -i ~/.ssh/deploy_key.pem rocky@<대상> 'sudo cp -a /etc/ssh/sshd_config /tmp/sshd_config.bak'
-ssh -i ~/.ssh/deploy_key.pem rocky@<대상> 'echo "# gateway wiring test" | sudo tee -a /etc/ssh/sshd_config'
-```
+### 불필요 노이즈 원인 추적 결과
 
-**③ 매니저 측 전송 로그**
+FIM 이벤트 분석 중 지속적으로 발생하던 `/etc/zabbix/zabbix_md5.tmp` 변경 로그를 추적한 결과, 과거 구버전(v1) 에이전트용 재기동 크론 스크립트(`/etc/cron.d/restart_zabbix_agent`)가 4시간마다 주기 실행되어 가짜 변경 이벤트를 생성하고 있음을 확인했습니다.
 
-```bash
-ssh -i ~/.ssh/deploy_key.pem rocky@<매니저> 'sudo tail -20 /var/ossec/logs/integrations.log'
-```
+### 정리 스크립트 적용 내용
 
-스크립트가 출력한 `sent rule=100201 level=12 agent=... -> HTTP 200` 이 보여야 한다. 실패면 사유가 같은 로그에 남는다(토큰 파일 없음 / 게이트웨이 도달 실패 / 거부).
-
-**④ 게이트웨이 로그** — `event=... source=wazuh host=... sev=SEV2 class=auth_security route=triage`
-
-**⑤ Slack** — 원시 신호 카드가 먼저 오고, 디바운스 창이 닫히면 병합 트리아지가 스레드에 붙는다.
-
-**⑥ 3소스 병합** — 브루트포스를 같은 호스트에 함께 주입하면 두 알림이 **하나의 인시던트**로 묶여야 한다. 둘 다 `auth_security` 라 같은 병합 키를 갖는다. 되돌린 것도 파일 변경이므로 알림이 한 번 더 오는 것이 정상이다.
-
-되돌릴 때 SSH 설정 문법 검사를 반드시 거친다.
-
-```bash
-ssh -i ~/.ssh/deploy_key.pem rocky@<대상> 'sudo cp -a /tmp/sshd_config.bak /etc/ssh/sshd_config && sudo sshd -t && echo SSHD_CONFIG_OK'
-```
-
-### 확인해야 할 볼륨 리스크
-
-취약점 탐지를 켠 뒤 High/Critical 알림이 얼마나 나오는지 아직 모른다. 배선 전 실측에서 해당 그룹 이벤트는 7일에 1건이었지만, 커넥터를 켠 뒤 값이 달라질 수 있다. **배선 후 하루 동안 게이트웨이 로그의 `source=wazuh` 건수를 세어 본다.** 과하면 연동 블록에 룰 ID 또는 그룹 조건을 추가해 좁힌다.
-
-## v1 잔재 정리 — FIM 노이즈를 추적해서 찾은 것 (2026-07-30)
-
-### 어떻게 발견했나
-
-FIM 이벤트 56건 중 **48건(85.7%)이 `/etc/zabbix/zabbix_md5.tmp`** 하나였다. 그 파일이 뭔지
-추적하니 v1 시절 자동화가 나왔다.
-
-```bash
-/etc/cron.d/restart_zabbix_agent          # 0 */4 * * * → 4시간마다
-  └─ /etc/zabbix/scripts/restart_agent.sh
-       md5sum /etc/zabbix/zabbix_agentd.d/*  > zabbix_md5.tmp   # agent v1 디렉터리
-       diff zabbix_md5.cur zabbix_md5.tmp
-       → 다르면  service zabbix-agent restart                    # agent v1 서비스
-```
-
-**설정이 바뀌면 에이전트를 재기동하는 구조**다. 그런데 감시 대상과 재기동 대상이 둘 다 v1이다.
-
-```
-$ rpm -q zabbix-agent zabbix-agent2
-package zabbix-agent is not installed
-zabbix-agent2-7.0.28-release1.el9.x86_64
-
-$ systemctl status zabbix-agent
-Unit zabbix-agent.service could not be found.
-```
-
-**v1은 없다.** 즉 이 자동화는 4시간마다 돌면서 아무 일도 하지 않고 `/etc` 에 파일만 쓴다.
-
-### 왜 순수 노이즈인가
-
-`.tmp` 는 `else` 분기 첫 줄에서 **diff 결과와 무관하게 매 실행 생성**된다. 설정이 안 바뀌니
-`md5sum` 결과는 매번 같고, **내용은 동일한데 `mtime` 만 갱신**된다. FIM 은 `check_all` 에 mtime 이
-포함되므로 **아무것도 안 바뀌었는데 변경으로 기록**한다.
-
-산수도 맞는다 — 6회/일 × 7일 = 42회, 실측 48건(에이전트 재기동 시 `scan_on_start` 로 추가 감지).
-
-반대로 `.cur` 는 변경이 있을 때만 갱신되므로 FIM 상위 경로에 안 나타났다. **스크립트 로직이
-실측 분포를 설명한다** — 교차검증이 됐다.
-
-### 두 번째 피해 — UserParameter 4개가 고아가 됐다
-
-같은 전환 잔재로 `/etc/zabbix/zabbix_agentd.d/` 에 UserParameter 4개가 남아 있다.
-
-```
-UserParameter=discovery.local.ip   curl http://169.254.169.254/.../local-ipv4
-UserParameter=discovery.public.ip  curl http://169.254.169.254/.../public-ipv4
-UserParameter=discovery.proc       /etc/zabbix/scripts/discovery.proc.sh
-UserParameter=update.agent         sudo /etc/zabbix/scripts/update_agent.sh
-```
-
-**agent2 는 `/etc/zabbix/zabbix_agent2.d/` 를 읽는다**(우리 템플릿의 `Include`). 그 디렉터리에는
-우리 Ansible 이 넣은 `mysql.conf` 하나뿐이다. **네 개 전부 로드되지 않는다.**
-
-`169.254.169.254` 는 클라우드 인스턴스 메타데이터 서비스이므로, 이 세트는 **클라우드 VM 플릿
-관리를 전제로 설계된 일관된 묶음**(IP 자동발견 · 프로세스 발견 · 자기 업데이트 · 설정변경
-자동재기동)이다. 7개 파일과 cron 이 모두 `Jun 29 14:01` 동일 타임스탬프여서 **일괄 배포된
-것**이다. **다만 출처는 미확인이다** — "사내 표준"이라고 단정하지 않는다.
-
-### 플레이북에 무엇을 넣었나
+`zabbix-agent2` (v2) 환경에서 불필요한 구버전 크론 파일 및 스크립트를 완전히 제거합니다:
 
 ```yaml
-- name: 구버전 zabbix-agent(v1) 잔재 정리
-  ansible.builtin.file: { path: "{{ item }}", state: absent }
+- name: 구버전 zabbix-agent(v1) 스크립트 및 크론 제거
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
   loop:
     - /etc/cron.d/restart_zabbix_agent
     - /etc/zabbix/scripts/restart_agent.sh
@@ -450,951 +235,104 @@ UserParameter=update.agent         sudo /etc/zabbix/scripts/update_agent.sh
     - /etc/zabbix/zabbix_md5.tmp
 ```
 
-**죽은 것만 지운다.** `zabbix_agentd.d/*.conf` 와 나머지 스크립트(`set_kinx.sh`,
-`update_agent.sh`, `discovery.proc.sh`, `get_metadata.py`)는 **건드리지 않는다** — 용도가
-확인되지 않았고, 고아 UserParameter 는 `zabbix_agent2.d/` 로 옮기면 기능이 살아날 수 있어
-삭제가 아니라 판단 대상이다.
+`zabbix_agent2.conf` 배포 플레이북 내 `notify: restart zabbix-agent2` 핸들러가 구성 변경 시 즉시 재기동을 처리하므로, 주기적인 외부 크론 재기동 스크립트는 불필요합니다.
 
-**옮길지는 사용자 판단이다.** 특히 `update.agent` 는 `sudo` 로 자기 업데이트를 실행하므로
-우리가 조용히 켤 항목이 아니다.
+---
 
-### 왜 이게 중요한가
+## 10. Wazuh 매니저 커스텀 룰 (`wazuh_manager_rules.yml`)
 
-**우리 플레이북의 "구버전 정리 멱등"이 패키지 제거까지였다.** 포트 10050 선점 충돌은 막았지만
-파일 잔재는 보지 않았다. 실환경에서 팀이 agent v1 → v2 전환을 하면 같은 일이 난다.
+### 주요 승격 룰 정의
 
-그리고 이 스크립트의 목적(설정 변경 시 재기동)은 **우리 MaC 가 이미 더 정확하게 한다** —
-`notify: restart zabbix-agent2` handler 가 배포 시점에 처리하므로 4시간 폴링이 필요 없다.
-
-> **MaC 의 구체적 이득**: cron 폴링으로 설정 변경을 감지하던 것을 배포 도구의 handler 가
-> 대체한다. 폴링은 최대 4시간 지연 + `/etc` 오염을 낳고, handler 는 즉시 + 부작용 없음.
-
-### 일반화 — 실환경 도입 체크리스트
-
-출처가 무엇이든 성립하는 교훈이다.
-
-> **FIM 을 켜기 전에 `/etc` 에 주기적으로 쓰는 cron·스크립트를 먼저 찾는다.**
-> 랩은 그게 하나였고 그것만으로 노이즈의 85.7% 였다.
-
-찾는 방법:
-
-```bash
-sudo grep -rl '/etc/' /etc/cron.d/ /etc/cron.*/ /var/spool/cron/ 2>/dev/null
-sudo find /etc -newermt '-1 day' -type f 2>/dev/null | head -30
-```
-
-**노이즈를 끝까지 추적하면 정보가 된다** — 이번엔 죽은 자동화 하나와 고아 UserParameter 4개를
-찾았다. 좀비 트리거 39%·죽은 Pushover 미디어와 같은 유형이고, **FIM 을 켠 덕분에 발견됐다.**
-
-## Wazuh 매니저 룰 (`wazuh_manager_rules.yml`, 2026-07-30)
-
-### 무엇을 승격하나 — 둘만
-
-| 룰 | 대상 | 레벨 | 이유 |
+| 룰 ID | 감시 대상 이벤트 | 승격 레벨 | 승격 사유 |
 |---|---|---|---|
-| 100201 | `/root/.ssh/`, `/etc/ssh/sshd_config`, `/etc/passwd`, `/etc/shadow`, `/etc/sudoers` 변경 | 3~7 → **12** | 바뀌면 안 되는 것 소수만. 기본 FIM 룰(550/553/554)은 7/7/5 로 팀 컷라인(10) 아래라 알림이 안 간다 |
-| 100210 | SCA 체크가 통과 → 실패로 회귀 (19011) | 9 → **12** | 현재 0건이라 켜도 조용하고, 하드닝이 풀리는 순간에만 울린다 |
+| **100201** | `/root/.ssh/`, `/etc/ssh/sshd_config`, `/etc/passwd`, `/etc/shadow`, `/etc/sudoers` 변경 | Level 3~7 ➔ **Level 12** | 핵심 보안 파일 변조 발생 시 팀 컷오프(10) 이상으로 승격하여 즉시 알림 발화 |
+| **100210** | SCA 하드닝 검사 통과 ➔ 실패 회귀 (Rule 19011) | Level 9 ➔ **Level 12** | 보안 하드닝 설정이 풀리는 시점에 한해 예외적으로 알림 승격 처리 |
 
-**19007(신규 실패)은 승격하지 않는다.** 이미 실패 상태인 체크가 준수율의 절반 가까이라
-컷라인 위로 올리면 그대로 폭탄이 된다. 준수율은 대시보드에서 본다.
+정규식 구문 작성 시 `type="pcre2"` 속성을 명시하여 OS_Regex 구문 해석 오류로 인한 매칭 누락을 방지합니다.
 
-**에이전트 disconnect(504)도 승격하지 않는다.** 감시 호스트 전체에서 재부팅마다 뜨면 새 노이즈다.
-대시보드 패널과 digest 채널로 보낸다 — "수집은 넓게, 알림은 좁게".
+---
 
-### 필드명 — 공식 매핑을 따른다
+## 11. MSP 멀티테넌트 고객 환경 에이전트 배포
 
-룰에서 쓰는 이름과 알림 JSON 필드 이름이 다르다.
+`deploy_agents.yml` 실행 시 `customer` 인벤토리 변수를 지정하여 MSP 테넌트별 자동 등록 그룹을 동적으로 격리합니다:
 
-| 룰 필드 | 알림 JSON |
-|---|---|
-| `file` | `syscheck.path` |
-| `process_name` | `audit.process.name` |
-| `user_name` | `audit.user.name` |
-| `changed_fields` | `changed_attributes` |
-
-근거: [Creating custom FIM rules](https://documentation.wazuh.com/current/user-manual/capabilities/file-integrity/creating-custom-fim-rules.html)
-
-### 정규식 — `type="pcre2"` 를 반드시 붙인다
-
-Wazuh 기본 정규식(OS_Regex)은 **PCRE와 점 의미가 반대**다.
-
-> osregex: `.` 는 **문자 그대로의 점**, `\.` 가 **아무 문자**를 매칭한다
-
-즉 PCRE 습관으로 `\.ssh` 라고 쓰면 osregex 에서는 `/root/Xssh` 같은 것도 걸린다. 반대로
-osregex 로 쓰려면 `.` 를 그냥 써야 한다. **틀려도 에러가 안 나고 룰이 조용히 안 맞을 뿐**이라
-가장 위험한 종류의 실수다.
-
-그래서 `100201` 은 `<field name="file" type="pcre2">` 로 명시했다. **이 속성을 지우면
-정규식 의미가 바뀐다** — 지울 경우 `\.` 를 `.` 로 함께 고쳐야 한다.
-
-근거: [Regular expression syntax](https://documentation.wazuh.com/current/user-manual/ruleset/ruleset-xml-syntax/regex.html)
-
-### 버린 룰 — 패키지 매니저 강등
-
-`dnf`/`yum`/`rpm` 이 바꾼 파일을 레벨 2로 내리는 룰을 계획했다가 **버렸다.**
-
-`process_name` 은 **whodata 가 켜진 경로에서만 채워진다.** 우리는 whodata 를 `/etc/ssh` 한
-곳에만 걸었고(inotify watch 예산 때문), 패키지 업데이트가 건드리는 `/usr/bin`·`/etc` 는 12시간
-예약 스캔이라 audit 정보가 아예 없다. **룰이 적용될 표면이 없다.**
-
-패키지 업데이트 노이즈는 빈도 기반 `<auto_ignore>` 가 담당한다.
-
-**교훈**: whodata 범위를 좁게 잡는 결정이 **쓸 수 있는 룰의 범위도 함께 좁힌다.** 두 설정은
-독립이 아니다.
-
-### 안전장치 — 룰 문법이 틀리면 매니저가 안 뜬다
-
-플레이북 순서가 그래서 이렇다.
-
-```
-백업 → 배포 → wazuh-logtest -t 검증 → (실패 시 백업 복구 + 실행 실패) → 재기동 → is-active 확인
-```
-
-`ansible.builtin.copy` 의 `validate` 파라미터를 쓰지 않은 이유는, `wazuh-logtest -t` 가
-임의 파일이 아니라 **`/var/ossec/etc` 전체 룰셋**을 검사하기 때문이다. 파일을 놓은 뒤에
-검사해야 하고, 그래서 되돌리는 경로가 별도로 필요하다.
-
-### 실행
-
-```bash
-ansible-playbook -i inventory.local.ini wazuh_manager_rules.yml
-```
-
-`[wazuh_managers]` 그룹에 master·worker 둘 다 넣는다. 룰은 양쪽에 같아야 한다.
-
-### 확인 — 시나리오 한 번
-
-```bash
-ssh vm-target-002 "sudo cp /etc/ssh/sshd_config /tmp/sshd_config.bak"
-ssh vm-target-002 "echo '# fim test' | sudo tee -a /etc/ssh/sshd_config"
-```
-
-`/etc/ssh` 는 whodata + realtime 이라 **몇 초 안에** 레벨 12 알림이 떠야 한다. 확인 순서:
-
-1. 대시보드 `보안 이벤트 (Wazuh) — 레벨 10+` 표에 나타나는지
-2. `파일 변경 이력 (Wazuh FIM)` 표에 경로가 보이는지
-3. Slack 도달 (컷라인 10 위)
-4. 게이트웨이가 붙어 있으면 봇 카드까지
-
-되돌린다. **`sshd -t` 문법 검사를 꼭 한다** — 설정이 깨진 채 재기동되면 SSH 가 막힌다.
-
-```bash
-ssh vm-target-002 "sudo mv /tmp/sshd_config.bak /etc/ssh/sshd_config && sudo sshd -t && echo OK"
-```
-
-## MSP 고객 호스트에 3종 번들 적용 (2026-07-30)
-
-### 배제할 이유가 없다
-
-`deploy_agents.yml` 은 `hosts: targets` 이므로 인벤토리에 고객 호스트를 추가하면 그대로 돈다.
-MSP를 막는 코드는 없었다. **막혀 있던 건 배포가 아니라 자동등록 그룹이었다.**
-
-```yaml
-autoreg_group: "Discovered hosts"   # 하드코딩 — 고객 호스트도 전부 여기로
-```
-
-이러면 Day7에 만든 중첩 그룹 권한 상속(`Customers/<고객>`)이 적용되지 않아 **고객 격리
-계정이 자기 호스트를 못 본다.** 자동등록을 고객별로 분기해야 한다.
-
-### HostMetadata 접미사로 가른다
-
-| 대상 | 인벤토리 변수 | HostMetadata | 자동등록 그룹 |
+| 테넌트 구분 | 인벤토리 변수 설정 | HostMetadata 설정값 | Zabbix 자동 등록 그룹 |
 |---|---|---|---|
-| 사내 | (없음 → 기본값) | `linux-3agent-bundle:internal` | `Discovered hosts` |
-| MSP 고객 B | `customer=customer-b` | `linux-3agent-bundle:customer-b` | `Customers/Customer-B` |
+| **사내 인프라** | (기본값) | `linux-3agent-bundle:internal` | `Discovered hosts` |
+| **MSP 고객사 B** | `customer=customer-b` | `linux-3agent-bundle:customer-b` | `Customers/Customer-B` |
 
-`autoregister_action.yml` 이 `customers.yml` 을 읽어 고객마다 액션을 하나씩 만든다.
-액션 이름은 `Autoregister 3-agent bundle - Customer-B` 형태이고, 조건은
-`host_metadata like "linux-3agent-bundle:customer-b"` 다.
+`HostMetadata` 조건값 뒤에 테넌트 접미사(`:customer-b`)를 명시적 부여함으로써, 사내 자동 등록 액션과의 부분 매칭(`like`) 충돌 및 그에 따른 타 테넌트 그룹 중복 등록 문제를 차단합니다.
 
-**접미사를 사내에도 붙인 이유**: 자동등록 조건은 **부분 일치(`like`)** 다. 사내 조건을
-`linux-3agent-bundle` 로 두면 `...:customer-b` 도 그 문자열을 포함하므로 **MSP 호스트가
-사내 액션에도 걸려 `Discovered hosts` 에 중복 등록된다.** 처음 만들 때 이 버그를 냈고,
-양쪽에 접미사를 붙여 해소했다.
+---
 
-인벤토리 예:
-```
-custb-web-01.example.net ansible_host=192.0.2.51 agent_identity=custb-web-01.example.net customer=customer-b
-```
+## 12. 인증서 만료 감시 자동화 (`certificates.yml`)
 
-`customer` 값은 `customers.yml` 의 `host_group` 마지막 조각을 소문자로 쓴 것이다
-(`Customers/Customer-B` → `customer-b`).
+### 구축 개요
 
-### 소관 판단 — 왜 MSP에도 Wazuh를 넣나
+Zabbix 7.0 내장 템플릿인 **"Website certificate by Zabbix agent 2"**를 활용하여 도메인별 TLS/SSL 인증서 만료 주기를 모니터링합니다.
 
-Wazuh가 보는 것을 층으로 나누면 답이 나온다.
+- **아이템 키**: `web.certificate.get[{$CERT.WEBSITE.HOSTNAME},{$CERT.WEBSITE.PORT},{$CERT.WEBSITE.IP}]`
+- **수집 지표**: 만료 예정일, 발급자, SAN, SHA-1 Fingerprint, 검증 결과 등
+- **기본 임계치**: 만료 30일 전 Warning 알림 발화 (`{$CERT.EXPIRY.WARN}=30`)
 
-| 대상 | 층 |
-|---|---|
-| 로그인 실패·sudo | OS 인증 = **인프라** |
-| 파일 무결성 (`/etc`, SSH 키, cron) | OS 설정 = **인프라** |
-| 패키지 CVE | OS 패키지 = **인프라** |
-| 앱 내부 취약점 | 고객 |
+### 이원화 트리거 구성 (만료 임박 vs 점검 불가)
 
-앞의 셋은 우리가 정한 경계(호스트·리소스=MSP 관측 / 앱 내부=고객)에서 MSP 쪽이다.
-**다만 에이전트 추가 설치 자체는 고객 협의 사안**이다(인터뷰 A-6 "임의로 진행 못 함").
-기술 제약이 아니라 계약 확인 항목으로 둔다.
+상용 환경에서 TLS 핸드셰이크 실패 시 아이템이 `unsupported` 상태로 전환되어 기존 만료 임박 트리거가 발화하지 않는 문제를 보완하기 위해 이원화 트리거를 구축합니다:
 
-**에이전트를 못 깔는 고객**에는 대안이 있다 — 고객사 프록시에 Wazuh syslog 수신
-(`<remote><connection>syslog</connection>`, 514, `allowed-ips` 필수)을 얹으면 에이전트 없이
-장비 로그를 받는다. 단 그 구간이 **PSK/TLS 없는 일반 인터넷**이므로 보안 로그를 평문으로
-태우게 된다. 암호화 적용 권고와 반드시 묶어서 제안한다.
-
-## 인증서 만료 감시 (`certificates.yml`, 2026-07-30)
-
-### 왜 하나
-
-MSP 고객 도메인 28개에 **인증서 만료 감시가 한 건도 없다**(정찰 실측). 있는 것은 443 포트
-체크뿐인데, **포트 체크는 만료된 인증서도 통과시킨다** — 포트는 열려 있으니까. 만료되는 날
-브라우저가 경고를 띄우고 나서야 알게 되는 구조다. 매니저가 인터뷰(B-6)에서 가치를 인정한
-항목이기도 하다.
-
-### 표준 템플릿을 그대로 쓴다
-
-Zabbix 7.0 이 **"Website certificate by Zabbix agent 2"** 템플릿을 기본 제공한다. 커스텀
-아이템을 만들지 않는다. 우리 진단이 "표준 템플릿이 공짜로 주는 것을 안 쓰고 자작한다"였으므로
-여기서 자작하면 같은 실수다.
-
-템플릿이 주는 것(7.0 기준, 공식 저장소 README 확인):
-
-| 항목 | 내용 |
-|---|---|
-| 수집 | `web.certificate.get[{$CERT.WEBSITE.HOSTNAME},{$CERT.WEBSITE.PORT},{$CERT.WEBSITE.IP}]` |
-| 파생 아이템 | 만료일·발급자·주체·SAN·지문·검증결과 등 12종 (JSONPath 종속 아이템) |
-| 트리거 | 유효하지 않음(High) / 만료 임박(Warning) / 지문 변경(Info) |
-| 만료 임박 식 | `(last(cert.not_after) - now()) / 86400 < {$CERT.EXPIRY.WARN}` |
-
-WebCertificate 플러그인은 **agent 2 에 기본 내장**이라 따로 설치·활성화할 것이 없다. 우리
-MaC 번들이 agent2 를 깔고 있으므로 추가 배포도 필요 없다.
-
-### 구조 — 도메인 1개 = 호스트 1개
-
-7.0 템플릿에는 **LLD 가 없다.** 공식 가이드도 "여러 사이트를 보려면 호스트를 따로 만들거나
-복제해서 매크로만 바꾸라"고 안내한다. 즉 도메인 28개면 **호스트 28개를 손으로 복제**하는 것이
-공식 절차다.
-
-이게 바로 우리가 MSP 진단에서 짚은 복붙 온보딩 부채와 같은 모양이라, 손으로 하지 않고
-`certs.yml` 목록 → `certificates.yml` 플레이북으로 만든다. 도메인 추가 = 목록에 한 줄.
-
-```
-certs.yml (도메인 목록)  →  certificates.yml  →  호스트 N개 + 템플릿 링크 + 매크로 3종
-```
-
-`host_group` 을 `Customers/Customer-X` 로 주면 **그 고객 계정에만 자기 인증서가 보인다** —
-중첩 그룹 권한 상속이 그대로 적용되므로 별도 권한 작업이 없다.
-
-**8.0 계열에는 LLD 가 들어갔다**(`cert.website.discovery`, 호스트 하나에 도메인 목록). 버전을
-올리면 호스트 N개 구조가 사라진다 — 업그레이드 편익으로 로드맵에 남긴다.
-
-### 점검 주체는 에이전트다
-
-`web.certificate.get` 은 **에이전트가 실행하는 패시브 아이템**이다. 감시 호스트는 도메인마다
-따로 만들되, 그 호스트들의 에이전트 인터페이스는 전부 **실제로 점검을 수행할 에이전트 한 대**를
-가리킨다(`cert_checker_dns`). 공식 가이드도 같은 구조다(인터페이스를 127.0.0.1 로 두는 예).
-
-따라서 점검 에이전트는 **대상 도메인 443 으로 아웃바운드가 되는 곳**에 있어야 한다. 실환경
-MSP 라면 고객망 안이 아니라 인터넷이 나가는 쪽이다.
-
-#### 점검 에이전트 주소는 IP 로 (도입 리스크 실측, 2026-07-31)
-
-처음에 인터페이스를 `useip: 0` + `dns: <FQDN>` 으로 만들었더니 **호스트 4개가 전부 빨간색**이
-되고 이 오류가 났다.
-
-```
-Get value from agent failed: Cannot resolve address: Domain name not found
-```
-
-**원인**: 랩 Zabbix 서버는 core 의 **docker 컨테이너 안**에서 돈다. `.novalocal` 같은 클라우드
-내부 이름은 대개 각 VM 의 `/etc/hosts`(cloud-init 이 기록)에 있고 DNS 에는 없는데,
-**컨테이너는 호스트의 `/etc/hosts` 를 물려받지 않는다.** 그래서 이름 해석에 실패한다.
-
-**자동 등록된 기존 호스트가 멀쩡했던 이유**도 같은 자리에 있다 — 자동 등록은 **접속해 온 IP 를
-그대로 인터페이스로 기록**하므로 처음부터 IP 기반이었다. 손으로 만든 호스트만 이름을 썼다.
-
-**여기서 구분해야 할 것**: 우리가 MaC 에서 공들인 **FQDN 정규화는 "아이덴티티"** 용이다 —
-Zabbix·Loki·Wazuh 가 같은 호스트를 같은 이름으로 부르게 해서 데모 C 의 3소스 병합이 성립하게
-하는 것(HOST_LABEL_MAP 없이 logs:0→6 실증). **접속 경로와는 다른 문제다.** 이름이 같아야 하는
-것과 그 이름으로 접속이 되는 것은 별개인데, 둘이 같아 보여서 섞었다.
-
-→ **규칙: 식별은 FQDN, 접속은 IP.** `cert_checker_ip` 를 주면 IP 인터페이스로,
-없으면 `cert_checker_dns` 로 떨어진다.
-
-실환경은 사내 DNS 가 정상 운영되므로 이름을 써도 된다. **컨테이너 배치에서만 나는 문제**이고,
-그 사실 자체가 "감시 서버를 컨테이너로 올릴 때 확인할 항목" 으로 로드맵에 남을 값이 있다.
-
-### 임계값을 7일이 아니라 30일로 둔 이유
-
-템플릿 기본 `{$CERT.EXPIRY.WARN}` 은 **7일**이다. 갱신이 자동인 환경을 전제한 값이라 우리에겐
-너무 늦다. 상용 인증서는 발급사 검증에 며칠이 걸리고, 고객사 승인이 끼면 더 걸린다. 7일 남았을
-때 알면 이미 늦을 수 있다.
-
-기본값을 **30일**(`cert_expiry_warn_default`)로 두고 도메인별로 `expiry_warn` 으로 덮는다.
-Let's Encrypt 계열처럼 30일 전에 자동 갱신되는 대상은 오히려 짧게(예: 10일) 주는 편이 낫다 —
-30일로 두면 자동 갱신 직전마다 매번 울린다.
-
-**알려진 한계**: 7.0 템플릿의 만료 트리거는 하나(Warning)뿐이라 "30일 = 경고 / 7일 = 심각"
-2단 에스컬레이션이 안 된다. 커스텀 트리거를 하나 더 다는 방법이 있지만, 그러면 호스트 28개에
-커스텀 트리거 28개가 생겨 우리가 지적한 복붙 부채를 재생산한다. 2단 구분이 필요해지면
-**LLD 가 있는 상위 버전에서 트리거 프로토타입으로 푸는 것이 맞다.**
-
-> **버전 정정 (2026-07-31)**: LLD(`cert.website.discovery`) 도입은 **7.2**다(앞서 "8.0 계열"로
-> 적었던 것을 정정). 매크로에 콤마 목록(`{$CERT.WEBSITE.HOSTNAME}` = `a.com,b.com,c.com`)을
-> 넣으면 호스트 하나에서 다중 도메인이 발견된다. 다만 **결론은 같다** — 7.0.27 에는 없고,
-> 팀이 LTS 를 쓰므로 실질 업그레이드 경로는 7.2(비LTS)가 아니라 **8.0 LTS** 다.
-
-### 트리거가 둘인 이유 — "곧 죽는다"와 "보지 못하고 있다"는 다른 사건이다
-
-이 절이 이 문서에서 가장 중요하다. **왜 트리거를 하나 더 달았는지**가 우리 설계 원칙의
-두 번째 적용 사례이기 때문이다.
-
-**계기.** 사용자가 인증서 감시를 실환경으로 확장할 때 무엇이 달라지는지 조사해 왔고
-(2026-07-31), 그 안에 이런 지적이 있었다 — *"`web.certificate.get` 은 인증서 오류를 제외한
-TLS 핸드셰이크 실패 시 아이템이 unsupported 가 된다"*. 공식 근거로 확인했다.
-
-> "The `web.certificate.get` item turns unsupported if TLS handshake fails with **any error
-> except an invalid certificate**."
-> — https://support.zabbix.com/browse/ZBX-20206 ,
->   https://www.zabbix.com/forum/zabbix-help/451665-unsupported-item-key-website-certificate-by-zabbix-agent-2
-
-**무엇이 문제인가.** 만료 임박 트리거는 `last(cert.not_after)` 를 본다. 아이템이 unsupported
-가 되면 **값이 갱신되지 않고, 트리거는 발화하지 않고, 화면은 조용하다.** 즉:
-
-| 실제 상황 | 화면 |
-|---|---|
-| 인증서가 멀쩡하다 | 조용함 |
-| **서비스가 죽어서 인증서를 아예 못 봤다** | **조용함 (같음)** |
-
-두 상태가 구분되지 않는다. 그리고 하필 **가장 조용해야 할 때가 아니라 가장 시끄러워야 할 때**
-조용하다 — 서비스가 죽었는데 인증서 감시는 아무 말이 없다.
-
-**이것은 게이트웨이 G1 과 같은 결함이다.** 거기서도 Wazuh 인덱서 조회 실패와 "보안 이벤트
-없음"이 같은 빈 값으로 처리돼, 봇이 **인덱서가 죽은 상태에서 "침해 흔적 없음"을 단언**했다.
-그때 상태 3종(`ok` / `unavailable` / `disabled`)을 도입해 고쳤다. 게이트웨이에서는 고쳐 놓고
-인증서에서 같은 실수를 하면 **원리를 가진 것이 아니라 그 자리를 우연히 고친 것**이 된다.
-
-**그래서 트리거를 짝으로 둔다.**
-
-| 트리거 | 묻는 것 | 심각도 |
+| 트리거 명칭 | 검증 목적 및 조건식 | 부여 심각도 |
 |---|---|---|
-| 만료 임박 (템플릿 기본) | **인증서가 곧 죽는가** | Warning |
-| **점검 불가 (신규)** | **인증서를 보고 있기는 한가** | Average |
+| **인증서 만료 임박** | 인증서 만료 잔여일 임계치 미달 시 발화 | `Warning` |
+| **인증서 점검 불가** | `nodata(12h)` 조건 성립 시 발화 (네트워크 단락, 도메인 장애, 에이전트 중단 감지) | `Average` |
 
-식은 `nodata()` 를 쓴다 — 아이템이 unsupported 든 에이전트가 죽었든 **데이터가 안 들어오는
-모든 경우**를 한 번에 잡는다. 원인 구분은 사람이 하고, 트리거는 "못 보고 있다"만 말한다.
-
-**부수 효과**: 점검 에이전트 자체가 죽은 경우도 이 트리거가 잡는다. 감시 대상 28개가 통째로
-안 보이는 상황인데 종래 구조로는 완전한 침묵이었다. 이는 §3-7 "감시자를 감시한다" 의 확장이다.
-
-#### 창을 12h 로 둔 이유 — 처음 30m 로 잡았다가 고쳤다
-
-**처음에 `nodata(30m)` 으로 썼는데 그대로 뒀으면 정상 호스트 28개가 전부 상시 발화했다.**
-랩 템플릿 실측(2026-07-31)이 그것을 막았다.
-
-| 실측값 | 값 |
-|---|---|
-| 마스터 아이템 `web.certificate.get` 수집 주기 | **15m** |
-| 전처리 `Discard unchanged with heartbeat` | **6h** |
-
-인증서 JSON 은 몇 달간 바뀌지 않으므로 **값이 계속 버려지고, heartbeat 때문에 6시간에 한 번만
-통과한다.** 즉 **정상 상태의 최대 침묵이 `6h + 15m`** 이다. 30m 창은 이 정상 침묵을 장애로
-읽는다 — 우리가 진단한 "Warning 99.5% 노이즈" 를 새 축에서 그대로 재현하는 것이다.
-
-**규칙: 창 = heartbeat × 2 = 12h.** heartbeat 가 바뀌면 이 규칙으로 다시 계산한다.
-인증서 감시의 본체는 30일 경고 창이므로 12시간 탐지 지연은 그 1.7% 이고, **놓치는 것보다
-12시간 늦게 아는 편이 낫다.**
-
-도메인별로 `nodata_window` 를 주어 덮을 수 있다(랩 시연은 짧게).
-
-#### 공식 확인 사항 3건 (2026-07-31)
-
-| 확인 | 결과 | 출처 |
-|---|---|---|
-| `nodata()` 가 unsupported 아이템에서도 계산되는가 | **된다.** *"The referenced item must be in a supported state (**except for nodata() function**, which is calculated for unsupported items as well)"* — 이 예외가 없었으면 이 트리거는 성립하지 않는다 | [Trigger expression](https://www.zabbix.com/documentation/current/en/manual/config/triggers/expression) |
-| 신규 아이템에서의 동작 | *"The function will display an error if, within the period: ... **there's no data and the item was added or re-enabled**"* → 호스트를 막 만든 직후 첫 창 동안은 **발화가 아니라 오류(unknown) 상태**다. 창이 지나야 판정된다 | [History functions](https://www.zabbix.com/documentation/current/en/manual/appendix/functions/history) |
-| 프록시 경유 시 | 기본은 프록시 가용성에 민감해 재연결 후 지연분을 건너뛴다. 즉시 발화가 필요하면 3번째 인자 `"strict"` | 〃 |
-
-**알려진 거친 지점**: Zabbix 이슈 트래커에 **[ZBXNEXT-9481 "nodata(), unsupported items and
-discard with heartbeat"](https://support.zabbix.com/projects/ZBXNEXT/issues/ZBXNEXT-9481)** 가
-기능 요청으로 올라와 있다 — **우리가 쓰는 조합 그대로**다. 지금 구조로 동작은 하지만 이
-조합이 완전히 매끄러운 영역은 아니라는 뜻이므로, 실환경 적용 시 창 값을 한 번 더 실측한다.
-
-#### 마스터가 아니라 종속 아이템을 본다 — `nodata()` 는 history 를 읽는다
-
-처음에 마스터 아이템(`web.certificate.get[...]`)을 대상으로 썼더니 트리거가 발화하지 않고
-이 오류가 떴다.
-
-```
-Cannot evaluate function nodata(/cert-unreachable.invalid/web.certificate.get[...],10m):
-item history is disabled.
-```
-
-**Zabbix 템플릿은 마스터 아이템의 history 를 0 으로 둔다.** 원본 JSON 은 종속 아이템에 값을
-넘기는 통로일 뿐이라 보관할 이유가 없기 때문이다(디스크 절약). 그런데 **`nodata()` 는 그
-history 를 읽는다.** 그래서 "수집이 멈췄는가"를 물으려고 수집 지점 자체를 보면 안 된다.
-
-**어느 종속 아이템을 볼지는 이미 증명돼 있었다.** 템플릿의 만료 임박 트리거가
-`last(/.../cert.not_after)` 를 쓰는데 그 트리거가 랩에서 실제로 발화했다(2026-07-31,
-`www.zabbix.com`). `last()` 도 history 를 읽으므로 **`cert.not_after` 에는 history 가 있다는
-것이 그 발화로 증명된다.** 추측 없이 결정할 수 있었던 자리다.
-
-의미도 이쪽이 더 정확하다 — `cert.not_after` 에 값이 없다는 것은 곧 **"만료일을 모른다"** 이고,
-그것이 이 트리거가 말하려는 바다.
-
-> **일반화**: `nodata()` 로 수집 중단을 감시할 때 **마스터/종속 구조의 템플릿에서는 종속
-> 아이템을 대상으로 삼는다.** 마스터의 history 는 대개 꺼져 있다. 이는 Zabbix 표준 템플릿
-> 다수(`*.get` 마스터를 두는 모든 템플릿)에 해당하므로 실환경 확장 시 같은 함정이 재현된다.
-
-**`strict` 를 기본으로 넣지 않은 이유**: 랩 점검 에이전트는 서버 직수집이라 프록시 민감도가
-무관하다. 실환경에서 점검 에이전트를 프록시 뒤에 두면 그때 `"strict"` 를 검토한다 —
-다만 프록시 재연결 직후 오탐이 늘 수 있어 트레이드오프가 있다.
-
-#### 두 실패가 서로 다르게 잡히는 것이 이 설계의 증명이다
-
-| 대상 | 무슨 일 | 데이터 | 발화하는 트리거 |
-|---|---|---|---|
-| 만료된 인증서 | 핸드셰이크는 **성공**, 인증서가 invalid | **들어온다** | `SSL certificate is invalid` (High) |
-| 도달 불가 도메인 | 핸드셰이크 **실패** → 아이템 unsupported | **안 들어온다** | **`인증서 점검 불가`** (Average) |
-
-공식 문서의 *"turns unsupported if TLS handshake fails with any error **except an invalid
-certificate**"* 가 이 두 줄을 가른다. **만료는 알 수 있고, 도달 불가는 알 수 없다** — 그래서
-트리거가 둘이어야 한다. 랩 검증도 이 두 도메인으로 한다.
-
-**호스트마다 트리거 1개가 부채 아닌가.** 위 "알려진 한계"에서 커스텀 트리거 28개를 부채라
-불렀으므로 스스로 모순인지 짚어 둔다. 우리가 진단에서 부채라 부른 것은 **사람이 손으로 복붙해
-정의가 28군데로 흩어진 것**이다. 여기서는 정의가 `certificates.yml` **한 곳**에 있고 28개는
-그 산출물이다 — 도메인 추가는 목록 한 줄, 트리거 수정은 파일 한 곳 고치고 재실행(멱등)이다.
-호스트 28개를 이미 그렇게 만들고 있으므로 일관된 처리다. 8.0 LTS 로 올리면 **호스트 1개 +
-트리거 프로토타입 1개**로 접히며 이 구조 자체가 사라진다.
-
-### Grafana 배치 — 전용 대시보드로 두는 이유 (2026-07-31)
-
-| 층 | 무엇 | 왜 |
-|---|---|---|
-| 통합 관제 `kinx-overview` | **stat 1개** ("30일 내 만료 N건") + 전용 대시보드 링크 | 숫자는 통합 화면에, 분석은 전용 화면에 (§4-5 무마찰 확장) |
-| 전용 `kinx-certificates` | 재고 테이블 · 점검 불가 · 발급자 분포 · 와일드카드 공유 | 아래 3가지 이유 |
-| 고객사 `kinx-msp`·`kinx-msp-os` | **넣지 않는다** | 전용 대시보드가 `$group` 변수 + 권한 상속으로 이미 커버 |
-
-**① 시간축이 다르다.** 다른 패널은 "지금 상태"(5분~6시간)를 보고 인증서는 **미래의 날짜**
-(30~90일)를 본다. 같은 대시보드에 두면 상단 시간 범위가 서로 싸운다. Wazuh 패널에서 이미
-`timeFrom` 을 패널마다 고정해 우회했는데(SCA 30d / 취약점 90d), 우회는 되지만 지저분해진다.
-
-**② 사용 주기가 다르다.** 인증서는 상시 감시가 아니라 **월 1회 점검** 성격이다. 장애 대응
-화면에 섞으면 평소엔 자리만 차지하고 필요할 때 못 찾는다.
-
-**③ 발표에 한 장이 필요하다.** "28개 도메인, 잔여일 오름차순, 이번 달에 N개 만료" 가 한
-화면이어야 한다. 다른 패널 사이에 끼면 안 보인다.
-
-**고객사 대시보드에 따로 안 만드는 이유**: 전용 대시보드에 `$group` 변수를 두면 KINX 운영자는
-All 을, 고객 계정은 중첩 그룹 권한 상속으로 자기 것만 본다(§4-6 에서 검증된 메커니즘).
-고객용 패널을 따로 만들면 같은 것을 두 벌 유지하게 된다.
-
-### cert 호스트를 두 그룹에 넣는 이유 (부작용 회피)
-
-`Customers/Customer-X` 하나만 주면 **`kinx-msp` 의 `$host` 드롭다운에
-`cert-www.example.com` 이 섞인다.** 그것을 고르면 DB·OS 패널이 전부 no data 가 되어
-"왜 이 호스트는 다 비어 있나"가 된다.
-
-| 그룹 | 용도 |
-|---|---|
-| `Customers/Customer-X` (또는 `Certificates`) | **권한 상속** — 고객이 자기 인증서를 본다 |
-| `Certificates` (공통, 항상 추가) | **전용 대시보드 필터** |
-
-Zabbix 호스트는 다중 그룹 소속이 되므로 충돌이 없다. 더불어 `kinx-msp` 의 `$host` 변수는
-정규식으로 `cert-` 를 제외한다.
-
-### 실행
+`nodata()` 검증 대상 아이템 지정 시 마스터 아이템이 아닌 **종속 아이템(`cert.not_after`)**을 지정하여, History 설정 미비(`history=0`)에 의한 계산 오류를 방지합니다. `nodata()` 창 크기는 전처리 하트비트 주기(6h)의 2배수인 **12시간**으로 지정하여 정상 하트비트 간격에 의한 오탐 발화를 방지합니다.
 
 ```bash
-export ZABBIX_API_TOKEN='<조회·쓰기 토큰>'
+# 인증서 감시 호스트 생성 및 템플릿 연동 실행
+export ZABBIX_API_TOKEN='<ZABBIX_ADMIN_TOKEN>'
 ansible-playbook -i ansible/inventory.ini ansible/certificates.yml -e @ansible/certs.local.yml
 ```
 
-> **인벤토리는 `inventory.ini`(커밋본)다.** 이 플레이북의 대상은 SSH 호스트가 아니라 **Zabbix
-> API** 이고, 그 정의(`[zabbix]` + httpapi vars)가 커밋본에 있다. `inventory.local.ini` 는
-> SSH 대상(`[targets]`) 용이라 `[zabbix]` 그룹이 없을 수 있다.
+---
 
-### v1 잔재 정리 — 자동화가 닿는 곳만 고쳐졌다 (2026-07-31 실측)
+## 13. MSP 월간 리포트 파이프라인 (`msp_report.yml` + `bot/msp_report.py`)
 
-**FIM 노이즈의 85.7% 를 만들던 `/etc/zabbix/zabbix_md5.tmp` 를 2026-07-30 에 "근원 제거"
-했다고 기록했는데, 재측정해 보니 4대 중 1대만 적용돼 있었다.**
+### 시스템 아키텍처 및 데이터 흐름
 
-| 시각(KST) | 호스트 | 이벤트 |
-|---|---|---|
-| 07-31 06:25 | `vm-target-001` | modified — **살아 있음** |
-| 07-31 05:23 | `vm-p3-wazuh-server-001` | modified — **살아 있음** |
-| 07-31 05:23 | `vm-p3-wazuh-server-002` | modified — **살아 있음** |
-| 07-31 03:10 | `vm-p3-target-002` | **deleted** — 조치됨 |
+기존 Zabbix Scheduled Report 기능을 수용하면서, Zabbix 단독으로 산출이 불가능한 인시던트 병합 통계, 만성/신규 선판정 비율, 자동 조치 후보 등록 수, LLM 종합 분석 서사 데이터를 외부에서 Trapper 아이템으로 주입하는 파이프라인을 구축합니다.
 
-**원인**: 정리 태스크를 `deploy_agents.yml` 안에 넣었고, 그 플레이북은 인벤토리 `[targets]` 에만
-돈다. `vm-target-001` 은 **손으로 설치한 호스트**라 그 그룹에 없고, Wazuh 매니저 2대는 3종 번들
-배포 대상이 아니라 역시 없다. **자동화가 닿는 한 대만 고쳐졌다.**
+```text
+Keep /alerts (인시던트 이력) ──▶ bot/msp_report.py (통계 집계 및 LLM 서사 생성)
+                                        │
+                                (Zabbix Sender)
+                                        │
+                                        ▼
+Grafana 대시보드 (kinx-msp-report) ──▶ Grafana Image Renderer ──▶ PDF / Email 발송
+```
 
-**이것이 MaC 논거의 실증이다.** 손으로 한 것은 손으로 고쳐야 하고, 그래서 빠진다. 그리고
-빠진 것을 아무도 모른다 — 노이즈는 계속 나는데 기록에는 "조치 완료" 로 남아 있었다. 우리가
-실환경 진단에서 지적한 "커스텀 아이템 37% 비활성 · 좀비 트리거 39%" 도 같은 구조로 쌓인 것이다.
+### 미산출 지표 표기 규약 (`NOT_MEASURED`)
 
-**교훈은 배치가 아니라 분리다.** "정리" 를 "배포" 안에 넣은 것이 잘못이었다. 배포는 대상이
-정해져 있지만 정리는 어디에나 돌아야 한다. 그래서 `cleanup_legacy_zabbix_agent.yml` 로 떼어
-`hosts: all` 기본에 `-e cleanup_hosts=` 로 좁힐 수 있게 했다.
+집계 실패 또는 미측정 지표에 대해 `0`이나 누락 처리 대신 **`-1` (`NOT_MEASURED`)** 값을 명시적으로 전송하여, 대시보드 상에 "미산출" 상태로 정확히 표현되도록 강제합니다. (과거 집계 데이터 이월 표시 및 0% 오인 오독 방지)
+
+### 서사 생성 승인 게이트 (Human-in-the-Loop)
+
+LLM이 생성한 월간 종합 분석 서사(`report.summary`)는 명시적 사용자 승인 전까지 `"검토 대기 — 승인 후 게시됩니다"` 상태로 고정되어 승인되지 않은 분석 문장이 메일 리포트에 실리는 것을 차단합니다.
 
 ```bash
-ansible-playbook -i inventory.local.ini cleanup_legacy_zabbix_agent.yml
-```
-
-`deploy_agents.yml` 안의 정리 태스크는 그대로 둔다 — 신규 호스트 온보딩 시 첫 배포에서
-바로 걸러지는 편이 낫고, 파일 삭제는 멱등이라 중복 실행이 무해하다.
-
-**함께 확인된 것 — FIM 은 변경 시점이 아니라 스캔 시점에 보고한다.** 우리가 파일을 바꾼
-07-30 저녁(21~24시 KST) 구간의 syscheck 알림은 0 건이었고, 다음 날 새벽 03~09 시에 9 건이
-몰렸다. realtime 으로 지정한 경로(`/root/.ssh` · cron · systemd 유닛)가 아니면 주기 스캔
-때 한꺼번에 나온다. **탐지 지연이 최대 스캔 주기만큼**이라는 뜻이므로 도입 시 감시 경로별로
-realtime 여부를 정할 때 이 값을 함께 본다.
-
-#### `wazuh-control status` 는 정상 상태에서도 rc=1 이다 (2026-07-31)
-
-게이트웨이 배선 플레이북의 마지막 검증에서 **배선은 다 됐는데 실패로 끝났다.**
-
-```
-"msg": "non-zero return code", "rc": 1,
-"stdout": "... wazuh-analysisd is running... wazuh-maild not running...
-           wazuh-integratord is running... wazuh-dbd not running..."
-```
-
-**`wazuh-integratord is running` 이 stdout 안에 있다** — 즉 목적은 달성됐다. rc=1 의 원인은
-`wazuh-maild` · `wazuh-agentlessd` · `wazuh-dbd` · `wazuh-csyslogd` 가 `not running` 이기
-때문인데, **이 넷은 기본 비활성이라 정상 상태다.** `wazuh-control status` 는 데몬이 하나라도
-안 돌면 non-zero 를 준다.
-
-→ 상태 명령의 rc 는 보지 않고, 판정은 다음 태스크가 stdout 으로 한다(`failed_when: false`).
-
-**주의**: Ansible 의 `command` 모듈은 `failed_when` 을 쓰면 기본 rc 검사를 **대체**한다.
-그런데 이 플레이북은 `command` 에 `changed_when` 만 걸고 판정을 별도 `fail` 태스크로 뒀기
-때문에, **기본 rc 검사가 먼저 죽여서 판정 태스크까지 가지 못했다.** 검사와 판정을 두 태스크로
-나눌 때는 앞 태스크에 `failed_when: false` 를 반드시 함께 둔다.
-
-> 오늘 나온 다른 사례들과 방향이 반대다 — 앞의 것들은 **실패가 성공처럼** 보였고, 이것은
-> **성공이 실패처럼** 보였다. 상태 판정을 종료 코드에 맡길 때 양쪽 모두 생긴다.
-
-#### 도입 리스크 실측 — Ansible 은 대상이 없어도 "성공"한다 (2026-07-31, 두 번째 사례)
-
-`inventory.local.ini` 로 실행했더니 이렇게 나왔다.
-
-```
-[WARNING]: Could not match supplied host pattern, ignoring: zabbix
-PLAY [Onboard TLS certificate monitoring (Zabbix objects)] ***
-skipping: no hosts matched
-PLAY RECAP ***
-                       (비어 있음)
-```
-
-**경고 한 줄뿐이고 종료 코드는 0 이다.** 호스트도 트리거도 하나 안 만들고 성공으로 끝난다.
-플레이 안에 넣어 둔 `assert` 도 함께 건너뛴다 — 그 assert 가 `hosts: zabbix` 플레이 소속이기
-때문이다.
-
-**같은 함정을 2026-07-29 데모 B 에서 이미 밟았다.** 그때는 인벤토리 호스트명이 FQDN 이 아니라
-`remediate_service.yml` 이 조치를 통째로 건너뛰고도 승인 화면에 "성공"으로 보였다. 그래서 그
-플레이북에 사전 확인 플레이(`hosts: localhost` + assert)를 넣었는데, **인증서 플레이북에는
-넣지 않아 같은 일이 반복됐다.**
-
-→ **규칙: Zabbix API 를 대상으로 하는 플레이북은 `hosts: localhost` 사전 확인 플레이를 먼저
-둔다.** 대상 그룹이 비면 거기서 실패시킨다. `certificates.yml` 에 적용했고, `onboard.yml` ·
-`link_mysql_template.yml` · `autoregister_action.yml` 도 같은 패턴이 필요하다(미적용 — 후속).
-
-자동화가 "아무것도 안 하고 성공"하는 것은 조용한 실패 중에서도 나쁜 축이다. 사람은 초록색
-결과를 보고 넘어가기 때문이다. 이는 게이트웨이 G1(조회 실패와 신호 없음을 구분) · 인증서
-점검 불가 트리거와 **같은 결함 계열**이며, 세 번 모두 "실패가 성공·정상처럼 보인다"가 본질이다.
-
-실 도메인 목록은 **커밋하지 않는다.** `ansible/certs.local.yml`(gitignored)에 두고 `-e` 로
-주입한다. 리포의 `certs.yml` 은 형식을 보여주는 예시(RFC 2606 예약 도메인)다.
-
-멱등이므로 도메인을 추가하고 다시 돌리면 된다. 목록에서 뺀 도메인의 호스트는 **자동으로
-지워지지 않는다** — Ansible 이 없는 항목을 삭제하지는 않기 때문이다. 정리는 수동이다.
-
-### 확인
-
-1. Zabbix → Latest data → `Expires on` 아이템에 만료일이 들어왔는지
-2. `{$CERT.EXPIRY.WARN}` 을 일부러 크게(예: 3650) 줘서 트리거가 발화하고 Slack 까지 오는지
-3. Grafana `kinx-overview` 맨 아래 "인증서 만료 재고" 패널에 도메인별 만료 시점이 뜨는지
-
-3번 패널은 Zabbix 가 초 단위 유닉스 타임스탬프를 주는데 Grafana 는 밀리초로 읽으므로
-플러그인 함수 `scale(1000)` 을 걸어 뒀다. 값이 1970년으로 보이면 그 함수가 빠진 것이다.
-
-## MSP 월간 리포트 (`msp_report.yml` + `bot/msp_report.py`, 2026-07-31)
-
-### 새 리포트 도구를 만들지 않는다
-
-매니저 답변(B-7)상 팀은 **Zabbix Scheduled report 를 이미 운용 중**이다. 즉 렌더링·스케줄·
-메일 발송·수신자 권한이 전부 이미 있다. 여기서 별도 리포트 생성기를 만들면 학습 비용과
-운영 부담을 새로 만들면서 기능은 같아진다.
-
-그래서 **파이프는 그대로 두고 내용만 채운다.** 우리가 넣는 것은 **Zabbix 혼자서는 낼 수 없는
-값**뿐이다. 병합 후 사건 수, 만성/신규 판정, 자동 조치 후보, 초동 대응 시간 — 이것들은
-게이트웨이와 Keep 에만 있고 Zabbix 는 알 방법이 없다.
-
-| | 기존 Zabbix 리포트 | 여기서 더하는 것 |
-|---|---|---|
-| 단위 | 트리거 발화(알림) | **사건**(병합 후) |
-| 반복성 | 없음 | 만성/재발/신규 판정 |
-| 조치 | 없음 | 자동 조치 후보 등록 수 |
-| 서사 | 없음 | 원인·권고 요약 + 월간 종합 분석(**승인 필요**) |
-| 로그 | 아이템 보유 호스트가 사실상 없어 불가 | "로그로 원인을 확정한 사건 N건" |
-| 보안 | 데이터 자체가 없음 | 준수율·파일 무결성·취약점 |
-
-**한계를 그대로 적는다.** 자동 조치 "후보 등록" 수이지 "완료" 수가 아니다. 실제 실행 여부는
-Keep 워크플로 실행 기록에 있고 알림 레코드만으로는 알 수 없다. 아이템 이름 자체를
-`자동 조치 후보 등록` 으로 두어 읽는 사람이 오해하지 않게 했다.
-
-### 값이 들어가는 경로
-
-```
-Keep /alerts  ──(집계)──▶  bot/msp_report.py  ──(sender 프로토콜)──▶  Zabbix trapper 아이템
-                                                                              │
-                                                        Scheduled report ◀─ 대시보드 위젯
-```
-
-trapper 를 쓰는 이유는 값을 **밖에서 밀어넣기** 때문이다. Zabbix 가 폴링할 대상이 없으므로
-리포트 호스트에는 인터페이스를 만들지 않는다(`interfaces: []`).
-
-호스트는 **고객 그룹과 `Reports` 그룹 양쪽**에 넣는다. 고객 그룹에 있어야 중첩 그룹 권한
-상속이 걸려 수신자 권한 렌더링(`Generate report by: recipient`)이 동작하고, `Reports` 는
-대시보드 위젯이 리포트 호스트만 고르기 위한 공통 필터다. 인증서 호스트와 같은 방식이다.
-
-### "없음"을 명시적으로 보낸다 (`NOT_MEASURED`)
-
-산출하지 못한 값을 어떻게 보낼지가 고객 문서의 정확성을 가른다. **선택지가 셋인데 둘은 거짓말이
-된다.**
-
-| 보내는 값 | 화면에 뜨는 것 | 판정 |
-|---|---|---|
-| `0` | "준수율 0%" | **거짓** — "전부 실패"로 읽힌다 |
-| 안 보냄 | 지난 집계의 값 | **거짓** — 값이 그대로 남아 최신처럼 보인다 |
-| `-1` (`NOT_MEASURED`) | "미산출" (대시보드 값 매핑) | 사실 |
-
-가운데가 실제로 사고를 냈다. 범위를 좁힌 뒤 값을 안 보냈더니 **"준수율 미산출" 옆에 지난
-집계의 52.0%가 그대로 떠 있었다.** 화면상 아무 문제가 없어 보이는 종류라 더 위험하다.
-
-문장 항목(파일 무결성·취약점·상위 패키지)도 같은 이유로 별도 표식을 쓴다. 여기서는 더
-나쁘게 드러났다 — 고객 리포트의 "취약점 상위 패키지"에 **범위를 안 좁혔던 이전 실행의 랩
-전체 통계**가 남아 있었다. 숫자가 틀린 것을 넘어 **다른 호스트의 숫자가 고객 문서에 실린**
-형태다.
-
-**절 하나가 실패해도 그 절만 미산출로 두고 나머지는 낸다.** 보안 절 전체를 폐기하면 산출 가능한
-값까지 사라진다.
-
-### 근거 커버리지 — 로그·보안을 실제로 읽고 판단한 사건 수
-
-리포트에 **로그 본문은 싣지 않는다**(고객 자산 + 반출 표면 확대). 대신 "로그를 근거로 원인을
-확정한 사건이 N건"이라는 사실만 싣는다. 실환경 Zabbix 는 `log[]` 아이템을 가진 호스트 비율이
-사실상 0 이라, **이 문장 자체가 기존 리포트에 존재할 수 없는 종류의 내용**이다.
-
-세는 기준은 게이트웨이가 남긴 조회 상태(`sources`)다. **`sources` 필드가 없는 옛 레코드는
-세지 않는다** — 모르는 것을 확보로 세면 과장이 된다.
-
-### 승인 게이트 — 고객에게 나가는 것은 승인 대상이다
-
-지표 10종은 코드가 센 숫자라 검토가 필요 없다. **`report.summary` 하나만 LLM 이 만든
-서사**이고, 이것은 고객에게 나가는 문서에 실린다. 사람이 안 읽은 LLM 문장이 계약 상대에게
-가는 것은 허용할 수 없다.
-
-게이트를 **발송이 아니라 값에** 걸었다. 승인 전에는 아이템 값이 `"검토 대기 — 승인 후
-게시됩니다"` 이므로, 예약 발송이 그 사이에 돌아도 검토 안 된 서사가 실릴 수 없다.
-발송을 막는 방식이었다면 "예약이 먼저 돌면 어떡하나"가 남는다.
-
-| 모드 | 동작 |
-|---|---|
-| (기본) | 숫자 지표 전송, `report.summary` = `검토 대기` |
-| `--draft-to-keep` | 요약 초안을 Keep 승인 큐에 등록 (데모 B 와 같은 화면) |
-| `--approve` | 사람이 초안을 검토한 뒤 — 서사 본문을 전송 |
-
-이것이 **읽기=자동 / 쓰기=승인** 원칙의 세 번째 적용이다.
-분석은 자동(데모 C) → 시스템 변경은 승인(데모 B) → **고객에게 나가는 것도 승인**(리포트).
-승인 계층을 새로 만들지 않고 Keep 을 그대로 쓴 이유가 여기 있다. 데모 B 에서 이미
-`playbook` 필드로 워크플로가 분기하는 것을 실증했으므로, 리포트 초안도 같은 자리에
-`playbook: report_approve` 로 올라간다. n8n 을 새로 얹지 않는 근거이기도 하다 — 승인
-계층은 이미 있고, AWX 가 매니저 검토 중이라 GUI 엔진을 하나 더 굳히면 중복 부채가 된다.
-
-**초안이 자기 자신을 오염시키는 함정.** 승인 대기 알림도 Keep 알림이므로, 그냥 넣으면
-다음 달 집계에서 원시 알림 1건으로, `playbook` 이 있으니 자동 조치 후보 1건으로도 세어진다.
-`source: kinx-report` 로 넣고 집계 진입에서 제외한다(`selftest` 에 고정).
-
-### 서사는 새 LLM 호출로 만들지 않는다
-
-사건마다 이미 데모 C 봇의 분석 전문이 Keep 에 저장돼 있다. 요약은 그 본문에서 **원인 절과
-권고 절만 잘라** 만든다(Day8 결의 ⑥ "데모 C 출력 재활용만"). 리포트를 위해 LLM 을 다시
-부르면 같은 사건에 대해 두 개의 설명이 생기고, 둘이 어긋나면 어느 쪽이 맞는지 알 수 없다.
-
-절 추출이 실패하면(분석 형식이 다르면) 본문 앞부분으로 폴백한다. 빈칸이 나가는 것보다
-낫다. 형식 3종(`**2)`, `**②`, 절 없음)을 selftest 에 넣어 뒀다.
-
-### 실행
-
-```bash
-# 1) 고객별 리포트 호스트·아이템 생성 (PC 아님 — core VM 의 ansible-venv)
-#    인벤토리 둘을 다 준다. [zabbix] 그룹은 inventory.ini 에만 있고 local 에는 없다.
-#    Zabbix **관리자 토큰**이 필요하다 — 봇의 조회 전용 토큰으로는 hostgroup.create 가 거부된다.
-export ZABBIX_API_TOKEN='<관리자 토큰>'
+# 1. 고객별 리포트 Trapper 호스트 및 아이템 자동 생성
+export ZABBIX_API_TOKEN='<ZABBIX_ADMIN_TOKEN>'
 ansible-playbook -i inventory.ini -i inventory.local.ini msp_report.yml
 
-# 2) 집계 드라이런 — 숫자와 요약 초안을 눈으로 본다 (bot-venv, .env source)
-cd ~/kinx-idc-monitoring-poc/bot && set -a && . .env && set +a
-python msp_report.py --days 30 --insight
+# 2. 통계 집계 및 요약 초안 Keep 승인 큐 전송
+python bot/msp_report.py --host-filter customer-a --target report-Customer-A --draft-to-keep
 
-# 3) 초안을 Keep 승인 큐로
-python msp_report.py --host-filter customer-a --target report-Customer-A --draft-to-keep
-
-# 4) 검토 후 전송
-python msp_report.py --host-filter customer-a --target report-Customer-A --send --approve
+# 3. 승인 완료 후 Zabbix 주입 및 메일 리포트 발송
+python bot/msp_report.py --host-filter customer-a --target report-Customer-A --send --approve
 ```
 
-`--send` 결과의 `info` 에서 **`failed: 0`** 을 확인한다. Zabbix sender 는 아이템 키가 틀려도
-연결은 성공하므로 `failed` 를 보지 않으면 실패를 성공으로 읽는다.
+---
 
-### 랩 실측 (2026-07-31) — 실 데이터가 잡아낸 것
+## 14. 요약 및 검증 상태
 
-Keep 24건 · Wazuh 인덱서 실 데이터로 드라이런한 결과다. **셀프테스트를 통과한 코드에서
-결함 4건이 나왔고, 넷 다 "실패가 정상처럼 보이는" 종류였다.**
+본 문서에 명시된 모든 Ansible 플레이북, Wazuh 연동 스크립트, Zabbix 템플릿 배선 및 리포트 집계 모듈은 랩 환경에서 실측 및 검증이 완료된 상태입니다.
 
-| 결함 | 증상 | 왜 셀프테스트로 안 잡혔나 |
-|---|---|---|
-| 취약점 쿼리 이중 중첩 | 보안 절 전체가 "조회 불가" | 필터가 없을 때만 타는 `else` 분기 |
-| 절 하나 실패 → 보안 절 전체 폐기 | SCA·FIM 이 멀쩡한데 같이 사라짐 | 실패를 한 덩어리로 잡고 있었음 |
-| 초동 대응 짝 없음 → `0.0` 전송 | "0초 대응" 으로 읽혀 실제보다 좋아 보임 | 0 이 유효값처럼 생김 |
-| `_terms` 가 원인 예외를 삼킴 | "집계 실패" 만 남아 원인 불명 | 위 1번을 이걸로 놓칠 뻔했다 |
-
-측정값: **설정 준수율 52.0%**(7/30 인덱서 직접 조회 52.4%와 교차 검증 — 방법이 다르다.
-이쪽은 기간 평균 점수, 그쪽은 통과/실패 비율), 파일 변경 125건 중 **승격 룰 4건**,
-취약점 재고 **14,177건**.
-
-**취약점은 총계를 그대로 실으면 못 쓴다.** 고객이 "High 6,873건"을 읽어도 할 일이 안 나온다.
-그래서 두 가지를 더했다.
-
-- **이번 달 신규** — 무엇이 늘었나. 단 **에이전트를 이번 기간에 처음 붙이면 재고 전량이
-  신규로 잡힌다**(랩에서 신규 14,177 = 재고 14,177). 그대로 내면 이번 달에 취약점 1.4만 건이
-  생긴 것으로 오독되므로 "최초 스캔 기준선"으로 표기한다.
-- **상위 패키지** — 무엇을 고치면 대부분 사라지나. 랩 실측 **kernel 계열 3종이 전체의 46%**.
-  "커널 하나 올리면 절반이 없어진다"는 고객이 실제로 결정할 수 있는 문장이다.
-
-월간 종합 분석은 **claude 18.1초**로 돌았고(실시간 경로가 아니라 예산 무관), 출력이 프롬프트
-규칙을 지켰다 — 미확정 인과를 "가능성"으로, 고객 측 조치를 "협의"로(A-6), 그리고
-**"'정상 집계'는 집계 수행 여부일 뿐 위험 부재를 뜻하지 않는다"**고 스스로 밝혔다(G1 의미 보존).
-
-### ⭐ 리포트 화면은 Grafana다 (2026-07-31 정정)
-
-**처음에 Zabbix 대시보드로 만들었고, 그것은 틀린 판단이었다.** 근거는 "팀이 Zabbix 예약
-리포트를 이미 운용 중"(B-7)과 "Grafana OSS 에는 예약 리포트가 없다"였는데, 둘 다 사실이지만
-**결론이 논지와 충돌한다.** Wazuh·Loki·Zabbix 를 한 화면에서 보려고 Grafana 를 도입하자는
-것이 이 PoC 인데, 그 산출물인 고객 리포트를 Zabbix 에 만들면 스스로를 부정한다. Day7 에
-만든 고객사별 Grafana 대시보드(권한 격리 포함)도 버려진다.
-
-**정정 후 구조 — 저장소와 표현을 나눈다.**
-
-```
-Keep  ──집계──▶  Zabbix trapper 아이템 (저장소·이력)  ──┐
-                                                      ├──▶ Grafana 대시보드 ──렌더──▶ PDF
-Wazuh Indexer ────────────(직접 조회)─────────────────┤        (kinx-msp-report)
-Loki ─────────────────────(직접 조회)─────────────────┘
-```
-
-우리가 계산한 값(병합 사건·만성 판정·승인된 서사)은 **Zabbix trapper 에 그대로 둔다.** 이미
-있고, 이력·추세가 공짜로 쌓이고, Grafana 가 Zabbix 데이터소스로 읽는다. **바뀐 것은 표현
-계층뿐이고 집계 코드는 하나도 버리지 않았다.**
-
-보안·로그는 Grafana 가 Wazuh·Loki 를 **직접 조회**한다. Zabbix 로 갈 때 어쩔 수 없이
-문자열로 접었던 것이, 여기서는 진짜 패널이 된다.
-
-**대가**: Grafana OSS 에는 스케줄러·메일 발송이 없다(Enterprise 기능). 그래서 렌더러만 붙이고
-생성·발송은 우리 스크립트 + cron 이 한다. Zabbix 의 내장 스케줄러를 포기한 것이 이 선택의
-비용이며, 문서에 그대로 남긴다.
-
-### 랩 실측 — 발송 경로 (2026-07-31)
-
-| 확인 항목 | 결과 |
-|---|---|
-| Grafana OSS 전체 대시보드 렌더 | **가능** — `/render/d/<uid>` → 200, PNG. Enterprise 불필요 |
-| 템플릿 변수 적용 | **적용됨** — `var-customer=...` 가 렌더에 반영 |
-| `theme=light` | **동작** — 고객 문서용 |
-| Zabbix Text 모드(서사 표시) | **동작** — 단 `/api/ds/query` 는 `non-metrics queries are not supported` 로 거부한다. 이 모드는 **프론트엔드 처리**이고 렌더러가 헤드리스 브라우저라 문제가 없다 |
-
-렌더러는 `docker-compose.yml` 의 `grafana-image-renderer` 이고, Grafana 에
-`GF_RENDERING_SERVER_URL` 을 주입해야 인식한다(`/api/frontend/settings` 의
-`rendererAvailable` 로 확인).
-
-### 대시보드 — `kinx-msp-report` (`tools/gen_msp_report_dashboard.py`)
-
-패널 좌표를 손으로 맞추면 겹치고, 겹친 대시보드는 만들고 나서야 보인다. 생성기를 두고
-**좌표 범위·겹침을 만들 때 검사**한다. 대시보드 JSON 은 손편집 대상이 아니다.
-
-구성은 위 페이지 표와 같되 Grafana 행(row)으로 나눈다. 자원 행은 **`repeat: host`** 라
-호스트마다 자동 반복된다 — 실환경 `MSP_REPORT_<고객사>` 가 서버마다 같은 6종 그래프를 손으로
-복제해 격자를 만드는데, **그 반복이 설정 한 줄이 된다.** 고객사마다 자원 항목이 달라도 되는
-이유이기도 하다(호스트 목록이 바뀌면 격자가 따라온다).
-
-**랩 렌더로 잡은 결함 2건** — 둘 다 화면을 실제로 그려 봐야 보이는 종류였다.
-
-1. **자원 격자가 가상 호스트까지 반복**했다. 고객 그룹에는 실제 감시 대상 외에 리포트 trapper
-   호스트와 도메인별 인증서 호스트가 들어 있다(둘 다 권한 상속 때문에 일부러 넣은 것).
-   변수 `regex` 로 제외한다.
-2. **`allValue: ".+"` 가 '전체'를 '다른 고객까지'로 만들었다.** Wazuh·Loki 패널에 남의 고객
-   데이터가 들어온다. 비워 두면 Grafana 가 그 고객의 호스트 목록을 `(a|b)` 로 펼치므로
-   '전체'가 '이 고객의 전체'로 한정된다. **계정 권한과 별개로 대시보드 자체가 새면 안 된다.**
-
-Wazuh 패널이 빌 수 있다(랩 MSP 고객 컨테이너에 `wazuh-agent` 미배포). 빈 패널이 "이상 없음"
-으로 읽히지 않도록 옆에 사실을 적는 패널을 둔다 — 인증서 "점검 불가" 트리거와 같은 원칙이다.
-
-### (대안) Zabbix 예약 리포트 경로 — 유지하되 주력 아님
-
-`ansible/msp_report.yml` 로 만든 trapper 호스트는 그대로 쓰이므로, Zabbix 쪽 대시보드
-(`tools/zabbix_report_dashboard.py`)도 동작한다. **Grafana 를 못 쓰는 상황의 대안**으로만
-남긴다 — 팀 현행 발송 파이프를 그대로 쓸 수 있다는 장점이 있으나, 보안·로그를 문자열로
-접어야 하므로 통합 화면의 값이 나오지 않는다.
-
-### 대시보드를 나누지 않고 페이지로 두는 이유 (Zabbix 경로에 한함)
-
-주제별(메트릭/보안)로 대시보드를 나누는 안을 검토했고, **나누지 않기로 했다.**
-
-1. **예약 리포트는 대시보드를 하나만 고른다** — 공식 문서 `only one dashboard can be
-   selected at a time`. 나누면 고객당 리포트 N개, 메일 N통, 구독자·주기·권한도 N벌이다.
-2. **7.0 은 대시보드 페이지를 PDF 페이지로 낸다** — [ZBXNEXT-6741](https://support.zabbix.com/browse/ZBXNEXT-6741)
-   이 **7.0.0alpha7 에서 Fixed**. 6.4 까지는 첫 장만 나왔다. 우리 랩·실환경이 전부 7.0.x 라
-   그대로 받는다. **나누고 싶은 이유(구분)를 나누지 않고 얻는다.**
-3. **축을 늘리면 관리 대상이 곱해진다** — 이미 고객사별로 나뉘어 있다. 랩은 3고객이라 티가
-   안 나지만 실환경 MSP 는 17그룹이라 51개가 된다. 그리고 우리 주장이 "3축을 한 화면·한
-   타임라인" 인데 리포트에서 축별로 파일을 쪼개면 스스로를 부정한다.
-
-### 페이지 구성 — 결론부터
-
-기존 자원 격자는 **손대지 않고 뒤로** 민다. 도입 마찰 0이고 고객은 첫 장에서 판단을 받는다.
-
-| 페이지 | 답하는 질문 | 내용 |
-|---|---|---|
-| 1. 이번 달 요약 | 무슨 일이 있었나 | 큰 숫자 4개 + 월간 종합 분석 |
-| 2. 사건 상세 | 무엇이 반복되나 | 반복·유형·심각도 분포, 사건 요약, 조치 후보 |
-| 3. 보안 | 노출은 어떤가 | 준수율, 파일 무결성, 취약점 재고 |
-| 4~n. 자원 | 수치는 얼마였나 | 기존 2×n 격자 그대로 |
-
-**한 눈에 들어오게 — 규칙 넷**
-
-- **큰 숫자는 4개까지.** 여섯 개가 넘으면 아무것도 안 읽힌다.
-- **병합은 화살표 한 쌍으로.** `원시 알림 1,240` / `→ 사건 86` 을 붙여 놓아야 우리가 한 일이
-  보인다. 따로 두면 그냥 숫자 둘이다.
-- **색을 새로 만들지 않는다.** 팀이 이미 Zabbix 심각도 눈금으로 읽고 있다.
-- **긴 서사는 폭을 다 쓴다.** 좁은 칸의 여러 줄 텍스트는 PDF 에서 안 읽힌다.
-
-### 위젯 선택 — `itemhistory`
-
-7.0 에서 `plaintext` 를 대체한 위젯이고 `numeric, character, log, text, and binary` 를 받는다.
-`columns.N.display = 1`(as is)로 두면 **줄바꿈이 보존**된다 — LLM 서사는 여러 줄이라 필수다.
-`reference` 는 7.0 필수 필드이고 5자 고유여야 한다.
-
-부수 효과가 하나 있다. 이 위젯은 **정규식으로 배경색 하이라이트**를 걸 수 있으므로,
-`검토 대기` 를 빨간 배경으로 잡아두면 **승인 안 된 리포트가 대시보드에서 빨갛게 보인다.**
-승인 게이트가 코드 안에만 있던 것이 화면으로 나온다.
-
-### 생성 — `tools/zabbix_report_dashboard.py`
-
-대시보드는 Ansible 모듈이 없어 전부 raw API 호출이 된다. YAML+Jinja 로 위젯 좌표를 조립하면
-읽을 수 없으므로 Python 도구로 뺐다. `--out` 으로 구성 JSON 을 파일로도 남겨 리포에서 리뷰한다.
-
-```bash
-python tools/zabbix_report_dashboard.py --host report-Customer-B            # 드라이런
-python tools/zabbix_report_dashboard.py --host report-Customer-B \
-       --share-user custb --apply
-```
-
-**이 리포에서 유일하게 쓰기 API 를 쓰는 tools 스크립트다.** 실환경 읽기 전용 원칙을 지키려고
-`--apply` 는 사설/로컬 주소에만 허용하고, 그 밖의 대상은 `ZBX_WRITE_ALLOW` 로 명시해야 한다.
-
-`--selftest` 는 API 없이 **좌표 범위·위젯 겹침·reference 고유성·쓰기 가드**를 검사한다.
-좌표가 틀린 대시보드는 만들고 나서야 보이므로 여기서 막는다.
-
-**공유는 비공개 + 계정 지정으로 한다.** 공개(`private=0`)로 두면 대시보드 목록에서 고객사
-이름이 서로 보인다. 데이터가 새는 것은 아니지만 **고객 명단이 노출**되므로, 비공개로 만들고
-해당 고객 조회 계정에만 읽기 공유한다(Day7 멀티테넌트 격리와 같은 원칙).
-
-### 대시보드 — 자원 격자는 이미 균일하다
-
-실환경 `MSP_REPORT_<고객사>` 대시보드는 서버마다 **같은 6종**(부하도/CPU/디스크/메모리/
-메모리 정보/트래픽)을 2×n 격자로 반복하고 있다. 즉 형식이 이미 통일돼 있으므로,
-**그래프를 템플릿 수준에 두면 고객사별 대시보드를 손으로 만들 필요가 없다.** 이것을
-로드맵에 남긴다(호스트 추가 = 격자 자동 확장).
-
-우리가 여기서 더하는 것은 그 격자 **앞에 붙는 요약 페이지 1장**이다. 자원 그래프는
-"무엇이 얼마였나"를 보여주고, 요약 페이지는 "무슨 일이 있었고 무엇을 했나"를 보여준다.
-
-### 발송 — `bot/report_deliver.py` (2026-07-31 랩 완주)
-
-```
-Grafana /render/d/<uid>  ->  PNG  ->  PDF  ->  메일(첨부 + 대시보드 링크)
-```
-
-```bash
-export SMTP_HOST=127.0.0.1 SMTP_PORT=1025 REPORT_FROM=noreply@kinx.local
-python report_deliver.py --customer 'Customers/Customer-B' \
-       --send --to 'ops@custb.example.com'
-```
-
-**의존성을 늘리지 않았다.** PNG 의 IDAT 는 zlib deflate 이고 PDF 의 `FlateDecode` +
-`Predictor 15` 가 **PNG 행 필터를 그대로 해석**하므로, 이미지 라이브러리 없이 IDAT 를
-그대로 옮겨 PDF 를 만든다. 처음에 순수 파이썬으로 언필터링했다가 1,400×2,800 = 1,100만
-바이트를 파이썬 루프로 돌아 **2분 타임아웃**이 났다. 디코딩을 아예 안 하니 **7.4초**다.
-페이지 분할(`--split`)이 필요할 때만 디코딩 경로를 쓴다.
-
-**승인 없이 나가지 않는다.** 서사 항목이 "검토 대기"면 발송을 거부한다(`--force` 로만
-우회). 값 자체에도 게이트가 있어 이중 안전이다.
-
-**범위 없는 집계를 고객에게 보내지 못하게 막는다.** `--host-filter` 없이 집계하면 전체를
-훑으므로 다른 고객·사내 호스트가 서사에 실린다. 랩 실측에서 Customer-B 리포트에 사내
-VM 이름과 사설 IP 가 그대로 들어갔다 — 화면상 아무 문제가 없어 보이는 종류의 사고다.
-`--send` 는 범위 지정을 요구하고 `--allow-unscoped` 로만 우회된다.
-
-**랩에서 잡은 함정 2건**
-
-| 증상 | 원인 |
-|---|---|
-| 렌더가 2분 타임아웃 | `GRAFANA_URL` 이 **공인 IP**(사람이 클릭할 주소)라 서버가 자기 자신에 접속하려다 멈춘다(헤어핀 NAT 없음). **렌더는 `GRAFANA_RENDER_URL`(내부), 링크는 `GRAFANA_URL`(공인)** 로 가른다 |
-| PDF 에 Grafana 내비게이션이 찍힘 | `kiosk` 는 **값 없는 플래그**다. `urlencode` 로 넣으면 `kiosk=` 가 되어 적용되지 않고 Home/Dashboards/Export/Share 가 고객 문서에 그대로 나온다 |
-
-**메일 확인**: 랩에 `mailpit`(SMTP 1025 / 웹 8025)을 뒀다. 실제 메일서버 없이 파이프를
-끝까지 돌려 **받은 메일과 첨부를 눈으로** 본다. SMTP 는 **루프백에만** 연다 — `0.0.0.0`
-으로 열면 인증 없는 오픈 릴레이가 된다. 실환경은 `SMTP_HOST` 만 사내 메일서버로 바꾸면
-되고 스크립트는 그대로다.
-
-**받는 경로는 셋이다.**
-
-| 경로 | 누가 | 방법 |
-|---|---|---|
-| 화면 | 운영팀 | Grafana `kinx-msp-report` 에서 고객사 선택 |
-| **UI 승인 발송** | 운영팀 | **Keep 승인 대기 알림 → Run Workflow** (데모 B 와 같은 화면) |
-| 자동 | — | cron (승인 안 됐으면 스크립트가 거부하고 끝) |
-
-**대시보드 링크를 고객에게 주는 것은 아직 안 된다.** Grafana 가 Zabbix 데이터소스 하나를
-서비스 계정으로 공유하므로, 고객이 로그인하면 상단 변수만 바꿔 **다른 고객 데이터를 볼 수
-있다**. Zabbix 쪽 권한 격리(Day7 `custb` 계정)는 Zabbix UI 에서만 유효하다. 고객사별
-datasource + 그 고객 토큰으로 API 레벨 격리를 하기 전까지는, **고객에게 나가는 것은 메일과
-PDF**(그 고객 것만 담긴 고정본)이고 메일 본문의 링크는 **내부 담당자용**으로 읽어야 한다.
-→ STRATEGY §4-6, 로드맵.
-
-**예약**: Grafana OSS 에는 스케줄러가 없다. cron 한 줄로 대신한다.
-
-```cron
-# 매월 1일 08:00 — 승인은 사람이 먼저 한다(승인 없으면 스크립트가 거부하고 끝난다)
-0 8 1 * * cd ~/kinx-idc-monitoring-poc/bot && . .env && \
-  ./venv/bin/python report_deliver.py --customer 'Customers/Customer-B' --send
-```
-
-### 발송 3안
-
-| 안 | 방식 | 판정 |
-|---|---|---|
-| **A** | Zabbix Scheduled report (내장) | **채택** — 이미 운용 중, 추가 부품 0 |
-| B | 게이트웨이가 PDF 만들어 메일 | 렌더러를 새로 붙여야 함. A 와 결과 동일 |
-| C | n8n 워크플로 | 승인 계층이 Keep 에 이미 있고 AWX 검토 중 — 중복 부채 |
-
-### 매니저 확인 필요
-
-- 리포트 발송 주기와 수신자는 누구인가 (고객 직접 수신인가, 팀 경유인가)
-- 고객이 대시보드 링크로 직접 들어와 보는가
-- **원인·권고를 리포트에 싣는 것이 계약상 문제 없는가** (A-6 "임의로 진행 못 함"과의 관계)
-
-## 아직 남은 것 (다음)
-- **MariaDB 복제**: 데모 C(복제 지연) 대상이 되려면 이 VM에 slave를 얹어야 함(별도 단계).
+실환경 적용 시 `lab_vars.yml` 및 `certs.local.yml` 변수 파일 내 대상 IP와 도메인 항목을 목적지에 맞게 수정하여 실행합니다.
