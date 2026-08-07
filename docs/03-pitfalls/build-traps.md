@@ -53,7 +53,7 @@
 | 아이템 필터가 아무것도 안 잡음 | 슬래시로 감싸지 않으면 **완전 일치** | `/.../` 로 감싸야 정규식 |
 | 호스트 필터가 안 걸림 | 호스트 필터는 **표시명**으로 매칭 (기술명 아님) | |
 | **다른 고객 데이터가 패널에 섞임** | 템플릿 변수의 `allValue: ".+"` 가 "전체"를 "다른 고객까지"로 만듦 | 계정 권한과 별개로 **대시보드가 새면 안 됩니다** |
-| Grafana가 아예 기동 실패 | correlation provisioning 형식 오류 → **데이터소스 프로비저닝 전체가 중단** | [`01-build/01-observability-core.md §10-1`](../01-build/01-observability-core.md) — root `type`은 생략하고 `config.type: query`는 명시 |
+| Grafana가 아예 기동 실패 | correlation provisioning 형식 오류 → **데이터소스 프로비저닝 전체가 중단** | [`01-build/01-observability-core.md §9-1`](../01-build/01-observability-core.md) — root `type`은 생략하고 `config.type: query`는 명시 |
 
 ## 배선·연동
 

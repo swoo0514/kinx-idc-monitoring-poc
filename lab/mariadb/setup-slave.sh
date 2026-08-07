@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 절차·근거·트러블슈팅: docs/01-build/01-observability-core.md §9
+# 절차·근거·트러블슈팅: docs/01-build/01-observability-core.md §8
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
