@@ -70,6 +70,17 @@ CASES_CLASSIFY = [
     ("Interface eth0(): Link down", "network"),              # 예전엔 service_down("down")
     ("Interface eth0(): High error rate", "network"),
     ("Website response time is too high", "service_latency"),
+    # 아래는 2026-08-07 실환경 90일 실측에서 미분류(other)로 확인돼 키워드를 보강한 것들.
+    # 상위 유형이 미분류의 97%를 차지했고, 보강 후 기존 분류를 뺏은 건은 0건이었다.
+    ("vdb: Disk read/write request responses are too high (read > 20 ms for 15m)",
+     "cpu_io_pressure"),                                     # 미분류의 92%를 차지하던 단일 유형
+    ("HAProxy acc-api-backend acc01: Health check error", "service_down"),
+    ("HAProxy: has been restarted (uptime < 10m)", "service_down"),
+    ("some-api.example.net is not response", "service_down"),
+    ("No SNMP data collection", "service_down"),          # Zabbix 표준 SNMP 템플릿
+    ("/etc/passwd has been changed", "auth_security"),
+    # 보강이 기존 판정을 뺏지 않는지 고정한다 — "restarted" 가 network 를 가로채면 안 된다.
+    ("Interface ae1: Link down after restart", "network"),
     ("MySQL: Buffer pool utilization is too low", "other"),  # 미분류가 정답 — 지어내지 않는다
     ("무슨무슨 알림", "other"),
 ]
@@ -179,12 +190,14 @@ def main():
     remediation_checks = _remediation_checks()
     holmes_checks = _holmes_gate_checks()
     fastpath_checks = _fastpath_checks()
+    open_link_checks = _open_link_checks()
+    site_kw_checks = _site_keyword_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
-             + remediation_checks + holmes_checks + fastpath_checks)
+             + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -251,7 +264,110 @@ def _source_status_checks() -> int:
 
     # 프롬프트와 코드의 동기 — 상태를 안 보는 프롬프트로 되돌아가면 실패
     assert "sources.security" in llm.TRIAGE_SYSTEM, "프롬프트가 조회 상태를 안 본다"
-    return 11
+    assert "sources.open_problems" in llm.TRIAGE_SYSTEM, "프롬프트가 열린 문제 상태를 안 본다"
+    return 12
+
+
+def _site_keyword_checks() -> int:
+    """사이트 고유 키워드가 코드가 아니라 환경변수로 들어오는지.
+
+    왜 — 한 조직의 커스텀 트리거명("... not connect" 같은 관용구)을 범용 규칙에 섞으면
+    다른 환경에서는 뜻 없는 줄이 되고, 나중에 왜 있는지 아무도 모르게 된다. 범용 규칙에는
+    표준 템플릿·일반 용어만 두고 사이트 고유분은 밖에서 주입한다.
+    """
+    import importlib
+    import os
+
+    from . import incident as inc_mod
+
+    saved = os.environ.get("SITE_CLASS_KEYWORDS")
+    try:
+        # 주입 전 — 사이트 관용구는 분류되지 않는 것이 정상
+        assert inc_mod.classify("ixapi.example.net not connect") == "other"
+
+        os.environ["SITE_CLASS_KEYWORDS"] = "service_down=not connect|check is fail"
+        m = importlib.reload(inc_mod)
+        assert m.classify("ixapi.example.net not connect") == "service_down"
+        assert m.classify("https://intra.example.net Site Check is Fail") == "service_down"
+        # 모르는 클래스는 무시하고 죽지 않는다
+        os.environ["SITE_CLASS_KEYWORDS"] = "nonexistent_class=foo"
+        m = importlib.reload(inc_mod)
+        assert m.classify("foo bar") == "other"
+        return 4
+    finally:
+        if saved is None:
+            os.environ.pop("SITE_CLASS_KEYWORDS", None)
+        else:
+            os.environ["SITE_CLASS_KEYWORDS"] = saved
+        importlib.reload(inc_mod)
+
+
+def _open_link_checks() -> int:
+    """열린 문제 연계 — 규칙 매칭·경과 필터·마스킹 누수·상태 계약.
+
+    왜 이 검사들인가: 실측상 게이트웨이 시간창 안에서는 서로 다른 클래스가 함께 나지 않아
+    (유형 혼합 0건) 브리지 그룹만으로는 발동하지 않는다. 이 경로가 그 공백을 메우므로
+    조용히 죽으면 알아채기 어렵다. 설계는 private/docs/open_problem_linkage_design.md.
+    """
+    from . import incident, masking
+
+    n = 0
+    # 규칙 매칭 — **값이 아니라 기제를 검사한다.** 특정 수치에 묶으면 측정 파일을 바꿀 때마다
+    # 테스트가 깨지고, 그 결합이야말로 이 설계가 없애려던 것이다.
+    hit = incident.open_link("disk_space", {"cpu_io_pressure"})
+    assert hit and 0 < hit["rate"] <= 1 and hit["days"] >= 1, hit
+    assert hit["open_class"] == "disk_space" and hit["followed_class"] == "cpu_io_pressure"
+    assert hit["measured"], "측정 조건 문자열이 비었다 — 근거 없이 프롬프트에 실린다"
+    assert incident.open_link("cpu_io_pressure", {"disk_space"}) == {}, "방향 없는 매칭"
+    assert incident.open_link("network", {"cpu_io_pressure"}) == {}
+    n += 5
+
+    # BRIDGE_GROUPS 와 달리 겹침이 허용돼야 한다 — disk_space 가 두 규칙에 모두 있다
+    keys = [k[0] for k in incident.OPEN_LINK_RULES]
+    assert keys.count("disk_space") == 2, "겹침 금지 제약이 잘못 들어왔다"
+    n += 1
+
+    # 마스킹 — 열린 문제 이름의 실 호스트명이 새면 안 된다
+    masker = masking.Masker()
+    ctx = {
+        "incident": {"host": "prod-db-01", "classes": ["cpu_io_pressure"],
+                     "alert_count": 1, "merge_reason": "", "dominant_sev": "SEV2"},
+        "host": {"host": "prod-db-01", "interfaces": [{"ip": "10.9.9.9"}]},
+        "alerts": [], "logs": [], "security": [],
+        "open_problems": [{
+            "name": "prod-db-01: Free disk space is less than 10%",
+            "class": "disk_space", "open_for_s": 10800,
+            "link": {"rate": 0.9, "days": 10, "overlaps": 20,
+                     "open_class": "disk_space", "followed_class": "cpu_io_pressure",
+                     "measured": incident.OPEN_LINK_MEASURED},
+        }],
+        "sources": {"logs": "ok", "security": "ok", "open_problems": "ok"},
+    }
+    masked = masking.build_llm_context(ctx, "SEV2", masker)
+    blob = repr(masked)
+    assert "prod-db-01" not in blob, "열린 문제 이름에서 호스트명 누수"
+    assert "10.9.9.9" not in blob, "IP 누수"
+    assert masked["open_problems"][0]["link"]["rate"] == 0.9, "측정 수치가 유실됐다"
+    assert masked["open_problems"][0]["link"]["measured"], "측정 조건이 유실됐다"
+    n += 4
+
+    # 상태 계약 — 조회 실패가 "선행 문제 없음"으로 읽히면 안 된다
+    ctx2 = dict(ctx, open_problems=[],
+                sources={"logs": "ok", "security": "ok", "open_problems": "unavailable"})
+    assert masking.build_llm_context(ctx2, "SEV2", masking.Masker())["sources"][
+        "open_problems"] == "unavailable"
+    # 알 수 없는 상태값은 통과시키지 않는다(화이트리스트 유지)
+    ctx3 = dict(ctx, sources={"logs": "ok", "security": "ok", "open_problems": "weird"})
+    assert masking.build_llm_context(ctx3, "SEV2", masking.Masker())["sources"][
+        "open_problems"] == "unknown"
+    n += 2
+
+    # 열린 문제가 없으면 기존 출력과 형태가 같아야 한다(가산 변경)
+    ctx4 = dict(ctx, open_problems=[], sources={"logs": "ok", "security": "ok"})
+    out = masking.build_llm_context(ctx4, "SEV2", masking.Masker())
+    assert out["open_problems"] == [] and "open_problems" not in out["sources"]
+    n += 1
+    return n
 
 
 def _remediation_checks() -> int:

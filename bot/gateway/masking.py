@@ -43,7 +43,7 @@ class Masker:
         return text
 
 
-_STATUS_KEYS = ("logs", "security")
+_STATUS_KEYS = ("logs", "security", "open_problems")
 _STATUS_VALUES = (collector.SOURCE_OK, collector.SOURCE_UNAVAILABLE, collector.SOURCE_DISABLED)
 
 
@@ -53,6 +53,23 @@ def _sources(context: dict) -> dict:
     src = context.get("sources") or {}
     return {k: (src[k] if src.get(k) in _STATUS_VALUES else "unknown")
             for k in _STATUS_KEYS if k in src}
+
+
+def _open_problem_item(p: dict, m) -> dict:
+    """열린 문제 1건의 전송 형태.
+
+    이름에 실 호스트명이 들어가므로 반드시 마스킹을 거친다 — 새 필드가 이 화이트리스트를
+    우회하면 실 호스트명이 그대로 외부 모델로 나간다. 연계 수치(rate/days)는 식별자가
+    아니므로 원값으로 보내되, **측정 조건 문자열을 함께 실어** 모델이 근거를 알게 한다.
+    """
+    link = p.get("link") or {}
+    return {"name": m(p.get("name")), "class": p.get("class"),
+            "open_for_s": p.get("open_for_s"),
+            "link": {"rate": link.get("rate"), "days": link.get("days"),
+                     "overlaps": link.get("overlaps"),
+                     "open_class": link.get("open_class"),
+                     "followed_class": link.get("followed_class"),
+                     "measured": link.get("measured")}}
 
 
 def _security_item(s: dict, m) -> dict:
@@ -156,5 +173,7 @@ def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
         "alerts": alerts,
         "logs": [m(line) for line in (context.get("logs") or [])],
         "security": [_security_item(s, m) for s in (context.get("security") or [])],
+        "open_problems": [_open_problem_item(p, m)
+                          for p in (context.get("open_problems") or [])],
         "sources": _sources(context),
     }

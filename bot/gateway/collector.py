@@ -137,9 +137,21 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
     zbx_host = host_obj.get("host") or incident.host
     host_label = _resolve_label(zbx_host, host_obj) if host_obj else incident.host
 
-    (logs, logs_status), (security, sec_status) = await asyncio.gather(
+    # 열린 문제 조회는 창 마감 시점에 1회만. 알림 도착 시점에 부르면 디바운스 창이
+    # 외부 API 응답 시간만큼 흔들린다.
+    async def _open_probe():
+        hid = host_obj.get("hostid")
+        if not hid:
+            # 호스트 객체를 못 받았으면 조회 자체가 불가 — 성공이 아니다.
+            return [], SOURCE_UNAVAILABLE
+        exclude = {a.event_id for a in incident.alerts if a.event_id}
+        async with httpx.AsyncClient() as c2:
+            return await _open_problems(zbx, c2, hid, incident.classes(), exclude, now)
+
+    (logs, logs_status), (security, sec_status), (opens, opens_status) = await asyncio.gather(
         _loki_logs(host_label, now),
         _wazuh_alerts(host_label, now),
+        _open_probe(),
     )
 
     alerts_ctx = []
@@ -174,7 +186,10 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         "alerts": alerts_ctx,
         "logs": logs,
         "security": security,
-        "sources": {"logs": logs_status, "security": sec_status},
+        # 이번 알림보다 먼저 열려 있던, 연계 관계에 있는 문제. 병합 대상이 아니라 참고 정보다.
+        "open_problems": opens,
+        "sources": {"logs": logs_status, "security": sec_status,
+                    "open_problems": opens_status},
     }
 
 
@@ -196,6 +211,63 @@ def _resolve_label(zbx_host: str, host_obj: dict) -> str:
         if iface.get("dns"):
             return iface["dns"]
     return zbx_host
+
+
+async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
+                         now: int) -> tuple:
+    """이 호스트에 **지금 열려 있는** 문제 중 현재 인시던트와 연계 관계인 것.
+
+    왜 필요한가 — 실측(2026-08-07). 게이트웨이 시간창(최대 300초) 안에서는 서로 다른
+    클래스가 함께 나는 일이 일어나지 않는다. 실제 관계는 "같은 창에 있다"가 아니라
+    **"열려 있는 동안 뒤따랐다"** 형태다(디스크 문제가 열린 동안 자원 압박이 13일에 걸쳐
+    96% 비율로 뒤따름). 창을 넓혀서는 잡을 수 없고, 열림 여부를 조건으로 삼아야 잡힌다.
+
+    병합하지 않고 컨텍스트로만 붙인다 — 열린 문제는 며칠째 열려 있을 수 있어 병합하면
+    관측창·선판정·심각도 집계가 함께 왜곡되고, 그 문제는 이미 자기 사건으로 분석됐을 수 있다.
+
+    상태를 자체 유지하지 않고 매번 조회하는 이유 — 자체 유지는 해소 웹훅 수신에 의존하는데
+    그 처리가 아직 없고, 웹훅이 한 번 유실되면 상태가 영구히 어긋난다. 조회는 재시작에도
+    안전하다. `problem.get` 은 공식 문서상 기본값으로 미해소 문제만 반환한다.
+
+    반환 (목록, 상태). 상태는 SOURCE_* — 조회 실패를 "선행 문제 없음"으로 읽으면
+    봇이 없는 사실을 단언한다(G1 과 같은 형태).
+    """
+    # incident 가 이 모듈의 SOURCE_UNAVAILABLE 을 import 하므로 모듈 최상단에서 맞import
+    # 하면 순환이 된다. 호출 시점 import 로 끊는다.
+    from . import incident
+
+    if not hostid:
+        return [], SOURCE_UNAVAILABLE
+    try:
+        rows = await zbx.call(client, "problem.get", {
+            "output": ["eventid", "name", "clock", "severity"],
+            "hostids": [str(hostid)],
+            "selectTags": "extend",
+            "recent": False,          # 미해소만. 기본값이지만 의도를 코드에 남긴다
+            "sortfield": "eventid",
+            "sortorder": "DESC",
+            "limit": 100,
+        }) or []
+    except Exception as e:
+        log.warning("problem.get failed hostid=%s: %s", hostid, e)
+        return [], SOURCE_UNAVAILABLE
+
+    out = []
+    for p in rows:
+        eid = str(p.get("eventid") or "")
+        if eid in (exclude_ids or set()):     # 이번 인시던트의 알림 자신
+            continue
+        age = now - int(p.get("clock", 0) or 0)
+        if age < incident.OPEN_LINK_MIN_AGE_S:
+            continue                          # 방금 난 것은 시간창 병합이 맡는다
+        cls = incident.classify(p.get("name") or "", tags=p.get("tags"))
+        link = incident.open_link(cls, current_classes)
+        if not link:
+            continue
+        out.append({"name": p.get("name") or "", "class": cls,
+                    "open_for_s": age, "link": link})
+    out.sort(key=lambda x: -x["open_for_s"])
+    return out[:incident.OPEN_LINK_MAX], SOURCE_OK
 
 
 async def _loki_logs(host_label: str, now: int) -> tuple:

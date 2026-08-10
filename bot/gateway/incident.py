@@ -6,6 +6,7 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
@@ -35,19 +36,54 @@ def _env_float(name: str, default: float) -> float:
 # 손대면 selftest 의 CASES_CLASSIFY 를 함께 늘린다.
 CLASS_RULES = [
     ("replication", ["복제", "replication", "repl", "slave", "seconds_behind"]),
+    # 아래 실환경 키워드 3종은 2026-08-07 사내 90일 실측으로 추가했다. 미분류의 96%가 이 키워드로 해소되고 **기존 분류를 뺏은 건은 0건**임을 확인했다.
+    # 표준 템플릿 트리거명이라 실환경 전반에 적용된다. 근거: correlation_mining_methodology.md
     ("cpu_io_pressure", ["iowait", "io wait", "i/o", "load average", "cpu", "load",
-                         "디스크 지연", "disk latency", "await"]),
+                         "디스크 지연", "disk latency", "await",
+                         # "vdb: Disk read/write request responses are too high" —
+                         # 디스크 응답 지연인데 이름에 latency·i/o·await 가 없어 미분류였다.
+                         # 단일 유형으로 실환경 미분류의 92%를 차지한다.
+                         "read/write request", "disk read/write"]),
     ("auth_security", ["브루트포스", "brute", "authentication", "login fail", "sshd",
                        "unauthorized", "비인가", "sca", "fim", "rootcheck",
-                       "integrity", "무결성", "syscheck", "파일 변경", "루트킷"]),
+                       "integrity", "무결성", "syscheck", "파일 변경", "루트킷",
+                       # Zabbix 쪽 인증 파일 변경 감시. Wazuh FIM 과 같은 성격이다.
+                       "/etc/passwd", "/etc/shadow"]),
     ("memory_pressure", ["메모리", "memory", "스왑", "swap", "oom"]),
     ("disk_space", ["디스크 사용률", "디스크 사용", "filesystem", "vfs.fs", "disk space",
                     "space is", "pused"]),
     ("network", ["interface", "packet", "drop", "crc", "link down", "ifoperstatus"]),
     ("service_down", ["proc.num", "process", "not running", "not available", "재기동",
-                      "down", "unreachable"]),
+                      "down", "unreachable",
+                      # 실측 추가. 여기 있는 것은 **표준 템플릿·일반 용어만** 둔다 —
+                      # 특정 사이트의 커스텀 트리거명은 아래 SITE_CLASS_KEYWORDS 로 뺀다.
+                      "restarted", "health check", "not response", "no snmp data"]),
     ("service_latency", ["지연", "latency", "response time", "응답", "qps", "queue"]),
 ]
+
+# 사이트 고유 트리거명 키워드. 조직마다 다르므로 코드에 박지 않고 환경변수로 받는다.
+# 형식: "class=키워드|키워드,class=키워드"  예) service_down=not connect|check is fail
+# 왜 분리하나 — 한 조직의 관용구를 범용 규칙에 섞으면 다른 환경에서 뜻 없는 규칙이 되고,
+# 나중에 왜 있는지 아무도 모르는 줄이 된다.
+def _site_keywords():
+    out = {}
+    for part in os.environ.get("SITE_CLASS_KEYWORDS", "").split(","):
+        if "=" not in part:
+            continue
+        cls, kws = part.split("=", 1)
+        cls = cls.strip()
+        if cls not in {c for c, _ in CLASS_RULES}:
+            log.warning("SITE_CLASS_KEYWORDS: 모르는 클래스 %r — 무시", cls)
+            continue
+        out.setdefault(cls, []).extend(k.strip().lower() for k in kws.split("|") if k.strip())
+    return out
+
+
+SITE_CLASS_KEYWORDS = _site_keywords()
+if SITE_CLASS_KEYWORDS:
+    CLASS_RULES = [(c, kws + SITE_CLASS_KEYWORDS.get(c, [])) for c, kws in CLASS_RULES]
+    log.info("사이트 고유 키워드 적용: %s",
+             {c: len(v) for c, v in SITE_CLASS_KEYWORDS.items()})
 
 _WORD_BOUNDARY_MAX = 5
 
@@ -68,6 +104,77 @@ BRIDGE_GROUPS = [
     frozenset({"replication", "cpu_io_pressure"}),
     frozenset({"disk_space", "service_down"}),
 ]
+
+
+# 열린 문제 연계 규칙 — (열린 쪽, 뒤따르는 쪽): 측정 근거.
+#
+# BRIDGE_GROUPS 와 무엇이 다른가:
+#   BRIDGE_GROUPS 는 **같은 시간창** 안의 알림을 하나로 묶는 병합 키다. 무방향이고
+#   서로 겹칠 수 없다(_bridge_id 가 첫 매칭을 반환하므로).
+#   이 표는 **이미 열려 있는 문제**를 컨텍스트로 붙이기 위한 것이다. 방향이 있고,
+#   병합 키를 만들지 않으므로 겹쳐도 된다 — disk_space 가 두 항목에 모두 나온다.
+#
+# 왜 필요한가 — 실측(2026-08-07, 사내 90일). 게이트웨이의 실제 창(무알림 90초/최대 300초)
+# 안에서 **서로 다른 클래스가 함께 나는 일이 일어나지 않는다**(유형 혼합 0건). 병합 정책을
+# 3안으로 바꿔 시뮬레이션해도 결과가 전부 동일했다. 반면 "열려 있는 동안 뒤따랐는가"로
+# 보면 아래 관계가 오탐율 5% 통제를 통과한다. 창을 넓히는 것은 6시간까지 가야 효과가 나고
+# 그 대가로 사건 수가 절반이 된다. 설계 판단은 private/docs/open_problem_linkage_design.md.
+# **값은 환경마다 다르다.** 아래는 기본값이 아니라 예시이며, 실제 운영에서는 그 환경에서
+# 측정한 파일을 읽어 쓴다(OPEN_LINK_RULES_FILE). 값을 코드에 박아 두면 환경이 바뀌어도
+# 조용히 낡는다 — 마이닝 도구가 파일을 내고 게이트웨이가 그 파일을 읽는 것이 고리다.
+#   생성: python bot/bridge_miner.py --load <덤프> --by cls --overlap --null 200 --emit-rules <파일>
+#   적용: OPEN_LINK_RULES_FILE=<파일>
+# 아래 값은 **형식을 보이기 위한 자리표시자**이며 어떤 환경의 측정값도 아니다.
+# 실측값은 리포에 두지 않는다(리포 규칙: 실환경에서 뽑은 데이터는 마스킹해도 커밋 금지).
+# 측정한 파일을 OPEN_LINK_RULES_FILE 로 지정해 쓴다.
+_EXAMPLE_OPEN_LINK_RULES = {
+    ("disk_space", "cpu_io_pressure"): {"rate": 0.90, "days": 10, "overlaps": 20},
+    ("disk_space", "service_down"): {"rate": 0.70, "days": 10, "overlaps": 15},
+}
+_EXAMPLE_MEASURED = "자리표시자 — 측정값 아님. OPEN_LINK_RULES_FILE 미지정 상태"
+
+
+def _load_open_link_rules():
+    """측정 파일이 있으면 그것을, 없으면 예시값을 쓴다. 어느 쪽인지 로그로 드러낸다.
+
+    파일 형식(마이닝 도구 --emit-rules 산출):
+      {"measured": "<측정 조건>", "rules": [{"open": "...", "followed": "...",
+                                             "rate": 0.96, "days": 13, "overlaps": 22}]}
+    """
+    path = os.environ.get("OPEN_LINK_RULES_FILE", "")
+    if not path:
+        log.info("열린 문제 연계: 측정 파일 없음 — 예시값 사용(%s). 운영 적용 전 재측정 필요",
+                 _EXAMPLE_MEASURED)
+        return dict(_EXAMPLE_OPEN_LINK_RULES), _EXAMPLE_MEASURED
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        rules = {(r["open"], r["followed"]):
+                 {"rate": r["rate"], "days": r["days"], "overlaps": r.get("overlaps")}
+                 for r in doc.get("rules", [])}
+        measured = doc.get("measured") or path
+        log.info("열린 문제 연계: %s 에서 규칙 %d건 로드 (%s)", path, len(rules), measured)
+        return rules, measured
+    except Exception as e:
+        # 조용히 예시값으로 떨어지면 남의 환경 수치로 판단하게 된다. 크게 남긴다.
+        log.error("열린 문제 연계 규칙 로드 실패 %s: %s — 연계 비활성", path, e)
+        return {}, "규칙 로드 실패"
+
+
+OPEN_LINK_RULES, OPEN_LINK_MEASURED = _load_open_link_rules()
+# 방금 난 것은 이미 시간창 병합 대상이다. 그보다 오래 열린 것만 "선행 문제"로 본다.
+OPEN_LINK_MIN_AGE_S = _env_int("OPEN_LINK_MIN_AGE_S", 300)
+OPEN_LINK_MAX = _env_int("OPEN_LINK_MAX", 3)
+
+
+def open_link(open_cls: str, current_classes) -> dict:
+    """열린 문제의 클래스가 현재 인시던트 클래스와 연계 관계인지. 아니면 빈 dict."""
+    for cur in current_classes or []:
+        hit = OPEN_LINK_RULES.get((open_cls, cur))
+        if hit:
+            return dict(hit, open_class=open_cls, followed_class=cur,
+                        measured=OPEN_LINK_MEASURED)
+    return {}
 
 
 def _validate_bridges(groups=None):
