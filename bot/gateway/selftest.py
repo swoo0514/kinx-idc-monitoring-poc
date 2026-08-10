@@ -303,6 +303,32 @@ def _source_status_checks() -> int:
         os.environ["LOKI_URL"] = "http://127.0.0.1:1"
         assert asyncio.run(collector._loki_logs("", 0)) == ([], collector.SOURCE_UNAVAILABLE)
 
+        # 로그 축이 없는 것이 정상인 호스트는 조회하지 않는다 — 인증서·리포트용 가상 호스트를
+        # 이름 불일치로 보면 알림마다 분석이 돌고 상한을 먼저 소진한다.
+        os.environ["LOG_AXIS_EXEMPT_HOSTS"] = "cert-*,report-*"
+        try:
+            assert collector.log_axis_exempt("cert-example.com") is True
+            assert collector.log_axis_exempt("node1") is False
+            assert asyncio.run(collector._loki_logs("x", 0, "cert-example.com")) \
+                == ([], collector.SOURCE_DISABLED)
+            assert asyncio.run(collector._wazuh_alerts("x", 0, "report-Customer-B")) \
+                == ([], collector.SOURCE_DISABLED)
+        finally:
+            os.environ.pop("LOG_AXIS_EXEMPT_HOSTS", None)
+
+        # dns 칸에 컨테이너 이름이 들어 있으면 쓰지 않는다 — 여러 호스트가 같은 이름을
+        # 가질 수 있어 남의 로그를 이 호스트 것으로 읽는다 (랩 실측: zabbix-agent2·snmpsim)
+        assert collector._resolve_label("lab-db", {"interfaces": [{"dns": "zabbix-agent2"}]}) \
+            == "lab-db"
+        assert collector._resolve_label("n2", {"interfaces": [{"dns": "n2.example.com"}]}) \
+            == "n2.example.com"
+        os.environ["HOST_LABEL_MAP"] = "n1=vm-target-001.novalocal"
+        try:
+            assert collector._resolve_label("n1", {"interfaces": [{"dns": "agent"}]}) \
+                == "vm-target-001.novalocal", "명시 매핑이 dns 보다 우선이어야"
+        finally:
+            os.environ.pop("HOST_LABEL_MAP", None)
+
         # 0건일 때 이름 등록 여부로 ok / unmatched 를 가른다 (§1-1-2). 가짜 응답으로 검증.
         os.environ["WAZUH_INDEXER_URL"] = "https://127.0.0.1:1"
         real = collector.httpx
@@ -406,7 +432,7 @@ def _source_status_checks() -> int:
     assert "sources.security" in llm.TRIAGE_SYSTEM, "프롬프트가 조회 상태를 안 본다"
     assert "sources.open_problems" in llm.TRIAGE_SYSTEM, "프롬프트가 열린 문제 상태를 안 본다"
     assert "stale" in llm.TRIAGE_SYSTEM, "프롬프트가 장기 미해소를 구분하지 않는다"
-    return 31
+    return 40
 
 
 def _class_map_checks() -> int:

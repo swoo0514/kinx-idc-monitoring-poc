@@ -5,6 +5,7 @@ WAZUH_INDEXER_PASSWORD(선택 — 없으면 해당 소스 생략, 열화 진행)
 """
 
 import asyncio
+import fnmatch
 import logging
 import os
 import time
@@ -114,8 +115,8 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
     zbx_host = base["host"].get("host") or ""
     host_label = _resolve_label(zbx_host, base["host"])   # Zabbix명 → Loki/Wazuh FQDN 라벨
     (logs, logs_status), (security, sec_status) = await asyncio.gather(
-        _loki_logs(host_label, now),
-        _wazuh_alerts(host_label, now),
+        _loki_logs(host_label, now, zbx_host),
+        _wazuh_alerts(host_label, now, zbx_host),
     )
     return {
         **base,
@@ -163,8 +164,8 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
             return await _open_problems(zbx, c2, hid, incident.classes(), exclude, now)
 
     (logs, logs_status), (security, sec_status), (opens, opens_status) = await asyncio.gather(
-        _loki_logs(host_label, now),
-        _wazuh_alerts(host_label, now),
+        _loki_logs(host_label, now, zbx_host),
+        _wazuh_alerts(host_label, now, zbx_host),
         _open_probe(),
     )
 
@@ -210,9 +211,13 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
 def _resolve_label(zbx_host: str, host_obj: dict) -> str:
     """Zabbix 호스트명 → Loki/Wazuh 라벨. 세 시스템이 이름을 달리 쓰고 공유 키가 없어 필요.
 
-    우선순위: HOST_LABEL_MAP(명시) → 인터페이스 dns(FQDN이면 자동) → Zabbix 호스트명.
+    우선순위: HOST_LABEL_MAP(명시) → 인터페이스 dns(FQDN 일 때만) → Zabbix 호스트명.
     이 맵은 손 설치 호스트용 스톱갭이고, 정답은 배포 시 FQDN 정규화다 —
     docs/01-build/hosts.md.
+
+    dns 에 점이 없으면 쓰지 않는다. 랩 실측에서 그 칸에 컨테이너 이름이 들어 있었고
+    (`zabbix-agent2`·`snmpsim`), 그 이름은 여러 호스트가 공유할 수 있어 남의 로그를
+    이 호스트 것으로 읽을 위험이 있다.
     """
     mapping = {}
     for pair in os.environ.get("HOST_LABEL_MAP", "").split(","):
@@ -222,9 +227,23 @@ def _resolve_label(zbx_host: str, host_obj: dict) -> str:
     if zbx_host in mapping:
         return mapping[zbx_host]
     for iface in (host_obj.get("interfaces") or []):
-        if iface.get("dns"):
-            return iface["dns"]
+        dns = (iface.get("dns") or "").strip()
+        if "." in dns:
+            return dns
+        if dns:
+            log.debug("dns '%s' 는 FQDN 이 아니라 호스트명 '%s' 를 쓴다", dns, zbx_host)
     return zbx_host
+
+
+def log_axis_exempt(zbx_host: str) -> bool:
+    """로그·보안 축이 없는 것이 정상인 호스트인가.
+
+    인증서 만료 감시나 리포트 값처럼 OS 가 없는 가상 호스트가 여기 해당한다.
+    이런 호스트를 이름 불일치로 보면 알림마다 분석이 돌고, 진짜 불일치에 쓸 상한을
+    먼저 소진한다. 패턴은 Zabbix 호스트명에 맞추며 `*` 만 쓴다.
+    """
+    pats = [p.strip() for p in os.environ.get("LOG_AXIS_EXEMPT_HOSTS", "").split(",") if p.strip()]
+    return any(fnmatch.fnmatch(zbx_host, p) for p in pats)
 
 
 async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
@@ -282,10 +301,12 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
     return out[:incident.OPEN_LINK_MAX], SOURCE_OK
 
 
-async def _loki_logs(host_label: str, now: int) -> tuple:
-    """Loki 최근 로그. 반환 (로그 목록, 조회 상태). 상태는 SOURCE_* 셋 중 하나 (G1)."""
+async def _loki_logs(host_label: str, now: int, zbx_host: str = "") -> tuple:
+    """Loki 최근 로그. 반환 (로그 목록, 조회 상태). 상태는 SOURCE_* 넷 중 하나."""
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url:
+        return [], SOURCE_DISABLED
+    if zbx_host and log_axis_exempt(zbx_host):
         return [], SOURCE_DISABLED
     if not host_label:   # 호스트 라벨을 못 정하면 조회 자체가 불가 — 성공이 아니다
         log.warning("loki skipped: host label 미해석 (HOST_LABEL_MAP·인터페이스 dns 확인)")
@@ -334,7 +355,7 @@ async def _loki_name_status(client, url: str, host_label: str, now: int) -> str:
     return SOURCE_UNMATCHED
 
 
-async def _wazuh_alerts(agent_name: str, now: int) -> tuple:
+async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "") -> tuple:
     """Wazuh Indexer(OpenSearch) 최근 경보. 반환 (경보 목록, 조회 상태).
 
     빈 목록을 "침해 배제"로 해석해도 되는 것은 상태가 SOURCE_OK 일 때뿐이다.
@@ -343,6 +364,8 @@ async def _wazuh_alerts(agent_name: str, now: int) -> tuple:
     user = os.environ.get("WAZUH_INDEXER_USER", "")
     pw = os.environ.get("WAZUH_INDEXER_PASSWORD", "")
     if not url:
+        return [], SOURCE_DISABLED
+    if zbx_host and log_axis_exempt(zbx_host):
         return [], SOURCE_DISABLED
     if not agent_name:
         log.warning("wazuh skipped: agent name 미해석")

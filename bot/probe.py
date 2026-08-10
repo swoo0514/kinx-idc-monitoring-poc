@@ -10,6 +10,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
@@ -259,29 +260,43 @@ async def names(limit: int = 500):
     # 수집기와 같은 해석 규칙을 쓴다 — 여기서만 다르게 풀면 진단이 현실과 어긋난다.
     resolved = [(h["host"], collector._resolve_label(h["host"], h)) for h in hosts]
 
-    hit = [(n, lb) for n, lb in resolved if lb in loki]
-    miss = [(n, lb) for n, lb in resolved if lb not in loki]
-    print("\n[ Loki 대조 ]  일치 %d / 불일치 %d" % (len(hit), len(miss)))
+    exempt = [(n, lb) for n, lb in resolved if collector.log_axis_exempt(n)]
+    rest = [(n, lb) for n, lb in resolved if not collector.log_axis_exempt(n)]
+    hit = [(n, lb) for n, lb in rest if lb in loki]
+    miss = [(n, lb) for n, lb in rest if lb not in loki]
+    print("\n[ Loki 대조 ]  일치 %d / 불일치 %d / 면제 %d"
+          % (len(hit), len(miss), len(exempt)))
+    for n, lb in hit:
+        print("  ○ %-30s → '%s'" % (n, lb))
     for n, lb in miss[:40]:
         print("  ✗ %-30s → 조회에 쓰는 이름 '%s'" % (n, lb))
     if len(miss) > 40:
         print("  ... 외 %d개" % (len(miss) - 40))
+    if exempt:
+        print("  면제(LOG_AXIS_EXEMPT_HOSTS): %s"
+              % ", ".join(n for n, _lb in exempt[:10]))
     if loki - {lb for _n, lb in resolved}:
         print("\n  Loki 에만 있는 이름(감시 대상이 아니거나 이름이 다르다):")
         for v in sorted(loki - {lb for _n, lb in resolved})[:20]:
             print("    · %s" % v)
 
     if os.environ.get("WAZUH_INDEXER_URL"):
+        # 호스트마다 수집기가 경고를 남기면 표가 묻힌다. 결과는 아래 표에 있다.
+        logging.getLogger("gateway.collector").setLevel(logging.ERROR)
         st = []
         async with httpx.AsyncClient(verify=False) as wc:
-            for n, lb in resolved:
+            for n, lb in rest:
                 s = await collector._wazuh_name_status(
                     wc, os.environ["WAZUH_INDEXER_URL"].rstrip("/"),
                     os.environ.get("WAZUH_INDEXER_USER", ""),
                     os.environ.get("WAZUH_INDEXER_PASSWORD", ""), lb)
                 st.append((n, lb, s))
         bad = [x for x in st if x[2] != collector.SOURCE_OK]
-        print("\n[ Wazuh 대조 ]  일치 %d / 불일치·실패 %d" % (len(st) - len(bad), len(bad)))
+        print("\n[ Wazuh 대조 ]  일치 %d / 불일치·실패 %d / 면제 %d"
+              % (len(st) - len(bad), len(bad), len(exempt)))
+        for n, lb, s in st:
+            if s == collector.SOURCE_OK:
+                print("  ○ %-30s → '%s'" % (n, lb))
         for n, lb, s in bad[:40]:
             print("  ✗ %-30s → '%s' (%s)" % (n, lb, s))
     else:
