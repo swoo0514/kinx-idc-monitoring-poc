@@ -23,6 +23,14 @@ log = logging.getLogger("gateway")
 
 app = FastAPI(title="kinx-poc alert gateway", version="0.1.0")
 
+# 규칙 로드는 incident 모듈 import 시점에 끝나는데, 그때는 아직 로깅이 설정 전이라
+# 그 로그가 사라진다. **"예시값 사용 — 재측정 필요"가 정작 서비스에서는 안 보였다**
+# (실측 2026-08-10). 기동 시 한 번 더 남겨 어느 규칙으로 도는지가 반드시 드러나게 한다.
+log.info("열린 문제 연계 규칙 %d건 / 측정: %s",
+         len(incident.OPEN_LINK_RULES), incident.OPEN_LINK_MEASURED)
+if not os.environ.get("OPEN_LINK_RULES_FILE"):
+    log.warning("OPEN_LINK_RULES_FILE 미지정 — 자리표시자로 동작한다. 운영 적용 전 재측정 필요")
+
 
 async def _raw_ping(alert, thread_ts):
     """알림 도착 즉시 원시 신호 카드. 반환 ts 가 인시던트 스레드 앵커 (GATEWAY_GUIDE §18)."""
