@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from . import incident
 from . import keep
+from . import pending
 from . import router as tag_router
 from . import severity
 from . import slack
@@ -39,7 +40,35 @@ async def _raw_ping(alert, thread_ts):
     return res.get("ts")
 
 
-_incidents = incident.IncidentManager(on_close=triage.run_incident, on_signal=_raw_ping)
+async def _close_incident(inc):
+    """분석까지 끝난 뒤에 대기 목록에서 뺀다.
+
+    분석 전에 빼면 분석 도중 죽었을 때 알림이 사라진다. 뒤에 빼면 그 경우 재기동 후
+    한 번 더 분석해 카드가 겹칠 수 있다. 겹치는 것은 눈에 보이고 사라지는 것은 안 보여서
+    뒤에 빼는 쪽을 골랐다.
+    """
+    try:
+        return await triage.run_incident(inc)
+    finally:
+        pending.drop([{"source": a.source, "event_id": a.event_id} for a in inc.alerts])
+
+
+_incidents = incident.IncidentManager(on_close=_close_incident, on_signal=_raw_ping)
+
+
+@app.on_event("startup")
+async def _replay_pending():
+    """재기동 전에 창이 안 닫힌 알림을 다시 넣는다."""
+    recs = pending.take_for_replay()
+    if not recs:
+        return
+    log.info("재기동 전 대기 알림 %d건을 다시 처리한다", len(recs))
+    for r in recs:
+        await _incidents.submit(incident.Alert(
+            source=r.get("source", ""), event_id=r.get("event_id", ""),
+            trigger_id=r.get("trigger_id", ""), host=r.get("host", ""),
+            alert_name=r.get("alert_name", ""), sev=r.get("sev", "SEV2"),
+            incident_class=r.get("class", "other"), recv=time.monotonic()))
 
 IDEMPOTENCY_TTL_S = 3600
 _seen: dict = {}  # (source, event_id, event_value) -> monotonic. 프로덕션은 Redis (가이드 §10)
@@ -134,6 +163,12 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
             source=source, event_id=event_id, trigger_id=trigger_id, host=host,
             alert_name=alert_name, sev=sev,
             incident_class=cls, recv=time.monotonic())
+        # 이 경로만 기다린다. 기다리는 동안 죽으면 알림이 사라지므로 파일에 먼저 적고,
+        # 적지 못하면 200 을 주지 않는다 — Zabbix 가 재시도하게 둔다.
+        rec = {"source": source, "event_id": event_id, "trigger_id": trigger_id,
+               "host": host, "alert_name": alert_name, "sev": sev, "class": cls}
+        if not pending.append(rec):
+            raise HTTPException(status_code=503, detail="pending write failed")
         bg.add_task(_incidents.submit, alert)
     elif route in ("digest", "dashboard_only"):
         bg.add_task(_queue_low_severity, host, alert_name, sev, cls,

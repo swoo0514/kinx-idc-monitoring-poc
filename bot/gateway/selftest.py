@@ -5,6 +5,7 @@
 일치가 검증 대상이다 — 표를 고치면 이 케이스부터 고친다.
 """
 
+import shutil
 import time
 
 from . import prejudge, router, severity
@@ -232,13 +233,14 @@ def main():
     site_kw_checks = _site_keyword_checks()
     class_tag_checks = _class_tag_checks()
     class_map_checks = _class_map_checks()
+    pending_checks = _pending_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
              + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks + class_tag_checks
-             + class_map_checks)
+             + class_map_checks + pending_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -962,6 +964,60 @@ def _incident_checks() -> int:
     r = llm.triage_reply(inc_ctx, "SEV2")
     assert r["degraded"] and "병합" in r["text"], r
     return 25 + len(CASES_CLASSIFY) + gate_checks
+
+
+def _pending_checks() -> int:
+    """대기 알림 기록 — 창이 닫히기 전에 죽어도 알림이 남아 있는지.
+
+    기록에 실패했는데 참을 돌려주면 웹훅이 200 을 주고, 그러면 Zabbix 는 재시도하지
+    않는다. 그 경로가 가장 중요하므로 먼저 잠근다.
+    """
+    import os
+    import tempfile
+
+    from . import pending
+
+    saved_path, saved_max = pending.PATH, pending.MAX_REPLAY
+    d = tempfile.mkdtemp(prefix="pending-test-")
+    pending.PATH = os.path.join(d, "pending.jsonl")
+    try:
+        assert pending.load() == [], "파일이 없으면 빈 목록이어야"
+
+        a = {"source": "zabbix-internal", "event_id": "1", "host": "h1"}
+        b = {"source": "zabbix-internal", "event_id": "2", "host": "h2"}
+        assert pending.append(a) is True and pending.append(b) is True
+        assert [r["event_id"] for r in pending.load()] == ["1", "2"]
+
+        # 끝난 것만 빠지고 나머지는 남는다
+        pending.drop([{"source": "zabbix-internal", "event_id": "1"}])
+        assert [r["event_id"] for r in pending.load()] == ["2"]
+
+        # 깨진 줄이 있어도 나머지는 읽는다 — 한 줄 때문에 전부 버리면 유실이다
+        with open(pending.PATH, "a", encoding="utf-8") as f:
+            f.write("{망가진 줄" + chr(10))
+        assert [r["event_id"] for r in pending.load()] == ["2"]
+
+        # 재시도 횟수가 올라가고 한도를 넘으면 버린다
+        pending.MAX_REPLAY = 2
+        assert [r["replays"] for r in pending.take_for_replay()] == [1]
+        assert [r["replays"] for r in pending.take_for_replay()] == [2]
+        assert pending.take_for_replay() == [], "한도를 넘으면 버려야"
+        assert pending.load() == []
+
+        # 쓸 수 없으면 반드시 거짓 — 여기서 참이 나오면 웹훅이 거짓 200 을 준다
+        pending.PATH = os.path.join(d, "no-such-dir", "x", "pending.jsonl")
+        os.makedirs(os.path.dirname(pending.PATH))
+        os.chmod(os.path.dirname(pending.PATH), 0o500)
+        try:
+            wrote = pending.append(a)
+        finally:
+            os.chmod(os.path.dirname(pending.PATH), 0o700)
+        if os.name != "nt" and os.geteuid() != 0:
+            assert wrote is False, "쓰지 못했는데 참을 돌려줬다"
+    finally:
+        pending.PATH, pending.MAX_REPLAY = saved_path, saved_max
+        shutil.rmtree(d, ignore_errors=True)
+    return 10
 
 
 if __name__ == "__main__":
