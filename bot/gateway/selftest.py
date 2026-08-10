@@ -575,11 +575,11 @@ def _open_link_checks() -> int:
     incident.OPEN_LINK_MEASURED = "셀프테스트 고정값"
     try:
         n += _open_link_rule_checks(incident)
+        n += _open_link_masking_checks()
     finally:
         incident.OPEN_LINK_RULES = saved_rules
         incident.OPEN_LINK_MEASURED = saved_measured
-
-    return n + _open_link_masking_checks()
+    return n
 
 
 def _open_link_rule_checks(incident) -> int:
