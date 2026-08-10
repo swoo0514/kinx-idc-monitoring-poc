@@ -36,13 +36,8 @@ def _env_float(name: str, default: float) -> float:
 # 손대면 selftest 의 CASES_CLASSIFY 를 함께 늘린다.
 CLASS_RULES = [
     ("replication", ["복제", "replication", "repl", "slave", "seconds_behind"]),
-    # 아래 실환경 키워드 3종은 2026-08-10 사내 90일 실측으로 추가했다. 미분류의 96%가 이 키워드로 해소되고 **기존 분류를 뺏은 건은 0건**임을 확인했다.
-    # 표준 템플릿 트리거명이라 실환경 전반에 적용된다. 근거: correlation_mining_methodology.md
     ("cpu_io_pressure", ["iowait", "io wait", "i/o", "load average", "cpu", "load",
                          "디스크 지연", "disk latency", "await",
-                         # "vdb: Disk read/write request responses are too high" —
-                         # 디스크 응답 지연인데 이름에 latency·i/o·await 가 없어 미분류였다.
-                         # 단일 유형으로 실환경 미분류의 92%를 차지한다.
                          "read/write request", "disk read/write"]),
     ("auth_security", ["브루트포스", "brute", "authentication", "login fail", "sshd",
                        "unauthorized", "비인가", "sca", "fim", "rootcheck",
@@ -55,16 +50,13 @@ CLASS_RULES = [
     ("network", ["interface", "packet", "drop", "crc", "link down", "ifoperstatus"]),
     ("service_down", ["proc.num", "process", "not running", "not available", "재기동",
                       "down", "unreachable",
-                      # 실측 추가. 여기 있는 것은 **표준 템플릿·일반 용어만** 둔다 —
-                      # 특정 사이트의 커스텀 트리거명은 아래 SITE_CLASS_KEYWORDS 로 뺀다.
+                      # 표준 템플릿·일반 용어만 둔다. 사이트 관용구는 SITE_CLASS_KEYWORDS.
                       "restarted", "health check", "not response", "no snmp data"]),
     ("service_latency", ["지연", "latency", "response time", "응답", "qps", "queue"]),
 ]
 
-# 사이트 고유 트리거명 키워드. 조직마다 다르므로 코드에 박지 않고 환경변수로 받는다.
+# 사이트 고유 트리거명 키워드. 조직마다 다르므로 환경변수로 받는다.
 # 형식: "class=키워드|키워드,class=키워드"  예) service_down=not connect|check is fail
-# 왜 분리하나 — 한 조직의 관용구를 범용 규칙에 섞으면 다른 환경에서 뜻 없는 규칙이 되고,
-# 나중에 왜 있는지 아무도 모르는 줄이 된다.
 def _site_keywords():
     out = {}
     for part in os.environ.get("SITE_CLASS_KEYWORDS", "").split(","):
@@ -106,27 +98,12 @@ BRIDGE_GROUPS = [
 ]
 
 
-# 열린 문제 연계 규칙 — (열린 쪽, 뒤따르는 쪽): 측정 근거.
+# 열린 문제 연계 규칙 — (열린 쪽, 뒤따르는 쪽). BRIDGE_GROUPS 와 달리 방향이 있고
+# 병합 키를 만들지 않으므로 겹쳐도 된다. 설계는 open_problem_linkage_design.md.
 #
-# BRIDGE_GROUPS 와 무엇이 다른가:
-#   BRIDGE_GROUPS 는 **같은 시간창** 안의 알림을 하나로 묶는 병합 키다. 무방향이고
-#   서로 겹칠 수 없다(_bridge_id 가 첫 매칭을 반환하므로).
-#   이 표는 **이미 열려 있는 문제**를 컨텍스트로 붙이기 위한 것이다. 방향이 있고,
-#   병합 키를 만들지 않으므로 겹쳐도 된다 — disk_space 가 두 항목에 모두 나온다.
-#
-# 왜 필요한가 — 실측(2026-08-10, 사내 90일). 게이트웨이의 실제 창(무알림 90초/최대 300초)
-# 안에서 **서로 다른 클래스가 함께 나는 일이 일어나지 않는다**(유형 혼합 0건). 병합 정책을
-# 3안으로 바꿔 시뮬레이션해도 결과가 전부 동일했다. 반면 "열려 있는 동안 뒤따랐는가"로
-# 보면 아래 관계가 오탐율 5% 통제를 통과한다. 창을 넓히는 것은 6시간까지 가야 효과가 나고
-# 그 대가로 사건 수가 절반이 된다. 설계 판단은 private/docs/open_problem_linkage_design.md.
-# **값은 환경마다 다르다.** 아래는 기본값이 아니라 예시이며, 실제 운영에서는 그 환경에서
-# 측정한 파일을 읽어 쓴다(OPEN_LINK_RULES_FILE). 값을 코드에 박아 두면 환경이 바뀌어도
-# 조용히 낡는다 — 마이닝 도구가 파일을 내고 게이트웨이가 그 파일을 읽는 것이 고리다.
-#   생성: python bot/bridge_miner.py --load <덤프> --by cls --overlap --null 200 --emit-rules <파일>
-#   적용: OPEN_LINK_RULES_FILE=<파일>
-# 아래 값은 **형식을 보이기 위한 자리표시자**이며 어떤 환경의 측정값도 아니다.
-# 실측값은 리포에 두지 않는다(리포 규칙: 실환경에서 뽑은 데이터는 마스킹해도 커밋 금지).
-# 측정한 파일을 OPEN_LINK_RULES_FILE 로 지정해 쓴다.
+# 아래는 형식을 보이기 위한 자리표시자이며 어떤 환경의 측정값도 아니다. 실제로는 그
+# 환경에서 측정한 파일을 OPEN_LINK_RULES_FILE 로 지정해 쓴다 — 코드에 박으면 환경이
+# 바뀌어도 조용히 낡는다. 생성은 bridge_miner --emit-rules.
 _EXAMPLE_OPEN_LINK_RULES = {
     ("disk_space", "cpu_io_pressure"): {"rate": 0.90, "days": 10, "overlaps": 20},
     ("disk_space", "service_down"): {"rate": 0.70, "days": 10, "overlaps": 15},
@@ -165,14 +142,8 @@ OPEN_LINK_RULES, OPEN_LINK_MEASURED = _load_open_link_rules()
 # 방금 난 것은 이미 시간창 병합 대상이다. 그보다 오래 열린 것만 "선행 문제"로 본다.
 OPEN_LINK_MIN_AGE_S = _env_int("OPEN_LINK_MIN_AGE_S", 300)
 OPEN_LINK_MAX = _env_int("OPEN_LINK_MAX", 3)
-# 오래 열린 것은 선행 원인으로 보지 않는다 — 버리지는 않고 표시만 한다.
-#
-# 실측(2026-08-10, 실환경 읽기전용 조회): 3년 넘게 미해소인 문제가 있었고, 90일 창 안의
-# 미해소 22건도 **전부 7일 이상**이며 그중 디스크 문제가 2건이었다. 상한이 없으면 그
-# 호스트의 모든 자원 압박 알림에 "디스크 문제가 30일째 열려 있다"가 영원히 붙는다.
-# 30일 된 알림은 오늘 급등의 선행 원인이 아니라 **별개의 방치 항목**이다.
-#
-# 측정 자체는 장기 열림도 포함했으므로(최장 약 40일) 이 값은 통계가 아니라 운영 판단이다.
+# 오래 열린 것은 선행 원인이 아니라 방치 항목이다 — 버리지 않고 표시만 한다.
+# 통계가 아니라 운영 판단이므로 환경변수로 조정한다.
 OPEN_LINK_STALE_AGE_S = _env_int("OPEN_LINK_STALE_AGE_S", 7 * 86400)
 
 
@@ -201,14 +172,8 @@ _validate_bridges()
 
 _SEV_ORDER = {"SEV1": 1, "SEV2": 2, "SEV3": 3, "SEV4": 4, "NONE": 5}
 
-# 우리 분류를 선언하는 트리거 태그 이름.
-#
-# **"class" 를 쓰면 안 된다.** 실측(2026-08-10 랩·실환경) — Zabbix 표준 템플릿 트리거가
-# 이미 `class=os`(Linux 계열)·`class=database`(MySQL 계열) 태그를 달고 나온다. 같은 이름에
-# 우리 값을 얹으면 한 트리거에 의미가 다른 두 값이 공존하고, 어느 쪽이 읽힐지가 태그 순서에
-# 좌우된다. 발행 측에 태그를 부여하는 개선안(next-steps §1-1-12)은 이 충돌을 전제로 다시
-# 써야 한다. 이름을 분리하면 표준 태그를 아예 보지 않으므로 경고도 사라진다.
-# 이미 class= 로 운영 중인 곳은 CLASS_TAG=class 로 되돌릴 수 있다.
+# 우리 분류를 선언하는 트리거 태그 이름. "class" 를 쓰면 안 된다 — Zabbix 표준 템플릿이
+# 이미 그 이름을 쓴다(class=os / class=database). 근거는 next-steps §1-1-12.
 CLASS_TAG = os.environ.get("CLASS_TAG", "incident_class")
 WAZUH_GROUP_CLASS = {
     "syscheck": "auth_security",

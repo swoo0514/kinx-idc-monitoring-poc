@@ -41,8 +41,7 @@ class ZabbixClient:
     async def call(self, client: httpx.AsyncClient, method: str, params: dict):
         if not method.endswith(".get"):   # 읽기 전용 강제 (작업 원칙 4)
             raise ValueError(f"read-only violation: {method}")
-        # 설정 실수는 스택 트레이스가 아니라 한 줄로 말한다. 안 그러면 httpx 내부까지
-        # 20줄이 쏟아져 "무엇을 고쳐야 하는지"가 묻힌다(실측 2026-08-10).
+        # 설정 실수는 스택 트레이스가 아니라 한 줄로 말한다.
         if not self.api.startswith(("http://", "https://")):
             raise RuntimeError(
                 "ZABBIX_URL 이 비었거나 형식이 틀렸다(현재: %r). "
@@ -225,22 +224,12 @@ def _resolve_label(zbx_host: str, host_obj: dict) -> str:
 
 async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
                          now: int) -> tuple:
-    """이 호스트에 **지금 열려 있는** 문제 중 현재 인시던트와 연계 관계인 것.
+    """이 호스트에 지금 열려 있는 문제 중 현재 인시던트와 연계 관계인 것.
 
-    왜 필요한가 — 실측(2026-08-10). 게이트웨이 시간창(최대 300초) 안에서는 서로 다른
-    클래스가 함께 나는 일이 일어나지 않는다. 실제 관계는 "같은 창에 있다"가 아니라
-    **"열려 있는 동안 뒤따랐다"** 형태다(디스크 문제가 열린 동안 자원 압박이 13일에 걸쳐
-    96% 비율로 뒤따름). 창을 넓혀서는 잡을 수 없고, 열림 여부를 조건으로 삼아야 잡힌다.
+    병합하지 않고 컨텍스트로만 붙인다. 상태를 자체 유지하지 않고 매번 조회한다.
+    설계 판단은 private/docs/open_problem_linkage_design.md.
 
-    병합하지 않고 컨텍스트로만 붙인다 — 열린 문제는 며칠째 열려 있을 수 있어 병합하면
-    관측창·선판정·심각도 집계가 함께 왜곡되고, 그 문제는 이미 자기 사건으로 분석됐을 수 있다.
-
-    상태를 자체 유지하지 않고 매번 조회하는 이유 — 자체 유지는 해소 웹훅 수신에 의존하는데
-    그 처리가 아직 없고, 웹훅이 한 번 유실되면 상태가 영구히 어긋난다. 조회는 재시작에도
-    안전하다. `problem.get` 은 공식 문서상 기본값으로 미해소 문제만 반환한다.
-
-    반환 (목록, 상태). 상태는 SOURCE_* — 조회 실패를 "선행 문제 없음"으로 읽으면
-    봇이 없는 사실을 단언한다(G1 과 같은 형태).
+    반환 (목록, 상태). 조회 실패를 "선행 문제 없음"으로 읽으면 없는 사실을 단언하게 된다.
     """
     # incident 가 이 모듈의 SOURCE_UNAVAILABLE 을 import 하므로 모듈 최상단에서 맞import
     # 하면 순환이 된다. 호출 시점 import 로 끊는다.
@@ -271,11 +260,8 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
         if age < incident.OPEN_LINK_MIN_AGE_S:
             continue                          # 방금 난 것은 시간창 병합이 맡는다
         cls = incident.classify(p.get("name") or "", tags=p.get("tags"))
-        # 인시던트에 이미 그 유형이 있으면 선행 문제가 아니다 — **같은 문제의 다른 임계
-        # 트리거**다. 실측 2026-08-10: 복제 지연을 임계값만 달리 본 두 트리거가 각각
-        # "이번 알림"과 "선행 문제"로 잡혔다. 실환경에는 디스크 임계치를 80/85/90/95%
-        # 트리거 4개로 나눠 둔 사례가 있어 이 형태가 훨씬 흔하다.
-        # 같은 호스트만 조회하므로 유형이 같으면 같은 조건으로 본다.
+        # 같은 유형이 이미 인시던트에 있으면 선행이 아니라 같은 문제의 다른 임계
+        # 트리거다. 같은 호스트만 조회하므로 유형이 같으면 같은 조건으로 본다.
         if cls in (current_classes or ()):
             continue
         link = incident.open_link(cls, current_classes)
