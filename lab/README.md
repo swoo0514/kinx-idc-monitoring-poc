@@ -143,20 +143,30 @@ lab/
 
 `kinx.host` 라벨이 부여되지 않은 컨테이너는 수집 대상에서 제외됩니다. 이를 통해 Loki·Grafana 등 관측 도구 자체의 로그가 감시 대상 데이터에 혼입되는 것을 방지합니다.
 
-### 기동 및 검증
+### 기동 절차
+
+**Docker 라벨은 컨테이너 생성 시점에 부여되므로, 이미 기동 중인 컨테이너에는 소급 적용되지 않습니다.** `alloy` 서비스만 기동할 경우 수집 대상이 0건이 되므로, 라벨이 정의된 서비스를 함께 재생성해야 합니다. 수집 대상 서비스가 `ha`·`msp`·`chaos` 프로파일에 분산되어 있으므로 해당 프로파일을 모두 지정합니다. 프로파일을 생략하면 그에 속한 서비스는 재생성 대상에서 제외되어 라벨이 적용되지 않습니다.
 
 ```bash
-docker compose up -d alloy
+docker compose --profile ha --profile msp --profile chaos up -d
 ```
 
-```bash
-# 1. 수집 대상으로 인식된 컨테이너 확인 (Alloy 내장 UI)
-curl -s localhost:12345/api/v0/web/components | head
+데이터는 볼륨에 보존되므로 재생성 시에도 유지됩니다.
 
-# 2. Loki 에 등록된 host 라벨 값 확인 — 위 표의 6개 호스트가 추가되어야 함
+### 검증
+
+```bash
+# 1. 라벨 부여 상태 확인 — 대상 컨테이너에 kinx.host 값이 표시되어야 함
+docker inspect -f '{{.Name}} [{{index .Config.Labels "kinx.host"}}]' $(docker ps -q)
+
+# 2. Alloy 수집 상태 확인 (오류 발생 시 여기에 기록됨)
+docker logs kinx-alloy --tail 50
+
+# 3. Loki 에 등록된 host 라벨 값 확인 — 위 표의 6개 호스트가 추가되어야 함
+#    start 미지정 시 최근 6시간 범위만 조회됨에 유의
 curl -s "localhost:3100/loki/api/v1/label/host/values"
 
-# 3. 봇 기준 전수 대조 (수집기와 동일한 이름 해석 규칙 적용)
+# 4. 봇 기준 전수 대조 (수집기와 동일한 이름 해석 규칙 적용)
 cd ../bot && python3 probe.py names
 ```
 
