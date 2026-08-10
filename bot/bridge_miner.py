@@ -45,13 +45,8 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M")
 
 
-_IP_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
-_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
-
-
-def template(name: str) -> str:
-    """트리거명의 변수부를 지워 '유형'으로 접는다. 축 선택 근거는 BRIDGE_MINER_GUIDE."""
-    return _NUM_RE.sub("#", _IP_RE.sub("<IP>", name)).strip()
+# 분류 선언 파일과 같은 키를 써야 하므로 정규화는 incident 쪽 한 곳에 둔다.
+template = incident.name_template
 
 
 def axis_key(e: dict, axis: str) -> str:
@@ -392,7 +387,7 @@ def fetch_wazuh(days: int) -> list:
             # groups 를 남긴다 — Zabbix 의 declared 와 같은 역할. 없으면 --load 재분류가
             # 이름만 보고 판단해 Wazuh 분류 품질이 실제보다 나쁘게 나온다.
             out.append({"host": host, "cls": cls, "ts": epoch, "name": name, "src": "wazuh",
-                        "groups": rule.get("groups")})
+                        "groups": rule.get("groups"), "rule_id": rule.get("id")})
     print("[wazuh] 알림 %d건 → 분류 완료" % len(out), file=sys.stderr)
     return out
 
@@ -1235,7 +1230,8 @@ def main():
             tags = ([{"tag": incident.CLASS_TAG, "value": e["declared"]}]
                     if e.get("declared") else None)
             new_cls = incident.classify(e.get("name") or "", tags=tags,
-                                        groups=e.get("groups"))
+                                        groups=e.get("groups"),
+                                        rule_id=e.get("rule_id") or "")
             if new_cls != e.get("cls"):
                 rec += 1
             e["cls"] = new_cls

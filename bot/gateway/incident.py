@@ -55,6 +55,10 @@ CLASS_RULES = [
                       # 표준 템플릿·일반 용어만 둔다. 사이트 관용구는 SITE_CLASS_KEYWORDS.
                       "restarted", "health check", "not response", "no snmp data"]),
     ("service_latency", ["지연", "latency", "response time", "응답", "qps", "queue"]),
+    # 마지막에 둔다 — "바뀌었다"는 generic 이라 앞에 두면 다른 판정을 가로챈다.
+    # 나머지 클래스가 "무엇이 잘못됐나"라면 이 축은 "무엇이 바뀌었나"다.
+    ("config_change", ["has changed", "was changed", "changed on", "구성 변경",
+                       "listened ports", "installed packages", "설정 변경"]),
 ]
 
 # 사이트 고유 트리거명 키워드. 조직마다 다르므로 환경변수로 받는다.
@@ -78,6 +82,15 @@ if SITE_CLASS_KEYWORDS:
     CLASS_RULES = [(c, kws + SITE_CLASS_KEYWORDS.get(c, [])) for c, kws in CLASS_RULES]
     log.info("사이트 고유 키워드 적용: %s",
              {c: len(v) for c, v in SITE_CLASS_KEYWORDS.items()})
+
+_IP_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def name_template(name: str) -> str:
+    """알림명의 변수부(숫자·IP)를 지워 '유형'으로 접는다. 분류 파일·마이닝이 같은 키를 쓴다."""
+    return _NUM_RE.sub("#", _IP_RE.sub("<IP>", name or "")).strip()
+
 
 _WORD_BOUNDARY_MAX = 5
 
@@ -189,8 +202,32 @@ WAZUH_GROUP_CLASS = {
 _KNOWN_CLASSES = {c for c, _ in CLASS_RULES} | set(WAZUH_GROUP_CLASS.values()) | {"other"}
 
 
-def classify(alert_name: str, item_key: str = "", tags=None, groups=None) -> str:
-    """선언(태그·그룹) → 폴백(키워드) 순. 선언이 있으면 문자열을 보지 않는다."""
+def _load_class_map():
+    """발행 측에 태그를 못 다는 동안 쓰는 같은 선언. 태그가 붙으면 자동으로 무시된다.
+
+    형식: {"zabbix": {"<정규화된 알림명>": "class"}, "wazuh": {"<rule_id>": "class"}}
+    """
+    path = os.environ.get("INCIDENT_CLASS_FILE", "")
+    if not path:
+        return {}, {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        zbx = {k: v for k, v in (doc.get("zabbix") or {}).items() if v in _KNOWN_CLASSES}
+        wz = {str(k): v for k, v in (doc.get("wazuh") or {}).items() if v in _KNOWN_CLASSES}
+        log.info("분류 선언 파일 %s — zabbix %d종 / wazuh %d종", path, len(zbx), len(wz))
+        return zbx, wz
+    except Exception as e:
+        log.error("분류 선언 파일 로드 실패 %s: %s — 키워드 폴백으로 진행", path, e)
+        return {}, {}
+
+
+CLASS_MAP_ZBX, CLASS_MAP_WZH = _load_class_map()
+
+
+def classify(alert_name: str, item_key: str = "", tags=None, groups=None,
+             rule_id: str = "") -> str:
+    """선언(태그 → 그룹 → 파일) → 폴백(키워드) 순. 선언이 있으면 문자열을 보지 않는다."""
     declared = _tag_class(tags)
     if declared:
         return declared
@@ -198,6 +235,12 @@ def classify(alert_name: str, item_key: str = "", tags=None, groups=None) -> str
     mapped = _group_class(groups)
     if mapped:
         return mapped
+
+    if rule_id and str(rule_id) in CLASS_MAP_WZH:
+        return CLASS_MAP_WZH[str(rule_id)]
+    hit = CLASS_MAP_ZBX.get(name_template(alert_name))
+    if hit:
+        return hit
 
     text = f"{alert_name} {item_key}".lower()
     for cls, matchers in _COMPILED_RULES:

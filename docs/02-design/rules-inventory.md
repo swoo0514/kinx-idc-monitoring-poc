@@ -62,13 +62,30 @@
 
 ### 1-3. 인시던트 유형 분류 (`incident.classify`)
 
-알림 데이터를 단일 유형으로 분류합니다: `replication` / `cpu_io_pressure` / `auth_security` / `disk_space` / `memory_pressure` / `service_*` / `network` / `other`
+알림 데이터를 단일 유형으로 분류합니다: `replication` / `cpu_io_pressure` / `auth_security` / `disk_space` / `memory_pressure` / `service_*` / `network` / `config_change` / `vulnerability` / `other`
+
+`config_change` 는 **"무엇이 잘못됐나"가 아니라 "무엇이 바뀌었나"** 를 담습니다(포트 개방·패키지 변경·버전 변경 등). 다른 클래스와 축이 다르며, 이를 `auth_security` 로 편입하면 보안 축이 오염됩니다 — 파일 무결성 경보처럼 보이나 침해 신호가 아닙니다. 키워드 순서상 **마지막에 위치**해야 앞선 판정을 가로채지 않습니다.
 
 **분류 적용 우선순위:**
-1. Zabbix 트리거 태그 `incident_class=` 값이 정의되어 있는 경우 최우선 적용
-   *(태그 이름을 `class` 로 두지 않는 이유: Zabbix 표준 템플릿이 `class=os`·`class=database` 를 기본 부여하므로 이름이 충돌함 — 2026-08-10 랩·실환경 실측. `CLASS_TAG` 환경변수로 변경 가능)*
-2. Wazuh `rule.groups` 설정값 참조
-3. 알림명 키워드 기반 폴백(Fallback) 추정 분류 적용
+**분류 근거는 두 종류입니다 — 선언과 추정.** 선언은 "이 알림은 X 유형"이라고 명시한 것이고, 추정은 이름을 보고 맞추는 것입니다. 선언이 있으면 이름을 보지 않습니다.
+
+| 순위 | 근거 | 종류 | 위치 |
+|---|---|---|---|
+| 1 | Zabbix 트리거 태그 `incident_class=` | 선언 | 발행 측 |
+| 2 | Wazuh `rule.groups` | 선언 | 발행 측 |
+| 3 | 분류 선언 파일 (`INCIDENT_CLASS_FILE`) | 선언 | 게이트웨이 옆 |
+| 4 | 사이트 고유 키워드 (`SITE_CLASS_KEYWORDS`) | 추정 | 게이트웨이 옆 |
+| 5 | 범용 키워드 (`CLASS_RULES`) | 추정 | 코드 |
+
+**1~3은 같은 것이며 위치만 다릅니다.** 발행 측에 태그를 부여하는 것이 원칙이나(트리거를 만든 사람이 유형을 알고, 신규 생성 시 자연히 따라옴), **운영 환경에는 읽기 전용 조회만 수행하므로 태그 부여는 운영 주체의 작업**입니다. 그동안은 3번 파일이 같은 역할을 대신하며, 태그가 부여되면 자동으로 무시됩니다.
+
+파일 형식은 Zabbix·Wazuh 를 한 곳에서 다룹니다. Zabbix 키는 **변수부(숫자·IP)를 치환한 알림명**이므로 호스트마다 항목이 늘지 않습니다.
+
+```json
+{"zabbix": {"Cert expires in # days": "config_change"}, "wazuh": {"533": "config_change"}}
+```
+
+*(태그 이름을 `class` 로 두지 않는 이유: Zabbix 표준 템플릿이 `class=os`·`class=database` 를 기본 부여하므로 이름이 충돌함 — 2026-08-10 랩·운영 양쪽 실측. `CLASS_TAG` 환경변수로 변경 가능)*
 
 ### 1-4. 알림 병합 (`incident_key` + `BRIDGE_GROUPS`)
 

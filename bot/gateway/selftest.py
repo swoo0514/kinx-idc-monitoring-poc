@@ -85,6 +85,12 @@ CASES_CLASSIFY = [
     ("/etc/passwd has been changed", "auth_security"),
     # 보강이 기존 판정을 뺏지 않는지 고정한다 — "restarted" 가 network 를 가로채면 안 된다.
     ("Interface ae1: Link down after restart", "network"),
+    # "무엇이 잘못됐나"가 아니라 "무엇이 바뀌었나" — 다른 축이라 별도 클래스로 둔다.
+    ("Listened ports status (netstat) changed (new port opened or closed).", "config_change"),
+    ("Linux: Number of installed packages has been changed", "config_change"),
+    ("Operating system description has changed", "config_change"),
+    # config_change 를 마지막에 둬야 앞 판정을 안 뺏는다 — 이 둘로 고정한다.
+    ("/etc/passwd has been changed", "auth_security"),
     ("MySQL: Buffer pool utilization is too low", "other"),  # 미분류가 정답 — 지어내지 않는다
     ("무슨무슨 알림", "other"),
 ]
@@ -197,12 +203,14 @@ def main():
     open_link_checks = _open_link_checks()
     site_kw_checks = _site_keyword_checks()
     class_tag_checks = _class_tag_checks()
+    class_map_checks = _class_map_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
-             + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks + class_tag_checks)
+             + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks + class_tag_checks
+             + class_map_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -272,6 +280,50 @@ def _source_status_checks() -> int:
     assert "sources.open_problems" in llm.TRIAGE_SYSTEM, "프롬프트가 열린 문제 상태를 안 본다"
     assert "stale" in llm.TRIAGE_SYSTEM, "프롬프트가 장기 미해소를 구분하지 않는다"
     return 13
+
+
+def _class_map_checks() -> int:
+    """분류 선언 파일 — 태그와 같은 선언이고 위치만 다르다.
+
+    발행 측에 태그를 못 다는 동안 쓰며(실환경은 읽기 전용), 태그가 붙으면 무시된다.
+    """
+    import importlib
+    import json
+    import os
+    import tempfile
+
+    from . import incident as inc_mod
+
+    doc = {"zabbix": {"Cert expires in # days": "config_change",
+                      "Bogus name": "no_such_class"},
+           "wazuh": {"533": "config_change"}}
+    fd, path = tempfile.mkstemp(suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False)
+    saved = os.environ.get("INCIDENT_CLASS_FILE")
+    try:
+        os.environ["INCIDENT_CLASS_FILE"] = path
+        m = importlib.reload(inc_mod)
+        # 모르는 클래스는 실어 오지 않는다 — 오타 하나가 판정을 통째로 바꾸면 안 된다
+        assert len(m.CLASS_MAP_ZBX) == 1 and len(m.CLASS_MAP_WZH) == 1, m.CLASS_MAP_ZBX
+        # 키는 정규화된 이름 — 호스트마다 항목이 늘지 않게
+        assert m.classify("Cert expires in 30 days") == "config_change"
+        assert m.classify("Cert expires in 7 days") == "config_change"
+        # Wazuh 는 rule_id 로
+        assert m.classify("아무 이름", rule_id="533") == "config_change"
+        # 태그가 파일보다 우선
+        tags = [{"tag": m.CLASS_TAG, "value": "network"}]
+        assert m.classify("Cert expires in 30 days", tags=tags) == "network"
+        # 파일에 없으면 키워드 폴백
+        assert m.classify("Interface eth0(): Link down") == "network"
+        return 6
+    finally:
+        os.unlink(path)
+        if saved is None:
+            os.environ.pop("INCIDENT_CLASS_FILE", None)
+        else:
+            os.environ["INCIDENT_CLASS_FILE"] = saved
+        importlib.reload(inc_mod)
 
 
 def _class_tag_checks() -> int:
