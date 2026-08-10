@@ -139,13 +139,16 @@ def main():
     # 만성/신규 선판정 — 결정적 판정 검증
     now = time.time()
     day = 86400
-    j = prejudge.judge([], now=now)
+    # 창과 만성 하한을 인자로 준다. 배포된 서버에서 그대로 돌리면 그 서버의 값을 읽어
+    # 실패하고(랩은 PREJUDGE_CHRONIC_MIN=20), 설정이 맞는지 코드가 틀렸는지 알 수 없다.
+    fix = {"window_s": 90 * day, "chronic_min": 5}
+    j = prejudge.judge([], now=now, **fix)
     assert j["verdict"] == "신규" and j["count_window"] == 0, j
-    j = prejudge.judge([now - 2 * day, now - 30 * day], now=now)
+    j = prejudge.judge([now - 2 * day, now - 30 * day], now=now, **fix)
     assert j["verdict"] == "재발" and j["count_window"] == 2 and j["last_seen_days"] == 2.0, j
-    j = prejudge.judge([now - i * 10 * day for i in range(1, 7)], now=now)
+    j = prejudge.judge([now - i * 10 * day for i in range(1, 7)], now=now, **fix)
     assert j["verdict"] == "만성" and j["count_window"] == 6, j
-    j = prejudge.judge([now - 120 * day], now=now)     # 창(90일) 밖 이력은 무시 → 신규
+    j = prejudge.judge([now - 120 * day], now=now, **fix)   # 창 밖 이력은 무시 → 신규
     assert j["verdict"] == "신규", j
     prejudge_checks = 4
 
