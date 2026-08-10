@@ -42,7 +42,7 @@ class ZabbixClient:
         if not method.endswith(".get"):   # 읽기 전용 강제 (작업 원칙 4)
             raise ValueError(f"read-only violation: {method}")
         # 설정 실수는 스택 트레이스가 아니라 한 줄로 말한다. 안 그러면 httpx 내부까지
-        # 20줄이 쏟아져 "무엇을 고쳐야 하는지"가 묻힌다(실측 2026-08-07).
+        # 20줄이 쏟아져 "무엇을 고쳐야 하는지"가 묻힌다(실측 2026-08-10).
         if not self.api.startswith(("http://", "https://")):
             raise RuntimeError(
                 "ZABBIX_URL 이 비었거나 형식이 틀렸다(현재: %r). "
@@ -227,7 +227,7 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
                          now: int) -> tuple:
     """이 호스트에 **지금 열려 있는** 문제 중 현재 인시던트와 연계 관계인 것.
 
-    왜 필요한가 — 실측(2026-08-07). 게이트웨이 시간창(최대 300초) 안에서는 서로 다른
+    왜 필요한가 — 실측(2026-08-10). 게이트웨이 시간창(최대 300초) 안에서는 서로 다른
     클래스가 함께 나는 일이 일어나지 않는다. 실제 관계는 "같은 창에 있다"가 아니라
     **"열려 있는 동안 뒤따랐다"** 형태다(디스크 문제가 열린 동안 자원 압박이 13일에 걸쳐
     96% 비율로 뒤따름). 창을 넓혀서는 잡을 수 없고, 열림 여부를 조건으로 삼아야 잡힌다.

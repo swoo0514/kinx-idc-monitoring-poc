@@ -70,7 +70,7 @@ CASES_CLASSIFY = [
     ("Interface eth0(): Link down", "network"),              # 예전엔 service_down("down")
     ("Interface eth0(): High error rate", "network"),
     ("Website response time is too high", "service_latency"),
-    # 아래는 2026-08-07 실환경 90일 실측에서 미분류(other)로 확인돼 키워드를 보강한 것들.
+    # 아래는 2026-08-10 실환경 90일 실측에서 미분류(other)로 확인돼 키워드를 보강한 것들.
     # 상위 유형이 미분류의 97%를 차지했고, 보강 후 기존 분류를 뺏은 건은 0건이었다.
     ("vdb: Disk read/write request responses are too high (read > 20 ms for 15m)",
      "cpu_io_pressure"),                                     # 미분류의 92%를 차지하던 단일 유형
@@ -272,7 +272,7 @@ def _source_status_checks() -> int:
 def _class_tag_checks() -> int:
     """선언 태그 이름이 벤더 표준과 충돌하지 않는지.
 
-    실측(2026-08-07) — Zabbix 표준 템플릿 트리거가 `class=os`·`class=database` 를 달고
+    실측(2026-08-10) — Zabbix 표준 템플릿 트리거가 `class=os`·`class=database` 를 달고
     나온다. 우리가 같은 이름을 쓰면 한 트리거에 의미가 다른 두 값이 공존하고, 어느 쪽이
     읽힐지가 태그 순서에 좌우된다.
     """
