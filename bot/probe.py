@@ -55,13 +55,23 @@ async def _loki_count(host_label):
         return f"{n} lines"
 
 
-async def loki_host_values():
+async def loki_host_values(lookback_s: int = None):
+    """host 라벨의 값 목록.
+
+    Loki 는 start 를 안 주면 최근 6시간만 본다. 수집기는 7일을 보므로 여기서도 같은
+    창을 넘긴다. 창이 다르면 잠깐 로그가 끊긴 호스트가 진단에서만 사라져, 있지도 않은
+    이름 불일치를 쫓게 된다.
+    """
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url:
         return []
-    from gateway.collector import LOKI_HOST_LABEL
+    from gateway.collector import LOKI_HOST_LABEL, KNOWN_HOST_LOOKBACK_S
+    span = KNOWN_HOST_LOOKBACK_S if lookback_s is None else lookback_s
+    now = int(time.time())
     async with httpx.AsyncClient() as c:
-        r = await c.get(f"{url}/loki/api/v1/label/{LOKI_HOST_LABEL}/values", timeout=5)
+        r = await c.get(f"{url}/loki/api/v1/label/{LOKI_HOST_LABEL}/values", params={
+            "start": str((now - span) * 1_000_000_000),
+            "end": str(now * 1_000_000_000)}, timeout=5)
         return r.json().get("data", [])
 
 
@@ -254,8 +264,15 @@ async def names(limit: int = 500):
     zbx = sorted({h["host"] for h in hosts})
     print("Zabbix 호스트 %d개" % len(zbx))
 
+    # 두 설정은 .env 를 고쳐도 셸을 다시 읽지 않으면 프로세스에 안 들어온다.
+    # 안 먹은 채로 결과를 보면 없는 불일치를 쫓게 되므로 먼저 찍는다.
+    print("HOST_LABEL_MAP: %s" % (os.environ.get("HOST_LABEL_MAP") or "(비어 있음)"))
+    print("LOG_AXIS_EXEMPT_HOSTS: %s"
+          % (os.environ.get("LOG_AXIS_EXEMPT_HOSTS") or "(비어 있음)"))
+
     loki = set(await loki_host_values())
-    print("Loki host 라벨 값 %d개" % len(loki))
+    print("Loki host 라벨 값 %d개 (최근 %d일)"
+          % (len(loki), collector.KNOWN_HOST_LOOKBACK_S // 86400))
 
     # 수집기와 같은 해석 규칙을 쓴다 — 여기서만 다르게 풀면 진단이 현실과 어긋난다.
     resolved = [(h["host"], collector._resolve_label(h["host"], h)) for h in hosts]
