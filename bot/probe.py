@@ -138,6 +138,12 @@ async def openlink(host_name: str):
 
     from gateway import collector, incident
 
+    if host_name.startswith(("http://", "https://")):
+        raise RuntimeError(
+            "인자는 Zabbix 호스트명이다 — 주소가 아니라 감시 대상 이름을 넣는다. "
+            "주소는 ZABBIX_URL 환경변수로 준다. "
+            "이름을 모르면 먼저 `python bot/probe.py problems` 로 목록을 본다.")
+
     zbx = collector.ZabbixClient()
     now = int(time.time())
     print("규칙 %d건 / 측정: %s" % (len(incident.OPEN_LINK_RULES), incident.OPEN_LINK_MEASURED))
@@ -197,4 +203,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as e:
+        # 설정·인자 실수에 스택을 붙이면 무엇을 고쳐야 하는지가 묻힌다.
+        sys.exit(str(e))

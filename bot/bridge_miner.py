@@ -1352,4 +1352,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as e:
+        # 설정 실수에 스택을 붙이면 무엇을 고쳐야 하는지가 묻힌다.
+        sys.exit(str(e))
