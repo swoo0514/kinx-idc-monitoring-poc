@@ -35,30 +35,41 @@ def _env_float(name: str, default: float) -> float:
 # 위에서부터 먼저 걸리는 것. 순서와 키워드 폭이 곧 분류 정확도다 — GATEWAY_GUIDE §14.
 # 손대면 selftest 의 CASES_CLASSIFY 를 함께 늘린다.
 CLASS_RULES = [
-    ("replication", ["복제", "replication", "repl", "slave", "seconds_behind"]),
+    ("replication", ["복제", "replication", "repl", "slave", "seconds_behind",
+                     "리플리케이션", "슬레이브"]),
     ("cpu_io_pressure", ["iowait", "io wait", "i/o", "load average", "cpu", "load",
-                         "디스크 지연", "disk latency", "await",
+                         "디스크 지연", "디스크 응답", "disk latency", "await",
+                         "부하 평균", "아이오웨이트",
                          "read/write request", "disk read/write"]),
     ("auth_security", ["브루트포스", "brute", "authentication", "login fail", "sshd",
                        "unauthorized", "비인가", "sca", "fim", "rootcheck",
-                       "integrity", "무결성", "syscheck", "파일 변경", "루트킷",
+                       "integrity", "무결성", "syscheck", "파일 무결성", "루트킷",
+                       "로그인 실패", "권한 상승", "인증 실패",
                        # Zabbix 쪽 인증 파일 변경 감시. Wazuh FIM 과 같은 성격이다.
                        "/etc/passwd", "/etc/shadow"]),
     ("memory_pressure", ["메모리", "memory", "스왑", "swap", "oom"]),
     ("disk_space", ["디스크 사용률", "디스크 사용", "filesystem", "vfs.fs", "disk space",
-                    "space is", "pused"]),
+                    "space is", "pused",
+                    "디스크 여유", "여유 공간", "용량 부족", "파일시스템", "파티션"]),
     ("network", ["interface", "packet", "drop", "crc", "link down", "ifoperstatus",
                  # network 만 한글 키워드가 없어 한글 트리거명이 미분류로 떨어졌다.
-                 "인터페이스", "패킷", "링크 다운", "인바운드 에러", "아웃바운드 에러"]),
+                 "인터페이스", "패킷", "링크 다운", "인바운드 에러", "아웃바운드 에러",
+                 "회선"]),
     ("service_down", ["proc.num", "process", "not running", "not available", "재기동",
                       "down", "unreachable",
                       # 표준 템플릿·일반 용어만 둔다. 사이트 관용구는 SITE_CLASS_KEYWORDS.
-                      "restarted", "health check", "not response", "no snmp data"]),
-    ("service_latency", ["지연", "latency", "response time", "응답", "qps", "queue"]),
+                      "restarted", "health check", "not response", "no snmp data",
+                      # "응답 없음"·"무응답"은 느린 것이 아니라 죽은 것이다. service_latency
+                      # 의 "응답"이 가로채지 않도록 이 클래스(앞 순서)에 둔다.
+                      "무응답", "응답 없음", "다운", "중지", "정지", "죽음", "미개방",
+                      "프로세스"]),
+    ("service_latency", ["지연", "latency", "response time", "응답", "qps", "queue",
+                         "적체", "처리 지연"]),
     # 마지막에 둔다 — "바뀌었다"는 generic 이라 앞에 두면 다른 판정을 가로챈다.
     # 나머지 클래스가 "무엇이 잘못됐나"라면 이 축은 "무엇이 바뀌었나"다.
     ("config_change", ["has changed", "was changed", "changed on", "구성 변경",
-                       "listened ports", "installed packages", "설정 변경"]),
+                       "listened ports", "installed packages", "설정 변경",
+                       "설정 파일", "패키지", "변경 감지", "변경됨"]),
 ]
 
 # 사이트 고유 트리거명 키워드. 조직마다 다르므로 환경변수로 받는다.

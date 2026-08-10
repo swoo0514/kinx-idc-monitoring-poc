@@ -69,10 +69,35 @@ CASES_CLASSIFY = [
     ("Nginx process is not running", "service_down"),
     ("Interface eth0(): Link down", "network"),              # 예전엔 service_down("down")
     ("Interface eth0(): High error rate", "network"),
-    # network 만 한글 키워드가 없어 한글 트리거명이 미분류로 떨어지던 것(랩 실측)
+    # 한글 알림명 — 클래스마다 한글 키워드가 고르지 않아 21/41 이 틀렸다(전수 감사).
+    # 특히 "응답 없음"은 느린 것이 아니라 죽은 것인데 service_latency 의 "응답"이 가로챘고,
+    # service_down 에는 한글이 "재기동" 하나뿐이었다.
     ("Ethernet1/1: 인바운드 에러 급증", "network"),
     ("인터페이스 링크 다운", "network"),
     ("패킷 유실 급증", "network"),
+    ("회선 단절", "network"),
+    ("SSH 서비스 응답 없음", "service_down"),
+    ("웹 서비스 무응답", "service_down"),
+    ("서버 무응답 (ping fail)", "service_down"),
+    ("프로세스 다운 - nginx", "service_down"),
+    ("nginx 프로세스 중지됨", "service_down"),
+    ("서비스 정지", "service_down"),
+    ("데몬 죽음", "service_down"),
+    ("포트 미개방", "service_down"),
+    ("응답 시간 초과", "service_latency"),      # "응답"이 여기 남아야 하는 경우
+    ("웹 응답 지연", "service_latency"),
+    ("큐 적체", "service_latency"),
+    ("디스크 응답 지연", "cpu_io_pressure"),    # 지연이지만 자원 압박 — 앞 순서가 이긴다
+    ("부하 평균 높음", "cpu_io_pressure"),
+    ("아이오웨이트 상승", "cpu_io_pressure"),
+    ("리플리케이션 끊김", "replication"),
+    ("로그인 실패 반복", "auth_security"),
+    ("권한 상승 시도", "auth_security"),
+    ("디스크 여유 공간 부족", "disk_space"),
+    ("파일시스템 가득 참", "disk_space"),
+    ("루트 파티션 용량 부족", "disk_space"),
+    ("설정 파일 변경됨", "config_change"),      # auth_security 의 "파일 무결성"과 갈라진다
+    ("패키지 목록 변경", "config_change"),
     ("Website response time is too high", "service_latency"),
     # 아래는 2026-08-10 실환경 90일 실측에서 미분류(other)로 확인돼 키워드를 보강한 것들.
     # 상위 유형이 미분류의 97%를 차지했고, 보강 후 기존 분류를 뺏은 건은 0건이었다.
