@@ -78,19 +78,36 @@ def _push_gated(inc, context: dict, reason: str) -> dict:
     note = (f"*분석 생략 — 봇 판단*\n"
             f"사유: {reason}\n"
             f"유형: {classes}  ·  알림 {len(inc.alerts)}건\n"
-            f"교차 신호가 없어 LLM 을 호출하지 않았다. 판정과 유형만 기록한다.")
+            f"교차 신호가 없어 LLM 을 호출하지 않았다. 판정과 유형만 기록한다.\n"
+            f"판단이 틀렸다고 보면 Run Workflow 로 분석을 직접 요청한다.")
     return keep.push_alert(inc.alerts[0].alert_name or "(알림명 없음)",
                            inc.dominant_sev(), inc.host, note,
                            prejudge=verdict, fingerprint=inc.fingerprint(),
                            classes=classes, alert_count=len(inc.alerts),
-                           sources=_sources_note(context))
+                           sources=_sources_note(context),
+                           playbook="analyze", extra={"analyze_ref": analyze_ref(inc)})
 
 
-async def run_incident(inc) -> dict:
+def analyze_ref(inc) -> str:
+    """사람이 분석을 다시 요청할 때 사건을 되살릴 재료.
+
+    Keep 은 알림 속성을 문자열로 넘기므로 한 줄로 눌러 담는다. 사건을 통째로 저장해 두지
+    않고 이 문자열로 되살리는 이유는, 요청 시점에 Zabbix 를 다시 읽어야 그동안 달라진
+    상태가 분석에 들어오기 때문이다.
+    """
+    return "|".join("%s,%s,%s,%s" % (a.source, a.event_id, a.trigger_id or "",
+                                     a.incident_class)
+                    for a in inc.alerts)
+
+
+async def run_incident(inc, force: bool = False) -> dict:
     """병합 인시던트 트리아지 — 창 마감 후 IncidentManager.on_close 가 호출. 30초 예산 기준점.
 
     LLM·Slack 은 블로킹이라 to_thread 로 감싼다 — 동시 인시던트 타이머를 막지 않게.
     예외를 위로 던지지 않는다.
+
+    force 는 사람이 직접 요청한 경우다. 발동 조건을 건너뛰고 분석한다 — 봇이 안 하기로
+    판단한 것을 사람이 뒤집는 경로이므로 조건을 다시 걸면 요청이 무시된다.
     """
     t0 = time.monotonic()
     timings = {}
@@ -114,7 +131,7 @@ async def run_incident(inc) -> dict:
         }
     timings["collect_s"] = round(time.monotonic() - t0, 2)
 
-    fire, reason = incident_mod.should_triage(inc, context)
+    fire, reason = (True, "사람 요청") if force else incident_mod.should_triage(inc, context)
     if not fire:
         await asyncio.to_thread(_push_gated, inc, context, reason)
         timings["total_s"] = round(time.monotonic() - t0, 2)

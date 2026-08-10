@@ -1,0 +1,34 @@
+# Keep 워크플로 — 사람이 요청하는 분석 (프로비저닝 as-code).
+# 봇이 건너뛴 알림 카드에서 "Run Workflow" → SSH로 core → 그 사건을 다시 분석.
+#
+# 왜 필요한가 — 봇은 교차 신호가 없거나 심각도가 낮으면 분석하지 않는다. 실환경처럼 로그·보안이
+# 아직 안 깔린 곳에서는 건너뛰는 쪽이 훨씬 많다. 그 판단이 늘 맞지는 않으므로, 담당자가
+# "이건 봐야겠다" 싶을 때 직접 부를 수 있어야 한다. 그 경로가 없으면 봇의 판단이 곧 최종
+# 결정이 되고, 사람은 뒤집을 방법이 없다.
+#
+# 승인 계층을 새로 만들지 않는다 — 데모 B(시스템 변경)·월간 리포트(고객 발송)·규칙 교체에
+# 쓰던 것을 그대로 쓰는 네 번째 적용이다. 설계 근거는 keep/KEEP_GUIDE.md.
+workflow:
+  id: analyze-now
+  name: Analyze this alert now
+  description: Run the triage pipeline on an alert the bot skipped
+  triggers:
+    - type: manual
+  steps:
+    - name: analyze
+      # 안전 게이트 — 분석 요청이 붙은 카드에서만 실행된다. 다른 알림에서 실수로 Run 해도
+      # 아무 일도 일어나지 않는다(데모 B 의 service_restart 게이트와 같은 형태).
+      if: "'{{ alert.playbook }}' == 'analyze'"
+      provider:
+        type: ssh
+        config: "{{ providers.core-ansible }}"
+        with:
+          # analyze_ref 는 사건을 되살릴 재료다. 사건을 저장해 두는 대신 이 문자열로
+          # 되살리는 이유는, 요청 시점에 Zabbix 를 다시 읽어야 그동안 달라진 상태가
+          # 분석에 들어오기 때문이다. 결과는 평소와 같은 Slack 카드로 간다.
+          command: >-
+            cd /home/rocky/kinx-idc-monitoring-poc/bot &&
+            set -a && . .env && set +a &&
+            ~/bot-venv/bin/python analyze_now.py
+            --host '{{ alert.host }}'
+            --ref '{{ alert.analyze_ref }}'

@@ -234,13 +234,14 @@ def main():
     class_tag_checks = _class_tag_checks()
     class_map_checks = _class_map_checks()
     pending_checks = _pending_checks()
+    analyze_checks = _analyze_ref_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
              + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks + class_tag_checks
-             + class_map_checks + pending_checks)
+             + class_map_checks + pending_checks + analyze_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -1018,6 +1019,54 @@ def _pending_checks() -> int:
         pending.PATH, pending.MAX_REPLAY = saved_path, saved_max
         shutil.rmtree(d, ignore_errors=True)
     return 10
+
+
+def _analyze_ref_checks() -> int:
+    """사람이 요청하는 분석 — 카드에 실은 재료로 사건이 되살아나는지.
+
+    이 왕복이 깨지면 Run Workflow 를 눌러도 아무 일이 없거나 엉뚱한 사건을 분석한다.
+    둘 다 눌러 본 사람은 알 수 없는 실패라 여기서 잠근다.
+    """
+    import os
+    import sys
+    import time
+
+    from . import incident, triage
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from analyze_now import parse_ref
+
+    def _a(eid, tid, cls):
+        return incident.Alert(source="zabbix-internal", event_id=eid, trigger_id=tid,
+                              host="h1", alert_name="n", sev="SEV2",
+                              incident_class=cls, recv=time.monotonic())
+
+    inc = incident.Incident(key=("h1", "replication"), host="h1",
+                            alerts=[_a("101", "25", "replication"),
+                                    _a("102", "26", "cpu_io_pressure")],
+                            opened_at=0.0, last_at=0.0)
+    ref = triage.analyze_ref(inc)
+    back = parse_ref(ref, "h1")
+    assert [x.event_id for x in back] == ["101", "102"], back
+    assert [x.trigger_id for x in back] == ["25", "26"], back
+    assert [x.incident_class for x in back] == ["replication", "cpu_io_pressure"], back
+    assert all(x.host == "h1" for x in back)
+
+    # 트리거 없는 알림(Wazuh 등)도 되살아나야 한다 — 빈 칸이 형식을 깨면 안 된다
+    inc2 = incident.Incident(key=("h2", "auth_security"), host="h2",
+                             alerts=[_a("7", "", "auth_security")],
+                             opened_at=0.0, last_at=0.0)
+    back2 = parse_ref(triage.analyze_ref(inc2), "h2")
+    assert len(back2) == 1 and back2[0].trigger_id == "" and back2[0].event_id == "7"
+
+    # 값이 망가졌으면 조용히 넘어가지 말고 거부한다
+    for bad in ("", "쓰레기", "zabbix-internal,"):
+        try:
+            parse_ref(bad, "h1")
+            raise AssertionError("망가진 ref 를 받아들였다: %r" % bad)
+        except RuntimeError:
+            pass
+    return 8
 
 
 if __name__ == "__main__":

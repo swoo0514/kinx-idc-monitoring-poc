@@ -70,6 +70,7 @@ async def _replay_pending():
             alert_name=r.get("alert_name", ""), sev=r.get("sev", "SEV2"),
             incident_class=r.get("class", "other"), recv=time.monotonic()))
 
+
 IDEMPOTENCY_TTL_S = 3600
 _seen: dict = {}  # (source, event_id, event_value) -> monotonic. 프로덕션은 Redis (가이드 §10)
 
@@ -172,21 +173,23 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
         bg.add_task(_incidents.submit, alert)
     elif route in ("digest", "dashboard_only"):
         bg.add_task(_queue_low_severity, host, alert_name, sev, cls,
-                    route == "digest")
+                    route == "digest", f"{source},{event_id},{trigger_id or ''},{cls}")
     elif route == "remediate":
         bg.add_task(_queue_remediation, host, alert_name, sev, decision["playbook"],
                     tag_router.tag_value(tags or [], "service") or "")
 
 
-def _queue_low_severity(host, alert_name, sev, cls, notify: bool):
+def _queue_low_severity(host, alert_name, sev, cls, notify: bool, ref: str = ""):
     """SEV3(digest)·SEV4(dashboard_only) — 기록만 남기고 분석은 생략 (GATEWAY_GUIDE §19)."""
     # fingerprint 를 (호스트, 유형)으로 고정해 같은 종류가 한 행에 모이게 한다(반복 빈도 랭킹용).
     fp = hashlib.sha1(f"lowsev|{host}|{cls}".encode()).hexdigest()[:12]
     tier = "덜 급함(digest)" if notify else "대시보드 전용"
     note = (f"*{tier}*\n유형: `{cls}`  ·  호스트: `{host}`\n"
-            f"심각도가 낮아 분석을 생략했다. 반복 빈도 집계를 위해 기록만 남긴다.")
+            f"심각도가 낮아 분석을 생략했다. 반복 빈도 집계를 위해 기록만 남긴다.\n"
+            f"확인이 필요하면 Run Workflow 로 분석을 직접 요청한다.")
     res = keep.push_alert(alert_name or "(알림명 없음)", sev, host, note,
-                          fingerprint=fp, classes=cls)
+                          fingerprint=fp, classes=cls,
+                          playbook="analyze", extra={"analyze_ref": ref})
     posted = slack.post_digest(alert_name, sev, host) if notify else {"skipped": True}
     log.info("low-sev queued host=%s sev=%s class=%s keep=%s slack=%s",
              host, sev, cls, res.get("ok"), posted.get("ok"))
