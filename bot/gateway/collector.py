@@ -274,9 +274,13 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
         link = incident.open_link(cls, current_classes)
         if not link:
             continue
-        out.append({"name": p.get("name") or "", "class": cls,
-                    "open_for_s": age, "link": link})
-    out.sort(key=lambda x: -x["open_for_s"])
+        out.append({"name": p.get("name") or "", "class": cls, "open_for_s": age,
+                    # 오래 열린 것은 선행 원인이 아니라 방치 항목이다. 지우지 않고 표시한다 —
+                    # 지우면 "그런 문제가 없다"로 읽히고, 그대로 두면 인과로 읽힌다.
+                    "stale": age >= incident.OPEN_LINK_STALE_AGE_S,
+                    "link": link})
+    # 최근 것을 먼저 — 상한에 걸려 잘릴 때 오래된 방치 항목이 아니라 선행 후보가 남게.
+    out.sort(key=lambda x: x["open_for_s"])
     return out[:incident.OPEN_LINK_MAX], SOURCE_OK
 
 

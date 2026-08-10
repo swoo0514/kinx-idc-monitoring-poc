@@ -266,7 +266,8 @@ def _source_status_checks() -> int:
     # 프롬프트와 코드의 동기 — 상태를 안 보는 프롬프트로 되돌아가면 실패
     assert "sources.security" in llm.TRIAGE_SYSTEM, "프롬프트가 조회 상태를 안 본다"
     assert "sources.open_problems" in llm.TRIAGE_SYSTEM, "프롬프트가 열린 문제 상태를 안 본다"
-    return 12
+    assert "stale" in llm.TRIAGE_SYSTEM, "프롬프트가 장기 미해소를 구분하지 않는다"
+    return 13
 
 
 def _class_tag_checks() -> int:
@@ -371,6 +372,30 @@ def _open_link_checks() -> int:
     assert "10.9.9.9" not in blob, "IP 누수"
     assert masked["open_problems"][0]["link"]["rate"] == 0.9, "측정 수치가 유실됐다"
     assert masked["open_problems"][0]["link"]["measured"], "측정 조건이 유실됐다"
+    assert masked["open_problems"][0]["stale"] is False
+    n += 5
+
+    # 장기 미해소는 선행 원인이 아니라 방치 항목 — 지우지 않고 표시한다.
+    # 실측(2026-08-10 실환경): 3년 넘게 열린 문제가 있었고 90일 창 미해소는 전부 7일 이상이었다.
+    import asyncio
+
+    from . import collector
+    now = 1_800_000_000
+
+    class _FakeZbx:
+        async def call(self, client, method, params):
+            return [
+                {"eventid": "1", "name": "Free disk space is less than 10%",
+                 "clock": now - 3 * 3600},                    # 3시간 — 선행 후보
+                {"eventid": "2", "name": "/data: Disk space is low (used > 90%)",
+                 "clock": now - 40 * 86400},                  # 40일 — 방치
+            ]
+    out, st = asyncio.run(collector._open_problems(
+        _FakeZbx(), None, "1", {"cpu_io_pressure"}, set(), now))
+    assert st == "ok" and len(out) == 2, out
+    # 최근 것이 먼저 — 상한에 잘릴 때 방치 항목이 아니라 선행 후보가 남아야 한다
+    assert out[0]["stale"] is False and out[1]["stale"] is True, out
+    assert out[0]["open_for_s"] < out[1]["open_for_s"]
     n += 4
 
     # 상태 계약 — 조회 실패가 "선행 문제 없음"으로 읽히면 안 된다

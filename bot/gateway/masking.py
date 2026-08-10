@@ -64,7 +64,7 @@ def _open_problem_item(p: dict, m) -> dict:
     """
     link = p.get("link") or {}
     return {"name": m(p.get("name")), "class": p.get("class"),
-            "open_for_s": p.get("open_for_s"),
+            "open_for_s": p.get("open_for_s"), "stale": bool(p.get("stale")),
             "link": {"rate": link.get("rate"), "days": link.get("days"),
                      "overlaps": link.get("overlaps"),
                      "open_class": link.get("open_class"),

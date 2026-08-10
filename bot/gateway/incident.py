@@ -165,6 +165,15 @@ OPEN_LINK_RULES, OPEN_LINK_MEASURED = _load_open_link_rules()
 # 방금 난 것은 이미 시간창 병합 대상이다. 그보다 오래 열린 것만 "선행 문제"로 본다.
 OPEN_LINK_MIN_AGE_S = _env_int("OPEN_LINK_MIN_AGE_S", 300)
 OPEN_LINK_MAX = _env_int("OPEN_LINK_MAX", 3)
+# 오래 열린 것은 선행 원인으로 보지 않는다 — 버리지는 않고 표시만 한다.
+#
+# 실측(2026-08-10, 실환경 읽기전용 조회): 3년 넘게 미해소인 문제가 있었고, 90일 창 안의
+# 미해소 22건도 **전부 7일 이상**이며 그중 디스크 문제가 2건이었다. 상한이 없으면 그
+# 호스트의 모든 자원 압박 알림에 "디스크 문제가 30일째 열려 있다"가 영원히 붙는다.
+# 30일 된 알림은 오늘 급등의 선행 원인이 아니라 **별개의 방치 항목**이다.
+#
+# 측정 자체는 장기 열림도 포함했으므로(최장 약 40일) 이 값은 통계가 아니라 운영 판단이다.
+OPEN_LINK_STALE_AGE_S = _env_int("OPEN_LINK_STALE_AGE_S", 7 * 86400)
 
 
 def open_link(open_cls: str, current_classes) -> dict:
