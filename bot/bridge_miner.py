@@ -389,7 +389,10 @@ def fetch_wazuh(days: int) -> list:
                 epoch = int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
             except ValueError:
                 continue
-            out.append({"host": host, "cls": cls, "ts": epoch, "name": name, "src": "wazuh"})
+            # groups 를 남긴다 — Zabbix 의 declared 와 같은 역할. 없으면 --load 재분류가
+            # 이름만 보고 판단해 Wazuh 분류 품질이 실제보다 나쁘게 나온다.
+            out.append({"host": host, "cls": cls, "ts": epoch, "name": name, "src": "wazuh",
+                        "groups": rule.get("groups")})
     print("[wazuh] 알림 %d건 → 분류 완료" % len(out), file=sys.stderr)
     return out
 
@@ -1217,7 +1220,8 @@ def main():
         for e in events:
             tags = ([{"tag": incident.CLASS_TAG, "value": e["declared"]}]
                     if e.get("declared") else None)
-            new_cls = incident.classify(e.get("name") or "", tags=tags)
+            new_cls = incident.classify(e.get("name") or "", tags=tags,
+                                        groups=e.get("groups"))
             if new_cls != e.get("cls"):
                 rec += 1
             e["cls"] = new_cls

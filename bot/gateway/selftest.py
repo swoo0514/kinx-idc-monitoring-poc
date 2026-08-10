@@ -69,6 +69,10 @@ CASES_CLASSIFY = [
     ("Nginx process is not running", "service_down"),
     ("Interface eth0(): Link down", "network"),              # 예전엔 service_down("down")
     ("Interface eth0(): High error rate", "network"),
+    # network 만 한글 키워드가 없어 한글 트리거명이 미분류로 떨어지던 것(랩 실측)
+    ("Ethernet1/1: 인바운드 에러 급증", "network"),
+    ("인터페이스 링크 다운", "network"),
+    ("패킷 유실 급증", "network"),
     ("Website response time is too high", "service_latency"),
     # 아래는 2026-08-10 실환경 90일 실측에서 미분류(other)로 확인돼 키워드를 보강한 것들.
     # 상위 유형이 미분류의 97%를 차지했고, 보강 후 기존 분류를 뺏은 건은 0건이었다.

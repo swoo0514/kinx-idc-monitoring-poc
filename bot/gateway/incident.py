@@ -47,7 +47,9 @@ CLASS_RULES = [
     ("memory_pressure", ["메모리", "memory", "스왑", "swap", "oom"]),
     ("disk_space", ["디스크 사용률", "디스크 사용", "filesystem", "vfs.fs", "disk space",
                     "space is", "pused"]),
-    ("network", ["interface", "packet", "drop", "crc", "link down", "ifoperstatus"]),
+    ("network", ["interface", "packet", "drop", "crc", "link down", "ifoperstatus",
+                 # network 만 한글 키워드가 없어 한글 트리거명이 미분류로 떨어졌다.
+                 "인터페이스", "패킷", "링크 다운", "인바운드 에러", "아웃바운드 에러"]),
     ("service_down", ["proc.num", "process", "not running", "not available", "재기동",
                       "down", "unreachable",
                       # 표준 템플릿·일반 용어만 둔다. 사이트 관용구는 SITE_CLASS_KEYWORDS.
