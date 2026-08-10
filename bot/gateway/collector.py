@@ -41,6 +41,16 @@ class ZabbixClient:
     async def call(self, client: httpx.AsyncClient, method: str, params: dict):
         if not method.endswith(".get"):   # 읽기 전용 강제 (작업 원칙 4)
             raise ValueError(f"read-only violation: {method}")
+        # 설정 실수는 스택 트레이스가 아니라 한 줄로 말한다. 안 그러면 httpx 내부까지
+        # 20줄이 쏟아져 "무엇을 고쳐야 하는지"가 묻힌다(실측 2026-08-07).
+        if not self.api.startswith(("http://", "https://")):
+            raise RuntimeError(
+                "ZABBIX_URL 이 비었거나 형식이 틀렸다(현재: %r). "
+                "base 까지만 적는다 — 코드가 /api_jsonrpc.php 를 붙인다. "
+                ".env 는 `set -a; source bot/.env; set +a` 로 읽는다"
+                "(source 만 하면 셸 변수라 파이썬이 못 본다)." % self.api)
+        if not self.token:
+            raise RuntimeError("ZABBIX_TOKEN 이 비었다. 읽기 전용 토큰을 설정한다.")
         self._id += 1
         r = await client.post(
             self.api,
