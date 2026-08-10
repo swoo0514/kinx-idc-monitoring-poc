@@ -114,8 +114,56 @@ lab/
 ├── docker-compose.yml                    # 관측 코어 4종 서비스 정의 매니페스트
 ├── .env.example                          # 자격 증명 템플릿 (.env 파일 버전 관리 제외)
 ├── loki/loki-config.yml                  # Loki 수집 및 보존 정책 설정 파일
+├── alloy/config.alloy                    # 컨테이너 로그 수집 및 호스트 라벨 정규화 정의
 └── grafana/provisioning/datasources/     # Grafana 데이터소스 자동 프로비저닝 정의
 ```
+
+---
+
+## 4-1. 컨테이너 로그 수집 (로그 축)
+
+### 적용 배경
+
+`bot/probe.py names` 를 통한 전수 대조 결과, Zabbix 등록 호스트 14대 중 Loki 및 Wazuh 양쪽에 로그가 수집되는 호스트는 2대로 확인되었습니다. 해당 2대는 Ansible(`ansible/deploy_agents.yml`)로 에이전트를 배포한 VM 이며, 나머지 호스트 중 6대(`Zabbix server`, `lab-switch1`, `lab-db-agent`, `customer-a` ~ `customer-c`)는 Docker 컨테이너로 구성되어 있어 SSH 기반 에이전트 배포 대상에 해당하지 않습니다.
+
+컨테이너 단위 개별 배포 대신, Docker 소켓을 통해 컨테이너 로그를 일괄 수집하는 Alloy 컨테이너 1식을 구성하여 대응합니다.
+
+### 호스트 라벨 정규화 방식
+
+수집 대상 컨테이너에 `kinx.host` 라벨을 부여하고, Alloy 가 해당 값을 Loki 의 `host` 라벨로 변환합니다. 라벨 값은 **Zabbix 호스트명과 동일하게 지정**하며, 이를 통해 분석 봇의 조회 대상 이름과 로그 라벨이 일치합니다.
+
+| 항목 | 값 |
+|---|---|
+| Docker 라벨 | `kinx.host` (Compose `labels` 절에 정의) |
+| Alloy 메타 라벨 | `__meta_docker_container_label_kinx_host` (비영숫자는 밑줄로 치환) |
+| 변환 결과 | Loki `host` 라벨 |
+| 부가 라벨 | `container` (컨테이너명), `job` (`docker` 고정) |
+
+복수 컨테이너를 단일 논리 호스트로 묶을 수 있습니다. 예를 들어 MSP 고객 A 의 웹·DB 마스터·DB 슬레이브·에이전트 4개 컨테이너는 모두 `customer-a` 로 지정되어, `{host="customer-a"}` 질의 시 통합 조회됩니다. `container` 라벨로 발생 컨테이너를 구분합니다.
+
+`kinx.host` 라벨이 부여되지 않은 컨테이너는 수집 대상에서 제외됩니다. 이를 통해 Loki·Grafana 등 관측 도구 자체의 로그가 감시 대상 데이터에 혼입되는 것을 방지합니다.
+
+### 기동 및 검증
+
+```bash
+docker compose up -d alloy
+```
+
+```bash
+# 1. 수집 대상으로 인식된 컨테이너 확인 (Alloy 내장 UI)
+curl -s localhost:12345/api/v0/web/components | head
+
+# 2. Loki 에 등록된 host 라벨 값 확인 — 위 표의 6개 호스트가 추가되어야 함
+curl -s "localhost:3100/loki/api/v1/label/host/values"
+
+# 3. 봇 기준 전수 대조 (수집기와 동일한 이름 해석 규칙 적용)
+cd ../bot && python3 probe.py names
+```
+
+### 보안 및 운영 고려사항
+
+- **Docker 소켓 접근:** 읽기 전용(`:ro`)으로 마운트합니다. 소켓 접근 권한은 호스트 제어 권한과 동등하므로, 실환경 적용 시에는 소켓 프록시 도입 또는 파일 기반 수집 방식으로의 전환 검토가 필요합니다.
+- **적용 범위:** 본 구성은 랩 환경의 컨테이너 대상 방식입니다. VM 호스트는 `ansible/templates/alloy_config.alloy.j2` 를 통해 systemd 저널을 수집하며, 해당 방식에서는 배포 시점에 FQDN 을 통일하므로 별도 라벨 매핑이 불필요합니다.
 
 ---
 

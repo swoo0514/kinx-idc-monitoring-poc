@@ -42,6 +42,8 @@ services:
   zabbix-server:
     image: zabbix/zabbix-server-mysql:alpine-7.0.27
     container_name: kinx-zabbix-server
+    labels:
+      kinx.host: "Zabbix server"
     environment:
       DB_SERVER_HOST: mariadb
       MYSQL_DATABASE: ${MYSQL_DATABASE}
@@ -161,9 +163,29 @@ services:
       - lab_net
     restart: unless-stopped
 
+  # 컨테이너 로그 → Loki. kinx.host 라벨을 단 컨테이너만 걷고, 그 값이 Loki host 라벨이
+  # 된다(= Zabbix 호스트명). 도커 소켓은 읽기 전용으로만 준다. 근거는 lab/README.md.
+  alloy:
+    image: grafana/alloy:v1.18.1
+    container_name: kinx-alloy
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    networks:
+      - lab_net
+    restart: unless-stopped
+
   mariadb-slave:
     image: mariadb:10.11
     container_name: kinx-mariadb-slave
+    labels:
+      kinx.host: "lab-db-agent"
     profiles: ["ha"]
     command:
       - --character-set-server=utf8mb4
@@ -192,6 +214,8 @@ services:
   zabbix-agent2:
     image: zabbix/zabbix-agent2:alpine-7.0.27
     container_name: kinx-zabbix-agent2
+    labels:
+      kinx.host: "lab-db-agent"
     profiles: ["ha"]
     environment:
       ZBX_SERVER_HOST: zabbix-server
@@ -207,6 +231,8 @@ services:
   snmpsim:
     image: thola/snmpsim
     container_name: kinx-snmpsim
+    labels:
+      kinx.host: "lab-switch1"
     profiles: ["chaos"]
     # 이미지 ENTRYPOINT 가 이미 responder 이므로 옵션만 전달(프로그램명 넣으면 인자로 오인).
     command: ["--data-dir=/data", "--agent-udpv4-endpoint=0.0.0.0:1161"]
@@ -223,6 +249,8 @@ services:
   customer-a-db-master:
     image: mariadb:10.11
     container_name: kinx-cust-a-db-master
+    labels:
+      kinx.host: "customer-a"
     profiles: ["msp"]
     command:
       - --server-id=3
@@ -240,6 +268,8 @@ services:
   customer-a-db-slave:
     image: mariadb:10.11
     container_name: kinx-cust-a-db-slave
+    labels:
+      kinx.host: "customer-a"
     profiles: ["msp"]
     command:
       - --server-id=4
@@ -256,6 +286,8 @@ services:
   customer-a-web:
     image: nginx:alpine
     container_name: kinx-cust-a-web
+    labels:
+      kinx.host: "customer-a"
     profiles: ["msp"]
     networks:
       - lab_net
@@ -264,6 +296,8 @@ services:
   customer-a-agent:
     image: zabbix/zabbix-agent2:alpine-7.0.27
     container_name: kinx-cust-a-agent
+    labels:
+      kinx.host: "customer-a"
     profiles: ["msp"]
     environment:
       ZBX_SERVER_HOST: zabbix-server
@@ -277,6 +311,8 @@ services:
   customer-b-agent:
     image: zabbix/zabbix-agent2:alpine-7.0.27
     container_name: kinx-cust-b-agent
+    labels:
+      kinx.host: "customer-b"
     profiles: ["msp"]
     environment:
       ZBX_SERVER_HOST: zabbix-server
@@ -289,6 +325,8 @@ services:
   customer-c-agent:
     image: zabbix/zabbix-agent2:alpine-7.0.27
     container_name: kinx-cust-c-agent
+    labels:
+      kinx.host: "customer-c"
     profiles: ["msp"]
     environment:
       ZBX_SERVER_HOST: zabbix-server

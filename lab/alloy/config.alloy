@@ -1,0 +1,45 @@
+// 랩 컨테이너 로그를 Loki 로 보낸다. 설계 근거와 검증 절차는 lab/README.md 로그 축 절.
+// VM 호스트는 ansible/templates/alloy_config.alloy.j2 로 저널을 보낸다 — 여기는 컨테이너용.
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "labeled" {
+  targets = discovery.docker.containers.targets
+
+  // kinx.host 를 안 단 컨테이너는 버린다. 안 버리면 Loki·Grafana 자신의 로그까지 들어와
+  // host 라벨이 비고, 감시 대상과 감시 도구가 같은 화면에 섞인다.
+  rule {
+    source_labels = ["__meta_docker_container_label_kinx_host"]
+    regex         = ""
+    action        = "drop"
+  }
+
+  // 이 한 줄이 이름을 맞추는 지점이다. 컨테이너 이름(kinx-cust-a-web)이 아니라
+  // 사람이 정한 Zabbix 호스트명(customer-a)을 Loki 라벨로 쓴다.
+  rule {
+    source_labels = ["__meta_docker_container_label_kinx_host"]
+    target_label  = "host"
+  }
+
+  // 한 호스트에 컨테이너가 여럿이면 어느 것에서 나온 줄인지 구분한다.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/?(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "lab" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.labeled.output
+  labels     = { job = "docker" }
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
