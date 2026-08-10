@@ -235,14 +235,22 @@ def _resolve_label(zbx_host: str, host_obj: dict) -> str:
     return zbx_host
 
 
-def log_axis_exempt(zbx_host: str) -> bool:
-    """로그·보안 축이 없는 것이 정상인 호스트인가.
+def axis_exempt(zbx_host: str, axis: str) -> bool:
+    """그 축이 없는 것이 정상인 호스트인가. axis 는 "logs" 또는 "security".
 
-    인증서 만료 감시나 리포트 값처럼 OS 가 없는 가상 호스트가 여기 해당한다.
-    이런 호스트를 이름 불일치로 보면 알림마다 분석이 돌고, 진짜 불일치에 쓸 상한을
-    먼저 소진한다. 패턴은 Zabbix 호스트명에 맞추며 `*` 만 쓴다.
+    두 축은 커버리지가 다르다. 로그는 라벨로 컨테이너 여럿을 논리 호스트 하나에 붙일 수
+    있지만, Wazuh 는 에이전트가 OS 인스턴스마다 붙어서 컨테이너를 그 호스트로 귀속시킬
+    수단이 없다. 실환경도 Wazuh 에이전트가 일부 서버에만 있다. 그래서 축마다 따로 적는다.
+
+    안 적으면 그 호스트의 알림마다 이름 불일치로 분석이 돌고, 진짜 불일치에 쓸 상한을
+    먼저 소진한다. 패턴은 Zabbix 호스트명에 맞추며 `*` 만 쓴다. 근거는 GATEWAY_GUIDE §12.
     """
-    pats = [p.strip() for p in os.environ.get("LOG_AXIS_EXEMPT_HOSTS", "").split(",") if p.strip()]
+    var = {"logs": "LOGS_EXEMPT_HOSTS", "security": "SECURITY_EXEMPT_HOSTS"}[axis]
+    # 축 구분 전에 쓰던 이름. 안 지운 설정이 조용히 무시되면 왜 안 먹는지 알 수 없다.
+    raw = os.environ.get(var)
+    if raw is None:
+        raw = os.environ.get("LOG_AXIS_EXEMPT_HOSTS", "")
+    pats = [p.strip() for p in raw.split(",") if p.strip()]
     return any(fnmatch.fnmatch(zbx_host, p) for p in pats)
 
 
@@ -306,7 +314,7 @@ async def _loki_logs(host_label: str, now: int, zbx_host: str = "") -> tuple:
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url:
         return [], SOURCE_DISABLED
-    if zbx_host and log_axis_exempt(zbx_host):
+    if zbx_host and axis_exempt(zbx_host, "logs"):
         return [], SOURCE_DISABLED
     if not host_label:   # 호스트 라벨을 못 정하면 조회 자체가 불가 — 성공이 아니다
         log.warning("loki skipped: host label 미해석 (HOST_LABEL_MAP·인터페이스 dns 확인)")
@@ -365,7 +373,7 @@ async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "") -> tuple:
     pw = os.environ.get("WAZUH_INDEXER_PASSWORD", "")
     if not url:
         return [], SOURCE_DISABLED
-    if zbx_host and log_axis_exempt(zbx_host):
+    if zbx_host and axis_exempt(zbx_host, "security"):
         return [], SOURCE_DISABLED
     if not agent_name:
         log.warning("wazuh skipped: agent name 미해석")

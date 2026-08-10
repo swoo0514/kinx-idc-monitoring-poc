@@ -267,8 +267,8 @@ async def names(limit: int = 500):
     # 두 설정은 .env 를 고쳐도 셸을 다시 읽지 않으면 프로세스에 안 들어온다.
     # 안 먹은 채로 결과를 보면 없는 불일치를 쫓게 되므로 먼저 찍는다.
     print("HOST_LABEL_MAP: %s" % (os.environ.get("HOST_LABEL_MAP") or "(비어 있음)"))
-    print("LOG_AXIS_EXEMPT_HOSTS: %s"
-          % (os.environ.get("LOG_AXIS_EXEMPT_HOSTS") or "(비어 있음)"))
+    for v in ("LOGS_EXEMPT_HOSTS", "SECURITY_EXEMPT_HOSTS", "LOG_AXIS_EXEMPT_HOSTS"):
+        print("%s: %s" % (v, os.environ.get(v) or "(비어 있음)"))
 
     loki = set(await loki_host_values())
     print("Loki host 라벨 값 %d개 (최근 %d일)"
@@ -277,8 +277,8 @@ async def names(limit: int = 500):
     # 수집기와 같은 해석 규칙을 쓴다 — 여기서만 다르게 풀면 진단이 현실과 어긋난다.
     resolved = [(h["host"], collector._resolve_label(h["host"], h)) for h in hosts]
 
-    exempt = [(n, lb) for n, lb in resolved if collector.log_axis_exempt(n)]
-    rest = [(n, lb) for n, lb in resolved if not collector.log_axis_exempt(n)]
+    exempt = [(n, lb) for n, lb in resolved if collector.axis_exempt(n, "logs")]
+    rest = [(n, lb) for n, lb in resolved if not collector.axis_exempt(n, "logs")]
     hit = [(n, lb) for n, lb in rest if lb in loki]
     miss = [(n, lb) for n, lb in rest if lb not in loki]
     print("\n[ Loki 대조 ]  일치 %d / 불일치 %d / 면제 %d"
@@ -290,7 +290,7 @@ async def names(limit: int = 500):
     if len(miss) > 40:
         print("  ... 외 %d개" % (len(miss) - 40))
     if exempt:
-        print("  면제(LOG_AXIS_EXEMPT_HOSTS): %s"
+        print("  면제(로그 축): %s"
               % ", ".join(n for n, _lb in exempt[:10]))
     if loki - {lb for _n, lb in resolved}:
         print("\n  Loki 에만 있는 이름(감시 대상이 아니거나 이름이 다르다):")
@@ -300,9 +300,13 @@ async def names(limit: int = 500):
     if os.environ.get("WAZUH_INDEXER_URL"):
         # 호스트마다 수집기가 경고를 남기면 표가 묻힌다. 결과는 아래 표에 있다.
         logging.getLogger("gateway.collector").setLevel(logging.ERROR)
+        # 면제는 축마다 다르다 — 컨테이너는 로그는 있고 보안 축이 없다.
+        sec_exempt = [n for n, _lb in resolved if collector.axis_exempt(n, "security")]
+        sec_rest = [(n, lb) for n, lb in resolved
+                    if not collector.axis_exempt(n, "security")]
         st = []
         async with httpx.AsyncClient(verify=False) as wc:
-            for n, lb in rest:
+            for n, lb in sec_rest:
                 s = await collector._wazuh_name_status(
                     wc, os.environ["WAZUH_INDEXER_URL"].rstrip("/"),
                     os.environ.get("WAZUH_INDEXER_USER", ""),
@@ -310,12 +314,14 @@ async def names(limit: int = 500):
                 st.append((n, lb, s))
         bad = [x for x in st if x[2] != collector.SOURCE_OK]
         print("\n[ Wazuh 대조 ]  일치 %d / 불일치·실패 %d / 면제 %d"
-              % (len(st) - len(bad), len(bad), len(exempt)))
+              % (len(st) - len(bad), len(bad), len(sec_exempt)))
         for n, lb, s in st:
             if s == collector.SOURCE_OK:
                 print("  ○ %-30s → '%s'" % (n, lb))
         for n, lb, s in bad[:40]:
             print("  ✗ %-30s → '%s' (%s)" % (n, lb, s))
+        if sec_exempt:
+            print("  면제(보안 축): %s" % ", ".join(sec_exempt[:10]))
     else:
         print("\n[ Wazuh 대조 ] WAZUH_INDEXER_URL 미설정 — 생략")
 

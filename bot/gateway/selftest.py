@@ -307,12 +307,26 @@ def _source_status_checks() -> int:
         # 이름 불일치로 보면 알림마다 분석이 돌고 상한을 먼저 소진한다.
         os.environ["LOG_AXIS_EXEMPT_HOSTS"] = "cert-*,report-*"
         try:
-            assert collector.log_axis_exempt("cert-example.com") is True
-            assert collector.log_axis_exempt("node1") is False
+            assert collector.axis_exempt("cert-example.com", "logs") is True
+            assert collector.axis_exempt("cert-example.com", "security") is True
+            assert collector.axis_exempt("node1", "logs") is False
             assert asyncio.run(collector._loki_logs("x", 0, "cert-example.com")) \
                 == ([], collector.SOURCE_DISABLED)
             assert asyncio.run(collector._wazuh_alerts("x", 0, "report-Customer-B")) \
                 == ([], collector.SOURCE_DISABLED)
+
+            # 축을 따로 적으면 그 축만 꺼진다 — 컨테이너는 로그는 있고 보안 축이 없다
+            os.environ["SECURITY_EXEMPT_HOSTS"] = "customer-*"
+            os.environ["LOGS_EXEMPT_HOSTS"] = "cert-*"
+            try:
+                assert collector.axis_exempt("customer-a", "security") is True
+                assert collector.axis_exempt("customer-a", "logs") is False, \
+                    "축별 설정이 있으면 옛 변수로 되돌아가면 안 된다"
+                assert asyncio.run(collector._wazuh_alerts("x", 0, "customer-a")) \
+                    == ([], collector.SOURCE_DISABLED)
+            finally:
+                os.environ.pop("SECURITY_EXEMPT_HOSTS", None)
+                os.environ.pop("LOGS_EXEMPT_HOSTS", None)
         finally:
             os.environ.pop("LOG_AXIS_EXEMPT_HOSTS", None)
 
@@ -432,7 +446,7 @@ def _source_status_checks() -> int:
     assert "sources.security" in llm.TRIAGE_SYSTEM, "프롬프트가 조회 상태를 안 본다"
     assert "sources.open_problems" in llm.TRIAGE_SYSTEM, "프롬프트가 열린 문제 상태를 안 본다"
     assert "stale" in llm.TRIAGE_SYSTEM, "프롬프트가 장기 미해소를 구분하지 않는다"
-    return 40
+    return 47
 
 
 def _class_map_checks() -> int:
