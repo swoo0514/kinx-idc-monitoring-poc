@@ -65,7 +65,8 @@
 알림 데이터를 단일 유형으로 분류합니다: `replication` / `cpu_io_pressure` / `auth_security` / `disk_space` / `memory_pressure` / `service_*` / `network` / `other`
 
 **분류 적용 우선순위:**
-1. Zabbix 트리거 태그 `class=` 값이 정의되어 있는 경우 최우선 적용
+1. Zabbix 트리거 태그 `incident_class=` 값이 정의되어 있는 경우 최우선 적용
+   *(태그 이름을 `class` 로 두지 않는 이유: Zabbix 표준 템플릿이 `class=os`·`class=database` 를 기본 부여하므로 이름이 충돌함 — 2026-08-07 랩·실환경 실측. `CLASS_TAG` 환경변수로 변경 가능)*
 2. Wazuh `rule.groups` 설정값 참조
 3. 알림명 키워드 기반 폴백(Fallback) 추정 분류 적용
 

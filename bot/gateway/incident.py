@@ -192,7 +192,15 @@ _validate_bridges()
 
 _SEV_ORDER = {"SEV1": 1, "SEV2": 2, "SEV3": 3, "SEV4": 4, "NONE": 5}
 
-CLASS_TAG = "class"          # Zabbix 트리거 태그: class=replication 처럼 직접 지정
+# 우리 분류를 선언하는 트리거 태그 이름.
+#
+# **"class" 를 쓰면 안 된다.** 실측(2026-08-07 랩·실환경) — Zabbix 표준 템플릿 트리거가
+# 이미 `class=os`(Linux 계열)·`class=database`(MySQL 계열) 태그를 달고 나온다. 같은 이름에
+# 우리 값을 얹으면 한 트리거에 의미가 다른 두 값이 공존하고, 어느 쪽이 읽힐지가 태그 순서에
+# 좌우된다. 발행 측에 태그를 부여하는 개선안(next-steps §1-1-12)은 이 충돌을 전제로 다시
+# 써야 한다. 이름을 분리하면 표준 태그를 아예 보지 않으므로 경고도 사라진다.
+# 이미 class= 로 운영 중인 곳은 CLASS_TAG=class 로 되돌릴 수 있다.
+CLASS_TAG = os.environ.get("CLASS_TAG", "incident_class")
 WAZUH_GROUP_CLASS = {
     "syscheck": "auth_security",
     "sca": "auth_security",
@@ -223,6 +231,9 @@ def classify(alert_name: str, item_key: str = "", tags=None, groups=None) -> str
     return "other"
 
 
+_WARNED_TAGS = set()
+
+
 def _tag_class(tags) -> str:
     for t in tags or []:
         if isinstance(t, dict) and t.get("tag") == CLASS_TAG:
@@ -230,9 +241,11 @@ def _tag_class(tags) -> str:
             # 오타 하나가 조용히 새 클래스를 만들면 병합이 갈린다 — 모르는 값은 폴백으로.
             if v in _KNOWN_CLASSES:
                 return v
-            if v:
-                log.warning("알 수 없는 class 태그 %r — 무시하고 폴백. 허용값: %s",
-                            v, sorted(_KNOWN_CLASSES))
+            if v and v not in _WARNED_TAGS:
+                # 알림마다 찍으면 로그가 같은 문장으로 덮인다 — 값당 한 번만 남긴다.
+                _WARNED_TAGS.add(v)
+                log.warning("알 수 없는 %s 태그 %r — 무시하고 폴백. 허용값: %s",
+                            CLASS_TAG, v, sorted(_KNOWN_CLASSES))
     return ""
 
 

@@ -192,12 +192,13 @@ def main():
     fastpath_checks = _fastpath_checks()
     open_link_checks = _open_link_checks()
     site_kw_checks = _site_keyword_checks()
+    class_tag_checks = _class_tag_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
-             + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks)
+             + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks + class_tag_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -266,6 +267,27 @@ def _source_status_checks() -> int:
     assert "sources.security" in llm.TRIAGE_SYSTEM, "프롬프트가 조회 상태를 안 본다"
     assert "sources.open_problems" in llm.TRIAGE_SYSTEM, "프롬프트가 열린 문제 상태를 안 본다"
     return 12
+
+
+def _class_tag_checks() -> int:
+    """선언 태그 이름이 벤더 표준과 충돌하지 않는지.
+
+    실측(2026-08-07) — Zabbix 표준 템플릿 트리거가 `class=os`·`class=database` 를 달고
+    나온다. 우리가 같은 이름을 쓰면 한 트리거에 의미가 다른 두 값이 공존하고, 어느 쪽이
+    읽힐지가 태그 순서에 좌우된다.
+    """
+    from . import incident
+
+    assert incident.CLASS_TAG != "class", "벤더 표준 태그 이름과 충돌한다"
+    vendor = [{"tag": "class", "value": "os"}, {"tag": "class", "value": "database"}]
+    # 표준 태그만 달린 알림은 선언이 없는 것으로 보고 폴백해야 한다
+    assert incident.classify("Linux: High CPU utilization (over 90% for 5m)",
+                             tags=vendor) == "cpu_io_pressure"
+    assert incident.classify("무슨무슨 알림", tags=vendor) == "other"
+    # 우리 태그가 있으면 그것이 이긴다
+    ours = vendor + [{"tag": incident.CLASS_TAG, "value": "network"}]
+    assert incident.classify("무슨무슨 알림", tags=ours) == "network"
+    return 4
 
 
 def _site_keyword_checks() -> int:
