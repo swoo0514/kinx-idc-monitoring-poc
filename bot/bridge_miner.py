@@ -1125,8 +1125,22 @@ def report_unclassified(events: list, top: int = 15):
     print()
     print("[ 미분류(other) 상위 알림명 — 태그 부여 1순위 ]  총 %d/%d건 (%.1f%%)"
           % (len(others), len(events), 100 * len(others) / len(events)))
-    for name, cnt in Counter(e["name"] for e in others).most_common(top):
-        print("  %6d  %s" % (cnt, name[:90]))
+    # Wazuh 이벤트는 rule.groups 로 분류하므로, 미분류일 때 필요한 것은 이름이 아니라
+    # **어떤 groups 가 매핑에 없는지**다. 그것을 안 보여주면 무엇을 고칠지 알 수 없다.
+    by_name = defaultdict(lambda: {"n": 0, "groups": Counter(), "src": ""})
+    for e in others:
+        d = by_name[e["name"]]
+        d["n"] += 1
+        d["src"] = e.get("src") or "?"
+        if e.get("groups"):
+            d["groups"][str(e["groups"])] += 1
+    for name, d in sorted(by_name.items(), key=lambda kv: -kv[1]["n"])[:top]:
+        print("  %6d  %s" % (d["n"], name[:90]))
+        if d["groups"]:
+            print("          groups=%s  ← 이 값이 매핑에 없다(WAZUH_GROUP_CLASS)"
+                  % ", ".join(g for g, _ in d["groups"].most_common(3)))
+        elif d["src"] == "wazuh":
+            print("          groups 없음 — 재수집 전 덤프이거나 룰에 그룹이 없다")
 
 
 def main():
