@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -185,6 +186,55 @@ async def openlink(host_name: str):
                       % (o["name"][:56], o["open_for_s"] // 60, 100 * o["link"]["rate"]))
 
 
+async def context(event_id: str, trigger_id: str):
+    """실제 알림 1건으로 인시던트 컨텍스트를 조립해 본다 — LLM·장애 주입 없이.
+
+    probe openlink 는 조회 함수만 본다. 이 명령은 그 위에서 collect_incident_context 가
+    열린 문제를 실제로 컨텍스트에 싣는지, 그리고 **마스킹을 거쳐 나가는지**까지 확인한다.
+    나가는 형태를 그대로 보여주므로 그 출력은 외부에 붙여도 안전하다.
+    """
+    import time as _t
+
+    from gateway import collector, incident, masking
+
+    zbx = collector.ZabbixClient()
+    ev = await zbx_event(zbx, event_id)
+    if not ev:
+        raise RuntimeError("이벤트 %s 를 못 찾았다. probe.py problems 로 목록을 본다." % event_id)
+    host = (ev.get("hosts") or [{}])[0].get("host", "")
+    cls = incident.classify(ev.get("name") or "", tags=ev.get("tags"))
+    alert = incident.Alert(source="zabbix-internal", event_id=str(event_id),
+                           trigger_id=str(trigger_id), host=host,
+                           alert_name=ev.get("name") or "", sev="SEV2",
+                           incident_class=cls, recv=_t.monotonic())
+    inc = incident.Incident(key=(host, cls), host=host, alerts=[alert])
+    print("알림: %s / 분류 %s / 호스트 %s" % (alert.alert_name[:50], cls, host))
+
+    ctx = await collector.collect_incident_context(zbx, inc)
+    print()
+    print("조회 상태: %s" % ctx.get("sources"))
+    print("로그 %d줄 / 보안 %d건 / 열린 문제 %d건"
+          % (len(ctx.get("logs") or []), len(ctx.get("security") or []),
+             len(ctx.get("open_problems") or [])))
+    for o in ctx.get("open_problems") or []:
+        print("   %s (%s, %d분, stale=%s)"
+              % (o["name"][:44], o["class"], o["open_for_s"] // 60, o.get("stale")))
+
+    masked = masking.build_llm_context(ctx, "SEV2", masking.Masker())
+    print()
+    print("=== 외부로 나가는 형태(마스킹 후) — 열린 문제 절 ===")
+    print(json.dumps(masked.get("open_problems"), ensure_ascii=False, indent=1))
+    print("sources:", masked.get("sources"))
+
+
+async def zbx_event(zbx, event_id):
+    async with httpx.AsyncClient(verify=False) as c:
+        got = await zbx.call(c, "event.get", {
+            "eventids": str(event_id), "output": ["eventid", "name"],
+            "selectHosts": ["host"], "selectTags": "extend"})
+    return got[0] if got else None
+
+
 def main():
     a = sys.argv
     if len(a) >= 2 and a[1] == "problems":
@@ -193,13 +243,16 @@ def main():
         asyncio.run(host_map(a[2]))
     elif len(a) >= 2 and a[1] == "env":
         show_env()
+    elif len(a) >= 4 and a[1] == "context":
+        asyncio.run(context(a[2], a[3]))
     elif len(a) >= 3 and a[1] == "openlink":
         asyncio.run(openlink(a[2]))
     elif len(a) >= 3 and a[1] == "loki":
         asyncio.run(loki_probe(a[2], a[3] if len(a) >= 4 else 24))
     else:
         print(__doc__)
-        print("추가: env | loki <label> [hours] | openlink <zabbix호스트명>")
+        print("추가: env | loki <label> [hours] | openlink <zabbix호스트명>"
+              " | context <event_id> <trigger_id>")
 
 
 if __name__ == "__main__":
