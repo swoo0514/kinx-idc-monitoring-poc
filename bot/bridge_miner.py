@@ -647,10 +647,10 @@ def overlap_counts(events: list, axis: str, min_open_s: int = 0):
 
 def permute_overlap(events: list, observed: dict, axis: str, rounds: int,
                     seed: int = 7, min_open_s: int = 0) -> dict:
-    """구간 겹침용 귀무모형 — 길이·라벨은 두고 위치만 시간축에서 무작위로 옮긴다.
+    """구간 겹침의 비교 기준. 길이와 종류는 그대로 두고 위치만 무작위로 옮긴다.
 
     재는 것은 "이 문제가 오래 열리는가"가 아니라 "그 위에 나는 것이 특정 종류에
-    쏠리는가"다. 라벨 셔플은 구간 길이와 라벨의 연결을 끊어 검정이 무너진다.
+    쏠리는가"다. 종류를 섞으면 길이와 종류가 따로 놀아 판정이 성립하지 않는다.
     """
     rng = random.Random(seed)
     starts = sorted(events, key=lambda e: e["ts"])
@@ -682,7 +682,7 @@ def permute_overlap(events: list, observed: dict, axis: str, rounds: int,
 def emit_open_link_rules(res: dict, picked: list, path: str, measured: str):
     """게이트웨이가 읽을 연계 규칙 파일을 낸다 — 측정과 운영을 잇는 고리.
 
-    수치를 코드에 박으면 환경이 바뀌어도 조용히 낡는다. 그 환경에서 측정한 것만
+    수치를 코드에 박아 두면 환경이 바뀌어도 아무도 모른다. 그 환경에서 측정한 것만
     그 환경에 적용되도록, 도구가 파일을 내고 게이트웨이가 그 파일을 읽는다.
     (게이트웨이: OPEN_LINK_RULES_FILE)
     """
@@ -842,7 +842,7 @@ def report_profile(counts: dict, n_axis: Counter, observed: dict, perm: dict,
 
 def permute(events: list, observed: dict, window_s: int, min_pairs: int, min_lift: float,
             axis: str, min_axis: int, scope: str, rounds: int, seed: int = 7) -> dict:
-    """축 라벨만 섞고 시각은 그대로 둔 뒤 같은 마이닝을 반복한다.
+    """알림 종류만 섞고 시각·빈도·하루 주기는 그대로 둬서 비교 기준을 만든다.
 
     한 번의 셔플 루프에서 두 가지를 함께 얻는다.
       ceilings — 회차별 leverage 최대값. 전 쌍을 통틀어 우연이 낼 수 있는 상한.

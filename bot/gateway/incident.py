@@ -129,7 +129,7 @@ BRIDGE_GROUPS = [
 #
 # 아래는 형식을 보이기 위한 자리표시자이며 어떤 환경의 측정값도 아니다. 실제로는 그
 # 환경에서 측정한 파일을 OPEN_LINK_RULES_FILE 로 지정해 쓴다 — 코드에 박으면 환경이
-# 바뀌어도 조용히 낡는다. 생성은 bridge_miner --emit-rules.
+# 바뀌어도 아무도 모른다. 생성은 bridge_miner --emit-rules.
 _EXAMPLE_OPEN_LINK_RULES = {
     ("disk_space", "cpu_io_pressure"): {"rate": 0.90, "days": 10, "overlaps": 20},
     ("disk_space", "service_down"): {"rate": 0.70, "days": 10, "overlaps": 15},
