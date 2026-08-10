@@ -4,6 +4,7 @@
   python3 probe.py problems            # 발화 중 이벤트 목록 (event_id trigger_id host name)
   python3 probe.py map <trigger_id>    # 그 트리거 호스트의 Zabbix 이름·표시명·인터페이스 dns/ip
                                        #  + Loki host 라벨값 전체 + 각 후보로 Loki 조회 시 로그 수
+  python3 probe.py names [limit]       # Zabbix 호스트 전체를 Loki·Wazuh 이름과 대조 (어긋난 호스트 목록)
 환경변수: ZABBIX_URL·ZABBIX_TOKEN(필수), LOKI_URL(선택).
 """
 
@@ -57,8 +58,9 @@ async def loki_host_values():
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url:
         return []
+    from gateway.collector import LOKI_HOST_LABEL
     async with httpx.AsyncClient() as c:
-        r = await c.get(f"{url}/loki/api/v1/label/host/values", timeout=5)
+        r = await c.get(f"{url}/loki/api/v1/label/{LOKI_HOST_LABEL}/values", timeout=5)
         return r.json().get("data", [])
 
 
@@ -235,9 +237,62 @@ async def zbx_event(zbx, event_id):
     return got[0] if got else None
 
 
+async def names(limit: int = 500):
+    """Zabbix 호스트 이름이 Loki·Wazuh 에도 그대로 있는지 전수로 대조한다.
+
+    수집기는 사건이 났을 때 그 호스트 하나만 확인한다. 배포 직후나 이름 규칙을 바꾼
+    뒤에는 어긋난 호스트를 미리 알아야 하므로 여기서 한 번에 본다. 판정 기준은
+    수집기와 같다 — Loki 는 라벨 값 일치, Wazuh 는 agent.name 부분 일치.
+    """
+    from gateway import collector
+
+    z = collector.ZabbixClient()
+    async with httpx.AsyncClient() as c:
+        hosts = await z.call(c, "host.get", {
+            "output": ["host", "name"], "selectInterfaces": ["dns"], "limit": limit})
+    zbx = sorted({h["host"] for h in hosts})
+    print("Zabbix 호스트 %d개" % len(zbx))
+
+    loki = set(await loki_host_values())
+    print("Loki host 라벨 값 %d개" % len(loki))
+
+    # 수집기와 같은 해석 규칙을 쓴다 — 여기서만 다르게 풀면 진단이 현실과 어긋난다.
+    resolved = [(h["host"], collector._resolve_label(h["host"], h)) for h in hosts]
+
+    hit = [(n, lb) for n, lb in resolved if lb in loki]
+    miss = [(n, lb) for n, lb in resolved if lb not in loki]
+    print("\n[ Loki 대조 ]  일치 %d / 불일치 %d" % (len(hit), len(miss)))
+    for n, lb in miss[:40]:
+        print("  ✗ %-30s → 조회에 쓰는 이름 '%s'" % (n, lb))
+    if len(miss) > 40:
+        print("  ... 외 %d개" % (len(miss) - 40))
+    if loki - {lb for _n, lb in resolved}:
+        print("\n  Loki 에만 있는 이름(감시 대상이 아니거나 이름이 다르다):")
+        for v in sorted(loki - {lb for _n, lb in resolved})[:20]:
+            print("    · %s" % v)
+
+    if os.environ.get("WAZUH_INDEXER_URL"):
+        st = []
+        async with httpx.AsyncClient(verify=False) as wc:
+            for n, lb in resolved:
+                s = await collector._wazuh_name_status(
+                    wc, os.environ["WAZUH_INDEXER_URL"].rstrip("/"),
+                    os.environ.get("WAZUH_INDEXER_USER", ""),
+                    os.environ.get("WAZUH_INDEXER_PASSWORD", ""), lb)
+                st.append((n, lb, s))
+        bad = [x for x in st if x[2] != collector.SOURCE_OK]
+        print("\n[ Wazuh 대조 ]  일치 %d / 불일치·실패 %d" % (len(st) - len(bad), len(bad)))
+        for n, lb, s in bad[:40]:
+            print("  ✗ %-30s → '%s' (%s)" % (n, lb, s))
+    else:
+        print("\n[ Wazuh 대조 ] WAZUH_INDEXER_URL 미설정 — 생략")
+
+
 def main():
     a = sys.argv
-    if len(a) >= 2 and a[1] == "problems":
+    if len(a) >= 2 and a[1] == "names":
+        asyncio.run(names(int(a[2]) if len(a) >= 3 else 500))
+    elif len(a) >= 2 and a[1] == "problems":
         asyncio.run(problems())
     elif len(a) >= 3 and a[1] == "map":
         asyncio.run(host_map(a[2]))
@@ -251,8 +306,8 @@ def main():
         asyncio.run(loki_probe(a[2], a[3] if len(a) >= 4 else 24))
     else:
         print(__doc__)
-        print("추가: env | loki <label> [hours] | openlink <zabbix호스트명>"
-              " | context <event_id> <trigger_id>")
+        print("추가: env | names [limit] | loki <label> [hours]"
+              " | openlink <zabbix호스트명> | context <event_id> <trigger_id>")
 
 
 if __name__ == "__main__":

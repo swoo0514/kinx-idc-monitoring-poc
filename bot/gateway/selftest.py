@@ -239,6 +239,49 @@ def main():
     print(f"ALL OK ({total} checks)")
 
 
+class _FakeHttpx:
+    """collector.httpx 를 대신한다. 본 조회는 항상 0건이고, 이름 확인 응답만 바꾼다."""
+
+    def __init__(self, known, wazuh_total, fail_check=False):
+        self.known, self.wazuh_total, self.fail_check = known, wazuh_total, fail_check
+
+    def AsyncClient(self, **_kw):
+        outer = self
+
+        class _Resp:
+            def __init__(self, payload):
+                self._p = payload
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self._p
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+            async def get(self, url, params=None, timeout=None):
+                if "/values" in url:
+                    if outer.fail_check:
+                        raise RuntimeError("label values down")
+                    return _Resp({"data": outer.known})
+                return _Resp({"data": {"result": []}})
+
+            async def post(self, url, json=None, auth=None, timeout=None):
+                if (json or {}).get("size") == 0:
+                    if outer.fail_check:
+                        raise RuntimeError("indexer down")
+                    return _Resp({"hits": {"total": {"value": outer.wazuh_total}}})
+                return _Resp({"hits": {"hits": []}})
+
+        return _Client()
+
+
 def _source_status_checks() -> int:
     """G1 — "조회 실패"와 "신호 없음"의 구분이 수집기·게이트·마스킹·카드까지 전파되는지.
 
@@ -259,6 +302,23 @@ def _source_status_checks() -> int:
         assert asyncio.run(collector._wazuh_alerts("h", 0)) == ([], collector.SOURCE_DISABLED)
         os.environ["LOKI_URL"] = "http://127.0.0.1:1"
         assert asyncio.run(collector._loki_logs("", 0)) == ([], collector.SOURCE_UNAVAILABLE)
+
+        # 0건일 때 이름 등록 여부로 ok / unmatched 를 가른다 (§1-1-2). 가짜 응답으로 검증.
+        os.environ["WAZUH_INDEXER_URL"] = "https://127.0.0.1:1"
+        real = collector.httpx
+        try:
+            collector.httpx = _FakeHttpx(known=["known-host"], wazuh_total=0)
+            assert asyncio.run(collector._loki_logs("known-host", 0)) == ([], collector.SOURCE_OK)
+            assert asyncio.run(collector._loki_logs("other", 0)) == ([], collector.SOURCE_UNMATCHED)
+            assert asyncio.run(collector._wazuh_alerts("a", 0)) == ([], collector.SOURCE_UNMATCHED)
+            collector.httpx = _FakeHttpx(known=[], wazuh_total=3)
+            assert asyncio.run(collector._wazuh_alerts("a", 0)) == ([], collector.SOURCE_OK)
+            # 확인 질의가 실패하면 판정할 수 없으므로 ok 로 내리지 않는다
+            collector.httpx = _FakeHttpx(known=["known-host"], wazuh_total=0, fail_check=True)
+            assert asyncio.run(collector._loki_logs("known-host", 0)) == ([], collector.SOURCE_UNAVAILABLE)
+            assert asyncio.run(collector._wazuh_alerts("a", 0)) == ([], collector.SOURCE_UNAVAILABLE)
+        finally:
+            collector.httpx = real
     finally:
         os.environ.pop("LOKI_URL", None)
         for k, v in saved.items():
@@ -277,10 +337,52 @@ def _source_status_checks() -> int:
                                     "security": collector.SOURCE_UNAVAILABLE}}
     off_ctx = {**base, "sources": {"logs": collector.SOURCE_DISABLED,
                                    "security": collector.SOURCE_DISABLED}}
+    for q in incident._fires.values():
+        q.clear()
     assert incident.should_triage(single, ok_ctx)[0] is False, "정상 조회·무신호는 스킵이어야"
     fired, why = incident.should_triage(single, fail_ctx)
     assert fired is True and "조회 실패" in why, why
     assert incident.should_triage(single, off_ctx)[0] is False, "미배선은 발동 사유가 아니어야"
+
+    # 이름 불일치(§1-1-2) — 조회는 됐지만 그 소스가 이 호스트를 모르므로 "없음"이 아니다
+    un_ctx = {**base, "sources": {"logs": collector.SOURCE_UNMATCHED,
+                                  "security": collector.SOURCE_OK}}
+    fired, why = incident.should_triage(single, un_ctx)
+    assert fired is True and "이름 불일치" in why, why
+
+    # 보수적 발동에도 상한이 있어야 한다 — 인덱서가 하루 죽으면 전 알림이 LLM 으로 간다
+    for q in incident._fires.values():
+        q.clear()
+    fired_n = sum(1 for _ in range(incident.GATE_DEGRADED_MAX_PER_HOUR + 5)
+                  if incident.should_triage(single, fail_ctx, now=500.0)[0])
+    assert fired_n == incident.GATE_DEGRADED_MAX_PER_HOUR, fired_n
+    assert incident.should_triage(single, fail_ctx, now=500.0 + 3601)[0] is True, "1시간 뒤엔 회복"
+    for q in incident._fires.values():
+        q.clear()
+    assert "unmatched" in masking._STATUS_VALUES, "이름 불일치 상태가 전송 화이트리스트에 있어야"
+    note = slack._source_note({"logs": collector.SOURCE_UNMATCHED,
+                               "security": collector.SOURCE_OK})
+    assert "이름 불일치" in note, note
+    assert "unmatched" in llm.TRIAGE_SYSTEM, "프롬프트가 새 상태를 모르면 LLM 이 '없음'으로 읽는다"
+
+    # 지식 공백 발동(§1-1-4) — 단일 소스 환경에서 처음 보는 문제는 발동, 만성은 스킵
+    new_ctx = {**ok_ctx, "alerts": [{"prejudge": {"verdict": "신규"}}]}
+    chronic_ctx = {**ok_ctx, "alerts": [{"prejudge": {"verdict": "만성"}}]}
+    incident._fires["new"].clear()
+    fired, why = incident.should_triage(single, new_ctx, now=1000.0)
+    assert fired is True and "처음 보는 문제" in why, why
+    assert incident.should_triage(single, chronic_ctx, now=1000.0)[0] is False, "만성은 스킵이어야"
+
+    # 시간당 상한 — 새 트리거가 다수 호스트에 한꺼번에 붙으면 발동이 폭주한다
+    incident._fires["new"].clear()
+    fired_n = sum(1 for _ in range(incident.GATE_NEW_MAX_PER_HOUR + 5)
+                  if incident.should_triage(single, new_ctx, now=1000.0)[0])
+    assert fired_n == incident.GATE_NEW_MAX_PER_HOUR, fired_n
+    assert incident.should_triage(single, new_ctx, now=1000.0 + 3601)[0] is True, "1시간 뒤엔 회복"
+    # 예산은 사유별로 따로 — 신규가 다 써도 조회 실패는 여전히 발동해야 한다
+    assert incident.should_triage(single, fail_ctx, now=1000.0)[0] is True, "예산이 섞였다"
+    for q in incident._fires.values():
+        q.clear()
 
     # 마스킹 — 상태는 전송하되 알려진 키·값만(화이트리스트 유지)
     ctx = {"event": {"name": "n"}, "trigger": {}, "host": {}, "metrics": [],
@@ -304,7 +406,7 @@ def _source_status_checks() -> int:
     assert "sources.security" in llm.TRIAGE_SYSTEM, "프롬프트가 조회 상태를 안 본다"
     assert "sources.open_problems" in llm.TRIAGE_SYSTEM, "프롬프트가 열린 문제 상태를 안 본다"
     assert "stale" in llm.TRIAGE_SYSTEM, "프롬프트가 장기 미해소를 구분하지 않는다"
-    return 13
+    return 31
 
 
 def _class_map_checks() -> int:

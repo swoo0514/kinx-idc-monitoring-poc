@@ -13,7 +13,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from .collector import SOURCE_UNAVAILABLE
+from .collector import SOURCE_UNAVAILABLE, SOURCE_UNMATCHED
 
 log = logging.getLogger("gateway.incident")
 
@@ -383,25 +383,64 @@ def dominant_verdict(context: dict) -> str:
 
 
 GATE_MIN_CROSS = _env_int("INCIDENT_GATE_MIN_CROSS", 1)
+GATE_FIRE_ON_NEW = os.environ.get("INCIDENT_GATE_FIRE_ON_NEW", "1") not in ("0", "false", "no")
+GATE_NEW_MAX_PER_HOUR = _env_int("INCIDENT_GATE_NEW_MAX_PER_HOUR", 20)
+GATE_DEGRADED_MAX_PER_HOUR = _env_int("INCIDENT_GATE_DEGRADED_MAX_PER_HOUR", 30)
+
+# 사유별 발동 시각 (최근 1시간). 사유마다 폭주하는 원인이 달라 예산을 나눠 둔다.
+_fires = {"new": [], "degraded": []}
 
 
-def should_triage(incident, context: dict, min_cross: int = None) -> tuple:
+def budget_left(kind: str, cap: int, now: float = None) -> int:
+    now = time.time() if now is None else now
+    q = _fires.setdefault(kind, [])
+    q[:] = [t for t in q if now - t <= 3600]
+    return cap - len(q)
+
+
+def _take(kind: str, cap: int, now: float) -> int:
+    """예산이 남으면 한 칸 쓰고 잔여를 돌려준다. 없으면 -1."""
+    left = budget_left(kind, cap, now)
+    if left <= 0:
+        return -1
+    _fires[kind].append(now)
+    return left - 1
+
+
+def should_triage(incident, context: dict, min_cross: int = None, now: float = None) -> tuple:
     """LLM 트리아지 발동 여부 + 사유. 반환 (bool, 사유).
 
-    조건과 순서의 근거는 GATEWAY_GUIDE §14 발동조건 게이트.
+    조건과 순서의 근거는 GATEWAY_GUIDE §8-3.
     """
     min_cross = GATE_MIN_CROSS if min_cross is None else min_cross
+    now = time.time() if now is None else now
     if incident.dominant_sev() == "SEV1":
         return True, "SEV1 — 위중, 무조건 발동"
     if incident.is_merged():
         return True, f"{len(incident.alerts)}건 병합 — 교차 축 존재"
+
     sources = context.get("sources") or {}
     failed = [k for k in ("logs", "security") if sources.get(k) == SOURCE_UNAVAILABLE]
-    if failed:
-        return True, f"교차 소스 조회 실패({', '.join(failed)}) — 신호 없음이 아니라 미상, 보수적 발동"
+    unmatched = [k for k in ("logs", "security") if sources.get(k) == SOURCE_UNMATCHED]
+    if failed or unmatched:
+        why = (f"조회 실패({', '.join(failed)})" if failed else "") + \
+              (" · " if failed and unmatched else "") + \
+              (f"이름 불일치({', '.join(unmatched)})" if unmatched else "")
+        left = _take("degraded", GATE_DEGRADED_MAX_PER_HOUR, now)
+        if left < 0:
+            return False, (f"{why} — 미상이나 시간당 상한({GATE_DEGRADED_MAX_PER_HOUR}건) 도달. "
+                           f"관측 소스가 계속 죽어 있다는 뜻이므로 소스를 먼저 고친다")
+        return True, f"교차 소스 {why} — 신호 없음이 아니라 미상, 보수적 발동 (잔여 {left}건)"
+
     cross = sum(1 for k in ("logs", "security") if context.get(k))
     if cross >= min_cross:
         return True, f"단일 알림 + 교차 소스 {cross}종(로그/보안)"
+
+    if GATE_FIRE_ON_NEW and dominant_verdict(context) == "신규":
+        left = _take("new", GATE_NEW_MAX_PER_HOUR, now)
+        if left < 0:
+            return False, f"처음 보는 문제이나 시간당 상한({GATE_NEW_MAX_PER_HOUR}건) 도달 — 스킵"
+        return True, f"처음 보는 문제 — 과거 이력 없음 (시간당 잔여 {left}건)"
     return False, "단일 축·교차 신호 없음(조회는 정상) — LLM 스킵"
 
 

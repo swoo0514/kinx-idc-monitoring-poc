@@ -44,7 +44,8 @@ class Masker:
 
 
 _STATUS_KEYS = ("logs", "security", "open_problems")
-_STATUS_VALUES = (collector.SOURCE_OK, collector.SOURCE_UNAVAILABLE, collector.SOURCE_DISABLED)
+_STATUS_VALUES = (collector.SOURCE_OK, collector.SOURCE_UNAVAILABLE,
+                  collector.SOURCE_DISABLED, collector.SOURCE_UNMATCHED)
 
 
 def _sources(context: dict) -> dict:

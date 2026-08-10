@@ -22,9 +22,13 @@ def _source_note(sources: dict) -> str:
               if sources.get(k) == collector.SOURCE_UNAVAILABLE]
     off = [_SOURCE_LABEL[k] for k in _SOURCE_LABEL
            if sources.get(k) == collector.SOURCE_DISABLED]
+    unmatched = [_SOURCE_LABEL[k] for k in _SOURCE_LABEL
+                 if sources.get(k) == collector.SOURCE_UNMATCHED]
     parts = []
     if failed:
         parts.append(f"⚠️ 조회 실패: {', '.join(failed)} — 이 축은 '이상 없음'이 아니라 '미상'")
+    if unmatched:
+        parts.append(f"⚠️ 이름 불일치: {', '.join(unmatched)} — 이 호스트를 그 이름으로 찾지 못했다")
     if off:
         parts.append(f"미배선: {', '.join(off)}")
     return "  ·  ".join(parts)

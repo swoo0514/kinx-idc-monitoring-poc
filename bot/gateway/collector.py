@@ -25,10 +25,15 @@ LOKI_LIMIT = 40
 LOKI_LINE_MAX = 300   # 라인당 최대 문자 (토큰 억제)
 WAZUH_LIMIT = 20
 
+# 호스트 이름이 그 소스에 등록돼 있는지 확인할 때 되짚는 기간
+KNOWN_HOST_LOOKBACK_S = 7 * 86400
+LOKI_HOST_LABEL = os.environ.get("LOKI_HOST_LABEL", "host")
+
 # 교차 소스 조회 상태 — "신호 없음"과 "조회 실패"를 구분한다. 근거는 GATEWAY_GUIDE §15.
 SOURCE_OK = "ok"                    # 조회 성공 (결과가 비어 있어도 "없음"이 사실)
 SOURCE_UNAVAILABLE = "unavailable"  # 조회 시도했으나 실패 — 비어 있음을 근거로 쓰면 안 됨
 SOURCE_DISABLED = "disabled"        # 미배선(URL 미설정) — 애초에 판단 근거가 없음
+SOURCE_UNMATCHED = "unmatched"      # 조회는 됐으나 그 호스트 이름을 그 소스가 모름
 
 
 class ZabbixClient:
@@ -288,7 +293,7 @@ async def _loki_logs(host_label: str, now: int) -> tuple:
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(f"{url}/loki/api/v1/query_range", params={
-                "query": '{host="%s"}' % host_label,   # 라벨 정확 일치 (맵이 FQDN 제공)
+                "query": '{%s="%s"}' % (LOKI_HOST_LABEL, host_label),
                 "start": str((now - CORR_WINDOW_S) * 1_000_000_000),
                 "end": str(now * 1_000_000_000),
                 "limit": LOKI_LIMIT, "direction": "backward"}, timeout=TIMEOUT_S)
@@ -297,10 +302,36 @@ async def _loki_logs(host_label: str, now: int) -> tuple:
             for stream in r.json().get("data", {}).get("result", []):
                 for _ts, line in stream.get("values", []):
                     out.append(line[:LOKI_LINE_MAX])
-            return out[:LOKI_LIMIT], SOURCE_OK
+            if out:
+                return out[:LOKI_LIMIT], SOURCE_OK
+            return [], await _loki_name_status(client, url, host_label, now)
     except Exception as e:
         log.warning("loki query failed host=%s: %s", host_label, e)
         return [], SOURCE_UNAVAILABLE
+
+
+async def _loki_name_status(client, url: str, host_label: str, now: int) -> str:
+    """15분 창에 로그가 없을 때, Loki 가 이 호스트 이름을 아는지 확인한다.
+
+    이름이 안 맞아 0건인 경우와 정말 로그가 없는 경우를 구분하지 않으면 봇이
+    "로그에 기록 없음"이라고 단언한다. 세 소스가 같은 호스트를 다른 이름으로
+    부르는 것은 이 랩에서 실제로 겪은 문제다. 근거는 GATEWAY_GUIDE §15.
+    """
+    try:
+        r = await client.get(f"{url}/loki/api/v1/label/{LOKI_HOST_LABEL}/values", params={
+            "start": str((now - KNOWN_HOST_LOOKBACK_S) * 1_000_000_000),
+            "end": str(now * 1_000_000_000)}, timeout=TIMEOUT_S)
+        r.raise_for_status()
+        known = r.json().get("data") or []
+    except Exception as e:
+        # 확인 자체를 못 했으므로 "로그 없음"이 사실인지 알 수 없다.
+        log.warning("loki label values failed host=%s: %s", host_label, e)
+        return SOURCE_UNAVAILABLE
+    if host_label in known:
+        return SOURCE_OK
+    log.warning("loki: 라벨 %s 에 '%s' 없음 (알려진 값 %d개). HOST_LABEL_MAP 확인",
+                LOKI_HOST_LABEL, host_label, len(known))
+    return SOURCE_UNMATCHED
 
 
 async def _wazuh_alerts(agent_name: str, now: int) -> tuple:
@@ -345,10 +376,36 @@ async def _wazuh_alerts(agent_name: str, now: int) -> tuple:
                             "groups": ",".join(groups) if isinstance(groups, list) else groups,
                             "path": sc.get("path"),
                             "change": sc.get("event")})
-            return out, SOURCE_OK
+            if out:
+                return out, SOURCE_OK
+            return [], await _wazuh_name_status(client, url, user, pw, agent_name)
     except Exception as e:
         log.warning("wazuh query failed agent=%s: %s", agent_name, e)
         return [], SOURCE_UNAVAILABLE
+
+
+async def _wazuh_name_status(client, url: str, user: str, pw: str, agent_name: str) -> str:
+    """Loki 쪽과 같은 확인. 경보가 없을 때 이 에이전트 이름이 인덱스에 있는지 본다.
+
+    비어 있음을 "침해 배제"로 읽어도 되는 것은 이름이 맞을 때뿐이다.
+    """
+    body = {"size": 0, "query": {"bool": {"must": [
+        {"wildcard": {"agent.name": f"*{agent_name}*"}},
+        {"range": {"@timestamp": {"gte": "now-%dd" % (KNOWN_HOST_LOOKBACK_S // 86400)}}},
+    ]}}}
+    try:
+        r = await client.post(f"{url}/wazuh-alerts-*/_search",
+                              json=body, auth=(user, pw), timeout=TIMEOUT_S)
+        r.raise_for_status()
+        total = (r.json().get("hits", {}).get("total") or {}).get("value", 0)
+    except Exception as e:
+        log.warning("wazuh name check failed agent=%s: %s", agent_name, e)
+        return SOURCE_UNAVAILABLE
+    if total:
+        return SOURCE_OK
+    log.warning("wazuh: agent.name 에 '%s' 로 잡히는 경보가 최근에 없음. 에이전트 이름 확인",
+                agent_name)
+    return SOURCE_UNMATCHED
 
 
 async def _metrics_trend(zbx: ZabbixClient, client: httpx.AsyncClient,
