@@ -563,19 +563,43 @@ def _open_link_checks() -> int:
     n = 0
     # 규칙 매칭 — **값이 아니라 기제를 검사한다.** 특정 수치에 묶으면 측정 파일을 바꿀 때마다
     # 테스트가 깨지고, 그 결합이야말로 이 설계가 없애려던 것이다.
+    #
+    # 규칙은 검사하는 동안만 우리가 아는 것으로 바꿔 끼운다. 배포된 서버에는 그 서버의
+    # 측정 결과가 실려 있어서(랩은 2건, 실환경은 재측정마다 달라진다) 파일을 그대로 쓰면
+    # 코드가 멀쩡해도 테스트가 깨지고, 설정 탓인지 코드 탓인지 구분할 수 없다.
+    saved_rules, saved_measured = incident.OPEN_LINK_RULES, incident.OPEN_LINK_MEASURED
+    incident.OPEN_LINK_RULES = {
+        ("disk_space", "cpu_io_pressure"): {"rate": 0.96, "days": 13, "overlaps": 24},
+        ("disk_space", "service_down"): {"rate": 0.74, "days": 11, "overlaps": 17},
+    }
+    incident.OPEN_LINK_MEASURED = "셀프테스트 고정값"
+    try:
+        n += _open_link_rule_checks(incident)
+    finally:
+        incident.OPEN_LINK_RULES = saved_rules
+        incident.OPEN_LINK_MEASURED = saved_measured
+
+    return n + _open_link_masking_checks()
+
+
+def _open_link_rule_checks(incident) -> int:
     hit = incident.open_link("disk_space", {"cpu_io_pressure"})
     assert hit and 0 < hit["rate"] <= 1 and hit["days"] >= 1, hit
     assert hit["open_class"] == "disk_space" and hit["followed_class"] == "cpu_io_pressure"
     assert hit["measured"], "측정 조건 문자열이 비었다 — 근거 없이 프롬프트에 실린다"
     assert incident.open_link("cpu_io_pressure", {"disk_space"}) == {}, "방향 없는 매칭"
     assert incident.open_link("network", {"cpu_io_pressure"}) == {}
-    n += 5
 
     # BRIDGE_GROUPS 와 달리 겹침이 허용돼야 한다 — disk_space 가 두 규칙에 모두 있다
     keys = [k[0] for k in incident.OPEN_LINK_RULES]
     assert keys.count("disk_space") == 2, "겹침 금지 제약이 잘못 들어왔다"
-    n += 1
+    return 6
 
+
+def _open_link_masking_checks() -> int:
+    from . import incident, masking
+
+    n = 0
     # 마스킹 — 열린 문제 이름의 실 호스트명이 새면 안 된다
     masker = masking.Masker()
     ctx = {
