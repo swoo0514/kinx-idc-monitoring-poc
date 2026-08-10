@@ -585,6 +585,27 @@ def report_scope(events: list):
     present = [s for s in ("zabbix", "wazuh") if by_src.get(s)]
     if len(present) < 2:
         print("  => **단일 소스 측정이다.** 교차 소스 쌍은 결과에 나올 수 없다.")
+        return
+
+    # 두 소스에 데이터가 있어도 **호스트명이 안 맞으면** 교차 조합이 구조적으로 0건이다.
+    # 세 시스템이 같은 장비를 다르게 부르고 공유 키가 없기 때문이다(Zabbix `node1` /
+    # Wazuh FQDN). 이걸 안 밝히면 0건이 "관계 없음"으로 읽힌다 — 조회 실패와 신호 없음을
+    # 가르는 것(G1)과 같은 형태의 오독이다.
+    #
+    # 사이트 지식이 필요 없는 검사다. 각 소스의 호스트명 집합이 겹치는지만 본다.
+    # 실제 번역은 HOST_LABEL_MAP(사이트 값)이고, 근본 해결은 배포 시 FQDN 정규화다.
+    sets = {s: {e["host"] for e in events if (e.get("src") or "?") == s} for s in present}
+    common = set.intersection(*sets.values())
+    smaller = min(len(v) for v in sets.values()) or 1
+    print("  호스트명 교집합 %d개 (적은 쪽 %d개 대비 %.0f%%)"
+          % (len(common), smaller, 100 * len(common) / smaller))
+    if not common:
+        print("  => ⚠ **두 소스의 호스트명이 하나도 겹치지 않는다.** 같은 장비를 다르게 부르고")
+        print("     있어 교차 조합이 나올 수 없다. 0건은 관계 없음이 아니라 **측정 불가**다.")
+        print("     HOST_LABEL_MAP 으로 번역하거나, 배포 시 FQDN 을 통일한다.")
+    elif len(common) < smaller * 0.5:
+        print("  => ⚠ 겹치는 호스트가 절반 미만이다. 겹치지 않는 장비의 교차 조합은")
+        print("     측정되지 않는다 — 그 부분의 0건은 근거가 되지 못한다.")
     else:
         print("  => 교차 소스 쌍이 측정 범위 안에 있다.")
 
@@ -1206,8 +1227,9 @@ def main():
     ap.add_argument("--source", choices=["all", "zabbix", "wazuh"], default="all")
     ap.add_argument("--dump", metavar="FILE",
                     help="조회 결과를 파일로 저장(실 호스트명·알림명 포함 — private/ 에만 둘 것)")
-    ap.add_argument("--load", metavar="FILE",
-                    help="조회 대신 파일에서 읽는다. 창·임계값을 바꿔가며 재분석할 때 쓴다")
+    ap.add_argument("--load", metavar="FILE", action="append",
+                    help="조회 대신 파일에서 읽는다. **여러 번 지정하면 합친다** — 소스마다 "
+                         "닿는 망이 달라 나눠 떠야 할 때 쓴다")
     a = ap.parse_args()
 
     if a.diag:
@@ -1216,29 +1238,55 @@ def main():
 
     failed = []
     if a.load:
-        with open(a.load, encoding="utf-8") as f:
-            saved = json.load(f)
-        events = saved["events"]
-        print("[load] %s — %d건 (수집 %s, --days %s)"
-              % (a.load, len(events), saved.get("fetched_at", "?"), saved.get("days", "?")),
-              file=sys.stderr)
+        # **여러 파일을 받는다.** 소스마다 닿는 망이 달라 한 번에 못 뜨는 경우가 있다
+        # (실측 2026-08-10: Zabbix 는 작업 PC 에서, Wazuh 인덱서는 관제망 안에서만 도달).
+        # 나눠 뜬 뒤 여기서 합친다.
+        events, spans = [], []
+        for path in a.load:
+            with open(path, encoding="utf-8") as f:
+                saved = json.load(f)
+            got = saved["events"]
+            events += got
+            failed += saved.get("failed_sources") or []
+            ts = [e["ts"] for e in got] or [0]
+            spans.append((path, saved.get("fetched_at", "?"), saved.get("days", "?"),
+                          len(got), min(ts), max(ts)))
+            print("[load] %s — %d건 (수집 %s, --days %s)"
+                  % (path, len(got), saved.get("fetched_at", "?"), saved.get("days", "?")),
+                  file=sys.stderr)
+
+        # 측정 창이 어긋난 파일을 합치면 "그 기간엔 신호가 없었다"가 되어 결과가 왜곡된다.
+        # 리포 규칙(서로 다른 측정 기간의 수치를 섞지 않는다)을 코드로 강제하지는 않되,
+        # 어긋난 사실은 반드시 드러낸다.
+        if len(spans) > 1:
+            lo = max(sp[4] for sp in spans)
+            hi = min(sp[5] for sp in spans)
+            gap = max(abs(sp[4] - lo) for sp in spans) + max(abs(sp[5] - hi) for sp in spans)
+            print("[load] 파일 %d개 합침 — 겹치는 구간 %s ~ %s"
+                  % (len(spans), _iso(lo)[:10], _iso(hi)[:10]), file=sys.stderr)
+            if gap > 2 * 86400:
+                print("  ⚠ 파일마다 측정 창이 %.1f일 어긋난다. 겹치지 않는 구간은 한쪽 소스만"
+                      " 있으므로 그 구간의 교차 조합은 **없는 것이 아니라 측정 불가**다."
+                      % (gap / 86400), file=sys.stderr)
+
         # 저장된 cls 를 그대로 쓰지 않고 다시 분류한다. 분류기는 코드이고 덤프는 데이터인데,
         # 결과를 데이터에 얼려 두면 **분류기를 고쳐도 재수집 전까지 반영되지 않는다.**
         # 실측 2026-08-10: 키워드 보강으로 미분류가 96% 줄었는데 --load 결과는 그대로였다.
         # 원인을 찾는 데 시간이 들었고, 그 사이 판정도 틀렸다.
         rec = 0
         for e in events:
-            tags = [{"tag": incident.CLASS_TAG, "value": e["declared"]}] if e.get("declared") else None
-            new = incident.classify(e.get("name") or "", tags=tags)
-            if new != e.get("cls"):
+            tags = ([{"tag": incident.CLASS_TAG, "value": e["declared"]}]
+                    if e.get("declared") else None)
+            new_cls = incident.classify(e.get("name") or "", tags=tags)
+            if new_cls != e.get("cls"):
                 rec += 1
-            e["cls"] = new
+            e["cls"] = new_cls
         if rec:
             print("[load] 현재 분류기로 재분류 — %d건 변경 (덤프 저장 시점 규칙과 다름)" % rec,
                   file=sys.stderr)
-        failed = saved.get("failed_sources") or []
+        failed = sorted(set(failed))
         if failed:
-            print("⚠ 이 파일은 %s 조회가 실패한 상태로 저장됐다. 해당 소스가 낀 조합은"
+            print("⚠ %s 조회가 실패한 상태로 저장된 파일이 있다. 해당 소스가 낀 조합은"
                   " 없는 것이 아니라 측정되지 않은 것이다." % ", ".join(failed),
                   file=sys.stderr)
     else:
@@ -1308,7 +1356,7 @@ def main():
                 raise SystemExit("--emit-rules 는 --by cls 에서만 쓴다. 게이트웨이가 "
                                  "사건 유형(class) 단위로 연계를 판정하기 때문이다.")
             picked = getattr(report_overlap, "picked", [])
-            src = a.load or ("%d일 조회" % a.days)
+            src = "+".join(a.load) if a.load else ("%d일 조회" % a.days)
             excl = (" / 제외: " + "|".join(a.exclude)) if a.exclude else ""
             emit_open_link_rules(res, picked, a.emit_rules,
                                  "%s / 창 %ds 이상 열림 / 최소 %d일 / 오탐율 %.0f%%%s"
