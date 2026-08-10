@@ -1,0 +1,47 @@
+# Keep 워크플로 — 연계 규칙 교체 승인 (프로비저닝 as-code).
+# 사람이 변경분을 읽고 "Run Workflow"(=승인) → SSH로 core → 그 파일을 반영.
+#
+# 왜 승인을 끼우나 — 마이닝을 정기 실행해 규칙을 갈아끼우는 것 자체는 기계적이다. 문제는
+# 규칙이 조용히 바뀌는 것이다. 비율이 96%에서 60%로 내려가면 봇의 판단이 달라지는데 아무도
+# 모른다. 나쁜 측정이 들어가면 없는 관계가 규칙이 된다(실측: 통과 조합의 81%가 단일 사건).
+#
+# 승인 계층을 새로 만들지 않는다 — 데모 B(시스템 변경)·월간 리포트(고객 발송)에 쓰던
+# 것을 그대로 쓰는 세 번째 적용이다. 설계 근거는 keep/KEEP_GUIDE.md.
+workflow:
+  id: open-link-rules-approve
+  name: Approve open-problem linkage rule change
+  description: Review the measured rule diff and promote the staged file
+  triggers:
+    - type: manual
+  steps:
+    - name: promote-rules
+      # 안전 게이트 — 규칙 승인 대기 알림에서만 실행된다. 다른 알림에서 실수로 Run 해도
+      # 아무 일도 일어나지 않는다(데모 B 의 service_restart 게이트와 같은 형태).
+      if: "'{{ alert.playbook }}' == 'rules_approve'"
+      provider:
+        type: ssh
+        config: "{{ providers.core-ansible }}"
+        with:
+          # --expect 가 핵심이다. 승인과 반영 사이에 재측정이 한 번 더 돌면 사람이 읽은
+          # 변경분과 다른 파일이 반영된다. 해시가 다르면 거부하고 다시 검토하게 한다.
+          # (월간 리포트에서 --from-draft 로 풀었던 것과 같은 문제다)
+          command: >-
+            cd /home/rocky/kinx-idc-monitoring-poc/bot &&
+            set -a && . .env && set +a &&
+            ~/bot-venv/bin/python rules_promote.py apply
+            --staged '{{ alert.staged_path }}'
+            --active '{{ alert.active_path }}'
+            --expect '{{ alert.staged_hash }}'
+
+    - name: restart-gateway
+      # 규칙은 기동 시 1회 읽는다. 반영만 하고 재기동을 빠뜨리면 파일은 바뀌었는데
+      # 동작은 그대로인 상태가 되고, 그 상태가 가장 알아채기 어렵다.
+      if: "'{{ alert.playbook }}' == 'rules_approve'"
+      provider:
+        type: ssh
+        config: "{{ providers.core-ansible }}"
+        with:
+          command: >-
+            sudo systemctl restart kinx-gateway || true;
+            sleep 2;
+            systemctl is-active kinx-gateway || echo "게이트웨이 상태를 직접 확인할 것"
