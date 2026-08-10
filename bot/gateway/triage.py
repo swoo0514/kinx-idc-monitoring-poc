@@ -123,8 +123,11 @@ async def run_incident(inc) -> dict:
         return {"fingerprint": inc.fingerprint(), "alert_count": len(inc.alerts),
                 "gated_out": True, "reason": reason, "timings": timings}
     # 사유와 조회 상태를 함께 남긴다 — 조회 실패로 인한 보수적 발동을 사후에 구분하려면 필요
-    log.info("gate fire fp=%s alerts=%d reason=%s sources=%s",
-             inc.fingerprint(), len(inc.alerts), reason, context.get("sources"))
+    # 연계 건수를 함께 남긴다 — sources 만으로는 "조회는 됐는데 몇 건 붙었나"를 알 수 없어
+    # 카드를 열어보기 전에는 확인이 안 됐다(실측 2026-08-10).
+    log.info("gate fire fp=%s alerts=%d reason=%s sources=%s open_links=%d",
+             inc.fingerprint(), len(inc.alerts), reason, context.get("sources"),
+             len(context.get("open_problems") or []))
 
     t1 = time.monotonic()
     reply = await asyncio.to_thread(llm.triage_reply, context, sev)

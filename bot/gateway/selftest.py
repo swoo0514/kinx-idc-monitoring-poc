@@ -393,6 +393,13 @@ def _open_link_checks() -> int:
     out, st = asyncio.run(collector._open_problems(
         _FakeZbx(), None, "1", {"cpu_io_pressure"}, set(), now))
     assert st == "ok" and len(out) == 2, out
+    # 인시던트에 이미 그 유형이 있으면 선행이 아니라 같은 문제의 다른 임계 트리거다.
+    # 실측 2026-08-10: 복제 지연을 임계값만 달리 본 두 트리거가 각각 "이번 알림"과
+    # "선행 문제"로 잡혔다.
+    same, st2 = asyncio.run(collector._open_problems(
+        _FakeZbx(), None, "1", {"cpu_io_pressure", "disk_space"}, set(), now))
+    assert st2 == "ok" and same == [], "같은 유형이 선행 문제로 붙었다"
+    n += 2
     # 최근 것이 먼저 — 상한에 잘릴 때 방치 항목이 아니라 선행 후보가 남아야 한다
     assert out[0]["stale"] is False and out[1]["stale"] is True, out
     assert out[0]["open_for_s"] < out[1]["open_for_s"]

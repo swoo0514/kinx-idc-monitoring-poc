@@ -271,6 +271,13 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
         if age < incident.OPEN_LINK_MIN_AGE_S:
             continue                          # 방금 난 것은 시간창 병합이 맡는다
         cls = incident.classify(p.get("name") or "", tags=p.get("tags"))
+        # 인시던트에 이미 그 유형이 있으면 선행 문제가 아니다 — **같은 문제의 다른 임계
+        # 트리거**다. 실측 2026-08-10: 복제 지연을 임계값만 달리 본 두 트리거가 각각
+        # "이번 알림"과 "선행 문제"로 잡혔다. 실환경에는 디스크 임계치를 80/85/90/95%
+        # 트리거 4개로 나눠 둔 사례가 있어 이 형태가 훨씬 흔하다.
+        # 같은 호스트만 조회하므로 유형이 같으면 같은 조건으로 본다.
+        if cls in (current_classes or ()):
+            continue
         link = incident.open_link(cls, current_classes)
         if not link:
             continue
