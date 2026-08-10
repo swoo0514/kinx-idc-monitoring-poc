@@ -106,6 +106,18 @@ ansible-playbook -i inventory.local.ini remediate_service.yml \
 
 *(참고: 만성 판정 카운트의 API 조회 상한 포화 이슈는 [`docs/03-pitfalls/structural-gaps.md`](../docs/03-pitfalls/structural-gaps.md) G3 항목을 참조합니다.)*
 
+### 5-4. 수동 분석 요청 (`analyze_now.yml`)
+
+게이트웨이 발동 조건에 의해 분석이 생략된 알림에 대해, 관제 담당자가 임의 시점에 분석을 직접 요청하는 워크플로입니다.
+
+- **적용 배경:** 관측 소스가 일부만 배선된 환경에서는 교차 신호 부재로 인한 생략 비율이 높습니다. 요청 경로가 없을 경우 봇의 판정이 최종 결정으로 확정되며, 담당자가 이를 번복할 수단이 존재하지 않습니다.
+- **안전 게이트:** `alert.playbook == 'analyze'` — 데모 B(`service_restart`)·리포트 승인(`report_approve`)·규칙 교체(`rules_approve`)와 동일한 형태입니다.
+- **사건 복원:** 알림 카드의 `analyze_ref` 속성(`소스,이벤트ID,트리거ID,유형`, 복수 시 `|` 연결)을 `bot/analyze_now.py` 에 전달하여 요청 시점에 Zabbix 를 재조회합니다. 생략 시점의 컨텍스트를 저장하지 않는 이유는 경과 시간 동안의 상태 변화를 분석에 반영하기 위함입니다.
+- **발동 조건 미적용:** 봇의 판정을 사람이 번복하는 절차이므로 조건을 재평가하지 않습니다(`run_incident(force=True)`).
+- **네 번째 재사용 사례:** 승인·실행 계층을 신규 구성하지 않고 기존 Keep 워크플로 구조를 그대로 적용하였습니다.
+
+---
+
 ---
 
 ## 6. 알려진 기술적 제약 사항 (Adoption Risks)
