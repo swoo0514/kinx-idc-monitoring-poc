@@ -37,6 +37,7 @@ _sem = threading.BoundedSemaphore(MAX_CONCURRENCY)
 _calls: list = []          # 최근 1시간 호출 시각
 _lock = threading.Lock()
 _stats = {"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0, "hour_blocked": 0}
+_peaks: list = []          # (시각, 그때 동시 수) — 누적 최고만 두면 언제 찍혔는지 모른다
 _by_kind: dict = {}        # 용도별 호출 시각 — 무엇이 예산을 쓰는지 봐야 조정이 된다
 
 # 열화 사유. 부르는 쪽이 문구를 만들 때 쓴다.
@@ -91,10 +92,25 @@ def _take_hour(exempt: bool, kind: str, now: float = None) -> bool:
         return True
 
 
-def _enter():
+def peak_last_hour(now: float = None) -> int:
+    """최근 1시간 최고 동시 호출 수.
+
+    누적 최고(`peak_inflight`)는 한 번 찍히면 영원히 남아 지금이 한가한지 붐비는지를
+    말해 주지 않는다. 상한을 올릴지 판단하려면 최근 값이 필요하다.
+    """
+    now = time.time() if now is None else now
+    with _lock:
+        _peaks[:] = [p for p in _peaks if now - p[0] <= 3600]
+        return max((p[1] for p in _peaks), default=0)
+
+
+def _enter(now: float = None):
+    now = time.time() if now is None else now
     with _lock:
         _stats["inflight"] += 1
         _stats["peak_inflight"] = max(_stats["peak_inflight"], _stats["inflight"])
+        _peaks.append((now, _stats["inflight"]))
+        _peaks[:] = [p for p in _peaks if now - p[0] <= 3600]
 
 
 def _leave():

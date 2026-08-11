@@ -58,7 +58,7 @@
         - { name: "분석 생략 수(누적)", key: "gateway.skipped" }
         - { name: "최근 창 수신 알림 수", key: "gateway.recent_alerts" }
         - { name: "최근 창 발행 측 이벤트 수", key: "gateway.zbx_events" }
-        - { name: "LLM 최고 동시 호출 수", key: "gateway.llm_peak_inflight" }
+        - { name: "LLM 최고 동시 호출 수(1시간)", key: "gateway.llm_peak_inflight" }
         - { name: "LLM 대기 포기 수(누적)", key: "gateway.llm_queue_timeouts" }
         - { name: "LLM 시간당 상한 차단 수(누적)", key: "gateway.llm_hour_blocked" }
         - { name: "LLM 최근 1시간 호출 수", key: "gateway.llm_calls_1h" }

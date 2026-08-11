@@ -1414,12 +1414,20 @@ def _llm_concurrency_checks() -> int:
         assert r2["degraded"] is True and "상한" in r2["text"], r2["text"]
         assert "집계 수치는 유효" in r2["text"], "리포트는 수치가 살아 있어야"
 
-        # 어댑터를 직접 부르는 코드가 남아 있으면 출구가 하나가 아니다
+        # 출구를 우회하는 코드가 어디에도 없어야 한다. llm.py 만 검사하면 다른 파일에
+        # 새 길이 나도 못 잡는다 — 오늘 월간 리포트에서 겪은 것이 바로 그 경우다.
+        import glob
         import re
-        src = io.open(os.path.join(os.path.dirname(__file__), "llm.py"),
-                      encoding="utf-8").read()
-        assert not re.search(r"^\s+for adapter in ", src, re.M), \
-            "llm.py 에 어댑터 반복문이 남아 있다 — 출구를 우회하는 경로다"
+        here = os.path.dirname(__file__)
+        for f in glob.glob(os.path.join(here, "*.py")):
+            base = os.path.basename(f)
+            if base in ("egress.py", "selftest.py"):
+                continue
+            src = io.open(f, encoding="utf-8").read()
+            assert not re.search(r"\.complete\s*\(", src), \
+                f"{base} 가 어댑터를 직접 부른다 — 출구를 우회하는 경로다"
+            assert not re.search(r"^\s+for adapter in ", src, re.M), \
+                f"{base} 에 어댑터 반복문이 남아 있다 — 출구를 우회하는 경로다"
     finally:
         (llm.ClaudeAdapter, llm.OllamaAdapter, egress._sem, egress.MAX_CONCURRENCY,
          egress.QUEUE_WAIT_S, egress.MAX_PER_HOUR, restore) = saved

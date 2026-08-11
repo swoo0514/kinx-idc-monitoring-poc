@@ -200,7 +200,7 @@ class Beat:
         try:
             from . import egress, incident
             st = egress.stats()
-            out["gateway.llm_peak_inflight"] = st["peak_inflight"]
+            out["gateway.llm_peak_inflight"] = egress.peak_last_hour(now)
             out["gateway.llm_queue_timeouts"] = st["queue_timeouts"]
             out["gateway.llm_hour_blocked"] = st["hour_blocked"]
             out["gateway.llm_calls_1h"] = egress.calls_last_hour(now)
