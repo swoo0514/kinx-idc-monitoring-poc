@@ -30,7 +30,7 @@ WAZUH_LIMIT = 20
 KNOWN_HOST_LOOKBACK_S = 7 * 86400
 LOKI_HOST_LABEL = os.environ.get("LOKI_HOST_LABEL", "host")
 
-# 교차 소스 조회 상태 — "신호 없음"과 "조회 실패"를 구분한다. 근거는 GATEWAY_GUIDE §15.
+# 교차 소스 조회 상태 — "신호 없음"과 "조회 실패"를 구분한다. 근거는 GATEWAY_GUIDE §12.
 SOURCE_OK = "ok"                    # 조회 성공 (결과가 비어 있어도 "없음"이 사실)
 SOURCE_UNAVAILABLE = "unavailable"  # 조회 시도했으나 실패 — 비어 있음을 근거로 쓰면 안 됨
 SOURCE_DISABLED = "disabled"        # 미배선(URL 미설정) — 애초에 판단 근거가 없음
@@ -344,7 +344,7 @@ async def _loki_name_status(client, url: str, host_label: str, now: int) -> str:
 
     이름이 안 맞아 0건인 경우와 정말 로그가 없는 경우를 구분하지 않으면 봇이
     "로그에 기록 없음"이라고 단언한다. 세 소스가 같은 호스트를 다른 이름으로
-    부르는 것은 이 랩에서 실제로 겪은 문제다. 근거는 GATEWAY_GUIDE §15.
+    부르는 것은 이 랩에서 실제로 겪은 문제다. 근거는 GATEWAY_GUIDE §12.
     """
     try:
         r = await client.get(f"{url}/loki/api/v1/label/{LOKI_HOST_LABEL}/values", params={

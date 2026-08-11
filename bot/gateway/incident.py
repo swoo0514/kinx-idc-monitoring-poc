@@ -1,6 +1,6 @@
 """인시던트 병합 — 알림 N건을 (host, class) 기준으로 1개 사건으로 묶는다.
 
-설계·근거는 bot/GATEWAY_GUIDE.md §14. 순수 로직(classify/bridge/Incident)과 비동기 버퍼
+설계·근거는 bot/GATEWAY_GUIDE.md §8. 순수 로직(classify/bridge/Incident)과 비동기 버퍼
 (IncidentManager)를 분리했다.
 """
 
@@ -32,7 +32,7 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-# 위에서부터 먼저 걸리는 것. 순서와 키워드 폭이 곧 분류 정확도다 — GATEWAY_GUIDE §14.
+# 위에서부터 먼저 걸리는 것. 순서와 키워드 폭이 곧 분류 정확도다 — GATEWAY_GUIDE §8.
 # 손대면 selftest 의 CASES_CLASSIFY 를 함께 늘린다.
 CLASS_RULES = [
     ("replication", ["복제", "replication", "repl", "slave", "seconds_behind",
@@ -112,7 +112,7 @@ _WORD_BOUNDARY_MAX = 5
 
 def _matcher(keyword: str):
     # 경계를 \w 가 아니라 영숫자로 잡는다 — \w 는 밑줄을 단어 문자로 보므로 "sshd" 가
-    # "sshd_config" 에 안 걸린다. 근거는 GATEWAY_GUIDE §14.
+    # "sshd_config" 에 안 걸린다. 근거는 GATEWAY_GUIDE §8.
     if keyword.isascii() and " " not in keyword and len(keyword) <= _WORD_BOUNDARY_MAX:
         return re.compile(rf"(?<![A-Za-z0-9]){re.escape(keyword)}(?![A-Za-z0-9])")
     return None
@@ -121,7 +121,7 @@ def _matcher(keyword: str):
 _COMPILED_RULES = [(cls, [(kw, _matcher(kw)) for kw in kws]) for cls, kws in CLASS_RULES]
 
 # 서로 겹치면 안 된다 — _bridge_id 가 첫 매칭을 반환하므로 겹치면 뒤 그룹이 死코드가 된다.
-# 아래 _validate_bridges 가 import 시점에 강제한다. 조합 근거는 GATEWAY_GUIDE §14.
+# 아래 _validate_bridges 가 import 시점에 강제한다. 조합 근거는 GATEWAY_GUIDE §8.
 BRIDGE_GROUPS = [
     frozenset({"replication", "cpu_io_pressure"}),
     frozenset({"disk_space", "service_down"}),
@@ -453,7 +453,7 @@ class IncidentManager:
 
     on_signal(alert, thread_ts) -> ts : 알림 도착 즉시 원시 신호를 게시하는 선택적 콜백.
     신규 인시던트면 thread_ts=None(최상위, 반환 ts 가 앵커), 후속이면 앵커 ts(답글).
-    창 마감 조건과 fast-path 설계는 GATEWAY_GUIDE §14·§18.
+    창 마감 조건과 fast-path 설계는 GATEWAY_GUIDE §8·§9.
     """
 
     def __init__(self, on_close, debounce_s: float = None, max_window_s: float = None,

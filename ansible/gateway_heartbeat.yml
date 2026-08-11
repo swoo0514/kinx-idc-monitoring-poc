@@ -130,8 +130,6 @@
             value: "{EVENT.DATE}"
           - name: event_time
             value: "{EVENT.TIME}"
-          - name: event_opdata
-            value: "{EVENT.OPDATA}"
           - name: host
             value: "{HOST.HOST}"
           - name: severity

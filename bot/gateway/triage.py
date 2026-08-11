@@ -8,7 +8,7 @@ from . import collector, holmes, incident as incident_mod, keep, llm, slack
 
 log = logging.getLogger("gateway.triage")
 
-# fire-and-forget 태스크의 강참조. 안 잡으면 GC 로 조용히 사라진다(공식 문서). 가이드 §17.
+# fire-and-forget 태스크의 강참조. 안 잡으면 GC 로 조용히 사라진다(공식 문서). 가이드 §10.
 _bg_tasks: set = set()
 
 
@@ -41,7 +41,7 @@ async def run(event_id: str, trigger_id: str, sev: str,
         context = await collector.collect_context(zbx, event_id, trigger_id)
     except Exception as e:
         log.warning("collect failed for event=%s: %s", event_id, e)
-        # 조회를 못 한 것이므로 "신호 없음"이 아니라 "미상" — 가이드 §15
+        # 조회를 못 한 것이므로 "신호 없음"이 아니라 "미상" — 가이드 §12
         context = {"event": {"name": alert_name}, "trigger": {}, "host": {},
                    "metrics": [], "prejudge": {}, "logs": [], "security": [],
                    "sources": {"logs": collector.SOURCE_UNAVAILABLE,
@@ -72,7 +72,7 @@ async def run(event_id: str, trigger_id: str, sev: str,
 
 
 def _push_gated(inc, context: dict, reason: str) -> dict:
-    """게이트에서 걸러진 사건도 Keep 에는 남긴다 — 근거는 가이드 §14 말미."""
+    """게이트에서 걸러진 사건도 Keep 에는 남긴다 — 근거는 가이드 §8 말미."""
     verdict = incident_mod.dominant_verdict(context) or "미상"
     classes = ", ".join(sorted(inc.classes()))
     note = (f"*분석 생략 — 봇 판단*\n"
@@ -192,7 +192,7 @@ async def run_incident(inc, force: bool = False) -> dict:
 
 async def _deep_investigate(host: str, question: str, sev: str,
                             fingerprint: str = "", thread_ts: str = None) -> None:
-    """백그라운드 심층조사 → Slack 스레드 답글 + Keep Note enrich. 회수 경로는 가이드 §17."""
+    """백그라운드 심층조사 → Slack 스레드 답글 + Keep Note enrich. 회수 경로는 가이드 §10."""
     t0 = time.monotonic()
     res = await asyncio.to_thread(holmes.investigate, host, question)
     took = round(time.monotonic() - t0, 1)

@@ -34,7 +34,7 @@ if not os.environ.get("OPEN_LINK_RULES_FILE"):
 
 
 async def _raw_ping(alert, thread_ts):
-    """알림 도착 즉시 원시 신호 카드. 반환 ts 가 인시던트 스레드 앵커 (GATEWAY_GUIDE §18)."""
+    """알림 도착 즉시 원시 신호 카드. 반환 ts 가 인시던트 스레드 앵커 (GATEWAY_GUIDE §9)."""
     # Slack 호출은 블로킹이라 to_thread 로 감싼다 — 인시던트 타이머 루프를 막지 않게.
     res = await asyncio.to_thread(slack.post_raw, alert.alert_name or "(알림명 없음)",
                                   alert.sev, alert.host, thread_ts)
@@ -191,7 +191,7 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
 
 
 def _queue_low_severity(host, alert_name, sev, cls, notify: bool, ref: str = ""):
-    """SEV3(digest)·SEV4(dashboard_only) — 기록만 남기고 분석은 생략 (GATEWAY_GUIDE §19)."""
+    """SEV3(digest)·SEV4(dashboard_only) — 기록만 남기고 분석은 생략 (GATEWAY_GUIDE §11)."""
     # fingerprint 를 (호스트, 유형)으로 고정해 같은 종류가 한 행에 모이게 한다(반복 빈도 랭킹용).
     fp = hashlib.sha1(f"lowsev|{host}|{cls}".encode()).hexdigest()[:12]
     tier = "덜 급함(digest)" if notify else "대시보드 전용"

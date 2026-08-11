@@ -1,6 +1,6 @@
 """HolmesGPT 온디맨드 심층조사 어댑터 — 서버 모드의 HTTP API 호출. 읽기 전용.
 
-발동 조건·질문 구성·결과 회수 경로는 bot/GATEWAY_GUIDE.md §17.
+발동 조건·질문 구성·결과 회수 경로는 bot/GATEWAY_GUIDE.md §10.
 환경변수는 bot/.env.example, 도입 판정은 docs/02-design/decisions/adr-002-holmesgpt.md.
 API 근거: holmesgpt.dev `/dev/reference/http-api/` (POST /api/chat → {analysis,...}).
 """
@@ -20,7 +20,7 @@ def should_investigate(sev: str, degraded: bool, sources, merged: bool = False,
     """자동 발동 조건(승인 아님 — 읽기 전용이므로). 반환 (bool, reason).
 
     **조건의 순서에 의미가 있다.** 위중·열화는 지식 여부와 무관하므로 만성 억제보다 앞이고,
-    MSP 테넌트 경계는 그보다도 앞이다. 근거는 가이드 §17.
+    MSP 테넌트 경계는 그보다도 앞이다. 근거는 가이드 §10.
     """
     if os.environ.get("HOLMES_ENABLED", "") != "1":
         return False, "disabled"
@@ -43,7 +43,7 @@ def should_investigate(sev: str, degraded: bool, sources, merged: bool = False,
 def build_question(alert_names, classes, window_s: float) -> str:
     """홈즈에게 넘길 사건 서술 — 조사 대상을 이 사건으로 고정한다.
 
-    건수와 호스트만 넘기면 그 호스트에서 그 순간 활성인 아무 문제나 조사한다(실측). 가이드 §17.
+    건수와 호스트만 넘기면 그 호스트에서 그 순간 활성인 아무 문제나 조사한다(실측). 가이드 §10.
     """
     names = "; ".join("(%d) %s" % (i + 1, n) for i, n in enumerate(alert_names) if n)
     cls = ", ".join(sorted(c for c in (classes or []) if c))

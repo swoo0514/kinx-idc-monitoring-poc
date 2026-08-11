@@ -16,9 +16,9 @@ var text = icon + ' *감시 도구 자체 알림 — ' + head + '*\n'
     + '호스트: `' + params.host + '`  ·  심각도: ' + params.severity + '\n'
     + params.event_date + ' ' + params.event_time;
 
-if (params.event_opdata) {
-    text += '\n' + params.event_opdata;
-}
+// {EVENT.OPDATA} 는 넣지 않는다. 트리거의 운영 데이터 칸이 비어 있으면 Zabbix 가
+// 조건식 아이템의 마지막 값을 대신 넣는데, 이 트리거에서는 그 값이 늘 1 이라
+// 뜻 없는 숫자 한 줄이 붙는다(랩 실측).
 
 var req = new HttpRequest();
 req.addHeader('Content-Type: application/json; charset=utf-8');
