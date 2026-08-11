@@ -215,6 +215,17 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         _open_probe(),
     )
 
+    # 하나라도 성공했으면 ok. 전부 실패했으면 미상이다. 알림이 애초에 Zabbix 축을
+    # 안 가지면(Wazuh 단독) 판단할 대상이 없으므로 미배선으로 둔다.
+    if not zbx_alerts:
+        metrics_status = SOURCE_DISABLED
+    elif any(isinstance(r, dict) for r in per):
+        metrics_status = SOURCE_OK
+    else:
+        log.warning("Zabbix 수집 전건 실패 host=%s alerts=%d — 미상으로 표시한다",
+                    zbx_host, len(zbx_alerts))
+        metrics_status = SOURCE_UNAVAILABLE
+
     alerts_ctx = []
     for a, r in zip(zbx_alerts, per):
         if not isinstance(r, dict):
@@ -249,8 +260,12 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         "security": security,
         # 이번 알림보다 먼저 열려 있던, 연계 관계에 있는 문제. 병합 대상이 아니라 참고 정보다.
         "open_problems": opens,
+        # Zabbix 축도 상태를 낸다. 수집은 예외를 위로 안 던지므로(gather 가 예외를
+        # 값으로 돌려준다) 전건 실패해도 여기까지 조용히 온다. 로그·보안만 상태를
+        # 내면 게이트와 카드가 "조회는 정상"으로 읽어, Zabbix 가 죽어 있던 시간대의
+        # 사건이 전부 "봐줬는데 볼 게 없었다"로 남는다.
         "sources": {"logs": logs_status, "security": sec_status,
-                    "open_problems": opens_status},
+                    "open_problems": opens_status, "metrics": metrics_status},
     }
 
 

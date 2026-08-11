@@ -275,6 +275,7 @@ def main():
     idem_checks = _idempotency_checks()
     overflow_checks = _overflow_checks()
     tenant_checks = _tenant_scope_checks()
+    collect_fail_checks = _collect_failure_checks()
     analyze_checks = _analyze_ref_checks()
     beat_checks = _heartbeat_checks()
     registry_checks = _registry_checks()
@@ -287,7 +288,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + tenant_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + tenant_checks + collect_fail_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -540,6 +541,18 @@ def _source_status_checks() -> int:
     # 프롬프트와 코드의 동기 — 상태를 안 보는 프롬프트로 되돌아가면 실패
     assert "sources.security" in llm.TRIAGE_SYSTEM, "프롬프트가 조회 상태를 안 본다"
     assert "sources.open_problems" in llm.TRIAGE_SYSTEM, "프롬프트가 열린 문제 상태를 안 본다"
+    # 축을 늘리면 프롬프트도 같이 늘어야 한다. 안 그러면 그 축이 실패했을 때 모델이
+    # 빈 값을 "이상 없음"으로 읽는다.
+    assert "sources.metrics" in llm.TRIAGE_SYSTEM, "프롬프트가 지표 축 상태를 안 본다"
+    assert "collect_failed" in llm.TRIAGE_SYSTEM, "프롬프트가 알림별 수집 실패를 안 본다"
+    # 화이트리스트가 실제로 통과시키는지 — 목록에 없으면 프롬프트에 안 실린다
+    m = masking.Masker()
+    built = masking.build_llm_context(
+        {"incident": {"host": "h1"}, "host": {},
+         "alerts": [{"name": "n", "source": "s", "sev": "SEV3", "class": "disk_space",
+                     "error": "collect_failed"}],
+         "logs": [], "security": [], "sources": {}}, "SEV3", m)
+    assert built["alerts"][0].get("error") == "collect_failed",         f"수집 실패 표시가 전송 전에 사라진다: {built['alerts'][0]}"
     assert "stale" in llm.TRIAGE_SYSTEM, "프롬프트가 장기 미해소를 구분하지 않는다"
     return 47
 
@@ -1253,6 +1266,52 @@ def _idempotency_checks() -> int:
     assert not errors2, f"청소 중 예외: {errors2[:2]}"
     app_mod._seen.clear()
     return 4
+
+
+def _collect_failure_checks() -> int:
+    """Zabbix 수집이 전부 실패했을 때 그 사실이 밖으로 드러나는가.
+
+    수집은 `gather(return_exceptions=True)` 로 돌므로 전건 실패해도 예외가 안 난다.
+    그러면 폴백 컨텍스트도 안 만들어지고, 로그·보안은 따로 조회되어 ok 가 된다.
+    게이트는 그 두 축만 보므로 "교차 신호 없음(조회는 정상) — LLM 스킵" 으로 남는다.
+    Zabbix 가 죽어 있던 시간대의 사건이 전부 "봐줬는데 볼 게 없었다"로 기록된다.
+    """
+    import asyncio
+    import time as _t
+
+    from . import collector, incident as inc_mod
+
+    class _DeadZbx:
+        source = "zabbix-internal"
+
+        async def call(self, *a, **kw):
+            raise RuntimeError("zabbix down")
+
+    inc = inc_mod.Incident(
+        key=("internal", "h1", "disk_space"), host="h1",
+        alerts=[inc_mod.Alert(source="zabbix-internal", event_id="e1", trigger_id="t1",
+                              host="h1", alert_name="disk full", sev="SEV3",
+                              incident_class="disk_space", recv=_t.monotonic())],
+        opened_at=_t.monotonic(), last_at=_t.monotonic())
+
+    ctx = asyncio.run(collector.collect_incident_context(_DeadZbx(), inc))
+    st = ctx.get("sources") or {}
+    assert "metrics" in st, ("Zabbix 수집 상태가 sources 에 없다 — 통째로 실패해도 "
+                            f"밖에서 구분할 수 없다: {st}")
+    assert st["metrics"] == collector.SOURCE_UNAVAILABLE, st
+
+    # 게이트도 그 축을 봐야 한다. 안 보면 "조회는 정상"으로 스킵된다.
+    fire, why = inc_mod.should_triage(inc, ctx)
+    assert fire is True, f"Zabbix 가 죽었는데 조회 정상으로 보고 스킵했다: {why}"
+    assert "실패" in why or "미상" in why, why
+
+    # 사람 눈에도 보여야 한다. 카드에 표시가 없으면 알아채는 경로가 로그뿐이다.
+    from . import masking, slack
+    note = slack._source_note(ctx["sources"])
+    assert "지표" in note, f"카드에 Zabbix 축 실패가 안 보인다: {note!r}"
+    # 전송 화이트리스트에도 있어야 LLM 이 그 상태를 읽는다
+    assert "metrics" in masking._STATUS_KEYS, masking._STATUS_KEYS
+    return 6
 
 
 def _tenant_scope_checks() -> int:

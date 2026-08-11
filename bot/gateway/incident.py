@@ -479,8 +479,12 @@ def should_triage(incident, context: dict, min_cross: int = None, now: float = N
         return True, f"{len(incident.alerts)}건 병합 — 교차 축 존재"
 
     sources = context.get("sources") or {}
-    failed = [k for k in ("logs", "security") if sources.get(k) == SOURCE_UNAVAILABLE]
-    unmatched = [k for k in ("logs", "security") if sources.get(k) == SOURCE_UNMATCHED]
+    # 축 목록을 여기서 손으로 적으면 축이 늘 때마다 빠뜨린다. 실제로 open_problems 와
+    # metrics 가 그렇게 빠져 있었고, 그동안 그 축이 통째로 실패해도 "조회는 정상"으로
+    # 스킵됐다. 수집기가 내는 축을 그대로 순회한다.
+    axes = [k for k in sources if k != "open_problems"] or ["logs", "security"]
+    failed = [k for k in axes if sources.get(k) == SOURCE_UNAVAILABLE]
+    unmatched = [k for k in axes if sources.get(k) == SOURCE_UNMATCHED]
     if failed or unmatched:
         why = (f"조회 실패({', '.join(failed)})" if failed else "") + \
               (" · " if failed and unmatched else "") + \

@@ -43,7 +43,7 @@ class Masker:
         return text
 
 
-_STATUS_KEYS = ("logs", "security", "open_problems")
+_STATUS_KEYS = ("logs", "security", "open_problems", "metrics")
 _STATUS_VALUES = (collector.SOURCE_OK, collector.SOURCE_UNAVAILABLE,
                   collector.SOURCE_DISABLED, collector.SOURCE_UNMATCHED)
 
@@ -159,6 +159,9 @@ def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
                 for it in a.get("metrics", []) or []
             ],
             "prejudge": {"verdict": pj.get("verdict"), "statement": pj.get("statement")},
+            # 수집기가 실패를 표시해도 화이트리스트에 없으면 프롬프트에 안 실린다.
+            # 그러면 모델은 "지표 이상 없음"으로 읽는다.
+            "error": a.get("error"),
         })
 
     return {

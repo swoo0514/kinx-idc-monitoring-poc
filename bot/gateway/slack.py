@@ -12,7 +12,10 @@ log = logging.getLogger("gateway.slack")
 API = "https://slack.com/api/chat.postMessage"
 
 _SEV_EMOJI = {"SEV1": "🔴", "SEV2": "🟠", "SEV3": "🟡", "SEV4": "🔵", "NONE": "⚪"}
-_SOURCE_LABEL = {"logs": "로그(Loki)", "security": "보안(Wazuh)"}
+# 축이 늘 때 여기를 빠뜨리면 그 축이 통째로 실패해도 카드에 아무 표시가 안 난다.
+# open_problems·metrics 가 실제로 그렇게 빠져 있었다.
+_SOURCE_LABEL = {"logs": "로그(Loki)", "security": "보안(Wazuh)",
+                 "metrics": "지표(Zabbix)", "open_problems": "선행 문제"}
 
 
 def _source_note(sources: dict) -> str:
