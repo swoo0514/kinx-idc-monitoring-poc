@@ -136,6 +136,18 @@
             value: "{HOST.HOST}"
           - name: severity
             value: "{EVENT.SEVERITY}"
+        # 메시지 템플릿이 없으면 동작을 default_msg 로 둘 때 발송이 아예 만들어지지
+        # 않는다. 랩에서 액션·조건·미디어가 다 맞는데도 알림이 안 가서 확인한 원인이다.
+        # 문구 자체는 위 스크립트가 만들고, 여기서는 존재만 있으면 된다.
+        message_templates:
+          - eventsource: triggers
+            recovery: operations
+            subject: "{EVENT.NAME}"
+            body: "{EVENT.NAME}"
+          - eventsource: triggers
+            recovery: recovery_operations
+            subject: "{EVENT.NAME}"
+            body: "{EVENT.NAME}"
         state: present
 
     # zabbix_user 모듈은 사용자를 통째로 관리하려 해서 소속 그룹까지 요구한다. 기존
