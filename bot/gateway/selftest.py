@@ -276,6 +276,7 @@ def main():
     overflow_checks = _overflow_checks()
     tenant_checks = _tenant_scope_checks()
     collect_fail_checks = _collect_failure_checks()
+    wrong_srv_checks = _wrong_server_checks()
     analyze_checks = _analyze_ref_checks()
     beat_checks = _heartbeat_checks()
     registry_checks = _registry_checks()
@@ -288,7 +289,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + tenant_checks + collect_fail_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + tenant_checks + collect_fail_checks + wrong_srv_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1266,6 +1267,49 @@ def _idempotency_checks() -> int:
     assert not errors2, f"청소 중 예외: {errors2[:2]}"
     app_mod._seen.clear()
     return 4
+
+
+def _wrong_server_checks() -> int:
+    """명부를 못 읽었을 때 남의 감시 서버에 되묻지 않는가.
+
+    명부 로드가 실패하면 조용히 환경변수로 떨어진다. 그러면 MSP 알림의 이벤트·트리거
+    ID 를 사내 서버에 묻게 되는데, ID 는 서버마다 따로 증가하므로 (a) 없으면 빈 결과라
+    "90일 내 이력 없음 = 신규"로 확정되고 (b) 겹치면 사내 다른 호스트의 트리거명·지표·
+    이력이 그 고객 사건의 컨텍스트로 실린다. 어느 쪽도 예외가 아니라 상태는 전부 ok 다.
+    """
+    import importlib
+    import os
+
+    from . import collector, registry
+
+    saved = {k: os.environ.get(k) for k in ("HOST_REGISTRY_FILE", "ZABBIX_URL",
+                                            "ZABBIX_TOKEN")}
+    os.environ["HOST_REGISTRY_FILE"] = os.path.join(os.path.dirname(__file__),
+                                                    "없는-명부.yml")
+    os.environ["ZABBIX_URL"] = "http://내부:8080"
+    os.environ["ZABBIX_TOKEN"] = "내부토큰"
+    try:
+        importlib.reload(registry)
+        assert registry.status()["error"], "명부 로드 실패를 만들지 못했다"
+        # 명부를 못 읽었으면 소스를 지정한 조회는 **막아야** 한다. 조용히 기본 서버로
+        # 떨어지면 남의 서버에 묻는 것이 된다.
+        try:
+            c = collector.ZabbixClient(source="zabbix-msp")
+            fell_back = c.api.startswith("http://내부")
+        except RuntimeError:
+            fell_back = False
+        assert not fell_back, ("명부를 못 읽었는데 MSP 조회가 사내 서버로 떨어졌다 — "
+                               "없는 호스트라 '신규'로 확정되거나 남의 자료가 실린다")
+        # 소스를 안 주는 단건 경로는 예전대로 기본 서버를 쓴다(감시 서버 하나인 환경)
+        assert collector.ZabbixClient().api.startswith("http://내부")
+        return 3
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        importlib.reload(registry)
 
 
 def _collect_failure_checks() -> int:

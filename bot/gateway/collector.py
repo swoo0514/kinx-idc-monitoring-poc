@@ -49,6 +49,20 @@ class ZabbixClient:
 
     def __init__(self, url: str = None, token: str = None, source: str = ""):
         conf = registry.source_conf(source) if source else {}
+        # 명부를 못 읽었으면 소스를 지정한 조회를 막는다. 조용히 기본 서버로 떨어지면
+        # MSP 알림의 이벤트 ID 를 사내 서버에 묻게 되는데, ID 는 서버마다 따로 늘어나므로
+        # 없으면 "90일 내 이력 없음 = 신규"로 확정되고 겹치면 남의 호스트 자료가 그
+        # 고객 사건에 실린다. 둘 다 예외가 안 나서 상태는 ok 로 남는다.
+        #
+        # 명부가 아예 설정 안 된 환경(감시 서버 하나)은 여기 안 걸린다 — 그때는
+        # registry.status()["error"] 가 비어 있다.
+        if url is None and source and not conf.get("url"):
+            st = registry.status()
+            if st.get("error"):
+                raise RuntimeError(
+                    "호스트 명부를 못 읽어(%s) 감시 서버 %r 의 주소를 모른다. 기본 서버로 "
+                    "대신 묻지 않는다 — 남의 서버 자료가 이 사건에 실린다. "
+                    "명부(%s)를 고치고 재기동한다." % (st["error"], source, st["path"]))
         if url is None and conf.get("url"):
             url = conf["url"]
             # 토큰은 파일이 아니라 환경변수에서 읽는다(명부는 깃에 올라간다).
