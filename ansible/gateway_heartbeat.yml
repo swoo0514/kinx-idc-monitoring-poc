@@ -91,6 +91,7 @@
     # 크리덴셜은 파일에 넣지 않는다. 실행 전에 export 한다.
     sw_bot_token: "{{ lookup('env', 'SELFWATCH_SLACK_BOT_TOKEN') }}"
     sw_channel: "{{ lookup('env', 'SELFWATCH_SLACK_CHANNEL') }}"
+    sw_api: "http://{{ hostvars[inventory_hostname].ansible_host }}:{{ ansible_httpapi_port | default(8080) }}/api_jsonrpc.php"
   tasks:
     - name: 크리덴셜 확인 — 비어 있으면 알림이 조용히 안 간다
       ansible.builtin.assert:
@@ -128,21 +129,61 @@
             value: "{EVENT.SEVERITY}"
         state: present
 
-    - name: 수신 사용자에게 이 미디어 연결
-      community.zabbix.zabbix_user:
-        username: "{{ sw_user }}"
-        user_medias:
-          - mediatype: "{{ sw_media_name }}"
-            sendto: "{{ sw_channel }}"
-            severity:
-              not_classified: false
-              information: false
-              warning: true
-              average: true
-              high: true
-              disaster: true
-            active: true
-        state: present
+    # zabbix_user 모듈은 사용자를 통째로 관리하려 해서 소속 그룹까지 요구한다. 기존
+    # 사용자의 그룹을 우리가 다시 써 넣으면 틀렸을 때 로그인이 막힌다. 그래서 미디어만
+    # 바꾼다 — user.update 는 넘긴 항목만 바꾸고 나머지는 그대로 둔다(공식 문서 확인).
+    - name: 사용자·미디어 타입 식별자 조회
+      ansible.builtin.uri:
+        url: "{{ sw_api }}"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: "{{ item.method }}"
+          params: "{{ item.params }}"
+      register: sw_ids
+      loop:
+        - method: user.get
+          params: { output: ["userid"], filter: { username: "{{ sw_user }}" } }
+        - method: mediatype.get
+          params: { output: ["mediatypeid"], filter: { name: "{{ sw_media_name }}" } }
+      loop_control:
+        label: "{{ item.method }}"
+
+    - name: 조회 결과 확인 — 없으면 알림이 조용히 안 간다
+      ansible.builtin.assert:
+        that:
+          - sw_ids.results[0].json.result | length > 0
+          - sw_ids.results[1].json.result | length > 0
+        fail_msg: "사용자 {{ sw_user }} 또는 미디어 타입 {{ sw_media_name }} 을 찾지 못했다"
+
+    - name: 수신 사용자에게 이 미디어 연결 (미디어만 교체)
+      ansible.builtin.uri:
+        url: "{{ sw_api }}"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: user.update
+          params:
+            userid: "{{ sw_ids.results[0].json.result[0].userid }}"
+            medias:
+              - mediatypeid: "{{ sw_ids.results[1].json.result[0].mediatypeid }}"
+                sendto: "{{ sw_channel }}"
+                active: 0          # 0 = 사용, 1 = 사용 안 함
+                severity: 60       # Warning(4)+Average(8)+High(16)+Disaster(32)
+                period: "1-7,00:00-24:00"
+      register: sw_upd
+      failed_when: sw_upd.json.error is defined
+      changed_when: true
 
     - name: 액션 — 이 호스트의 알림만, 이 미디어로만
       community.zabbix.zabbix_action:
