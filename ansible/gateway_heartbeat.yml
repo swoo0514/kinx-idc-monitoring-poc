@@ -13,9 +13,9 @@
     hb_group: "Applications"
     # 전송 주기(기본 60초)의 3배. 한 번 놓쳤다고 깨우면 재기동 때마다 알림이 뜬다.
     hb_nodata_window: "3m"
-    # 알림이 이만큼 안 들어오면 발행 측(액션·미디어)이 멈췄는지 확인한다.
-    # 사내는 하루 400건대라 30분 무알림은 드물다. 조용한 환경이면 늘린다.
-    hb_quiet_window: "1800"
+    # 발행 측이 이만큼보다 많이 만들었는데 우리가 0 이면 경로 고장으로 본다.
+    # 1~2건은 액션 조건에 안 걸린 것일 수 있어 여유를 둔다.
+    hb_gap_min_events: "3"
   tasks:
     - name: 게이트웨이 전용 호스트 (에이전트 없이 트래퍼만 받는다)
       community.zabbix.zabbix_host:
@@ -45,6 +45,16 @@
         - { name: "사건 수(누적)", key: "gateway.incidents" }
         - { name: "분석 수행 수(누적)", key: "gateway.analyzed" }
         - { name: "분석 생략 수(누적)", key: "gateway.skipped" }
+        - { name: "최근 창 수신 알림 수", key: "gateway.recent_alerts" }
+        - { name: "최근 창 발행 측 이벤트 수", key: "gateway.zbx_events" }
+
+    # 이름을 바꾼 트리거는 새로 생기고 옛것이 남는다. 남겨 두면 "조용하다"로 판정하는
+    # 옛 규칙이 계속 오탐을 낸다. 이름으로 지운다.
+    - name: 폐기된 트리거 제거 (조용함으로 판정하던 것)
+      community.zabbix.zabbix_trigger:
+        name: "알림이 들어오지 않음"
+        host_name: "{{ hb_host }}"
+        state: absent
 
     - name: 트리거 — 신호가 끊긴 것과 알림이 안 들어오는 것을 나눠 본다
       community.zabbix.zabbix_trigger:
@@ -67,14 +77,19 @@
             봇이 {{ hb_nodata_window }} 동안 생존 신호를 보내지 않았다. 프로세스가
             죽었거나 Zabbix 로 가는 경로가 끊긴 것이다. 알림은 계속 들어오는데
             아무도 분석하지 않는 상태일 수 있다.
-        - name: "알림이 들어오지 않음"
+        # "조용하다"로 판정하지 않는다. 조용한 시간대가 정상인 환경이 대부분이라
+        # 그러면 오탐이 난다(랩에서 실제로 떴다). 발행 측이 만든 이벤트 수와 받은 수를
+        # 비교해서, 저쪽엔 쌓였는데 이쪽이 0 일 때만 경로 고장으로 본다.
+        - name: "알림 수신 경로 끊김"
           expression: >-
             last(/{{ hb_host }}/gateway.alive)=1 and
-            last(/{{ hb_host }}/gateway.since_last_alert)>{{ hb_quiet_window }}
+            last(/{{ hb_host }}/gateway.zbx_events)>{{ hb_gap_min_events }} and
+            last(/{{ hb_host }}/gateway.recent_alerts)=0
           severity: average
           description: >-
-            봇은 살아 있는데 알림이 오래 들어오지 않았다. 발행 측 액션이나 미디어가
-            멈췄을 수 있다. 조용한 시간대가 정상인 환경이면 hb_quiet_window 를 늘린다.
+            감시 서버는 최근 창에 이벤트를 만들었는데 봇은 한 건도 받지 못했다.
+            액션·미디어 타입·웹훅 주소 중 하나가 끊긴 것이다. 알림이 없는 조용한
+            상태와는 다르다 — 조용하면 양쪽 다 0 이라 이 조건은 성립하지 않는다.
 
 # ── 알림 경로 — 게이트웨이를 거치지 않는 독립 경로 ──────────────────────────
 # 게이트웨이가 죽었다는 알림을 게이트웨이로 보내면 그 알림도 같이 죽는다. 랩에서

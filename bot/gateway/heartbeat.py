@@ -23,10 +23,18 @@ import struct
 import threading
 import time
 
+import httpx
+
 log = logging.getLogger("gateway.heartbeat")
 
 HEADER = b"ZBXD\x01"
 TIMEOUT_S = 5
+
+# "알림이 안 들어온다"를 조용함으로 판정하면 안 된다. 조용한 시간대가 정상인 환경이
+# 대부분이라 그러면 우리가 없애려던 노이즈를 새로 만든다. 대신 **발행 측이 만든 이벤트
+# 수와 우리가 받은 수를 비교한다** — Zabbix 에는 이벤트가 쌓였는데 봇에 하나도 안 왔으면
+# 그건 조용한 것이 아니라 경로가 끊긴 것이다. 근거는 GATEWAY_GUIDE §20-3.
+RECENT_WINDOW_S = int(os.environ.get("HEARTBEAT_RECENT_WINDOW_S", "3600"))
 
 
 def _cfg():
@@ -86,6 +94,32 @@ def _recv_exact(sock, n: int) -> bytes:
     return buf
 
 
+def zabbix_recent_events(window_s: int, now: float = None):
+    """최근 창에서 Zabbix 가 만든 문제 이벤트 수. 읽기 전용 조회이고 실패하면 None.
+
+    countOutput 을 쓰므로 몇만 건이어도 응답이 한 줄이다(공식 문서 확인).
+    수집기와 달리 여기서는 동기 호출이다 — 전송 스레드 안에서 돌기 때문이다.
+    """
+    url = os.environ.get("ZABBIX_URL", "").rstrip("/")
+    token = os.environ.get("ZABBIX_TOKEN", "")
+    if not (url and token):
+        return None
+    now = int(time.time() if now is None else now)
+    try:
+        r = httpx.post(url + "/api_jsonrpc.php", timeout=TIMEOUT_S,
+                       headers={"Authorization": "Bearer " + token,
+                                "Content-Type": "application/json-rpc"},
+                       json={"jsonrpc": "2.0", "id": 1, "method": "event.get",
+                             "params": {"source": 0, "object": 0, "value": 1,
+                                        "time_from": now - int(window_s),
+                                        "time_till": now, "countOutput": True}})
+        r.raise_for_status()
+        return int(r.json()["result"])
+    except Exception as e:
+        log.warning("발행 측 이벤트 수 조회 실패: %s", e)
+        return None
+
+
 class Beat:
     """주기 전송 + 처리량 집계.
 
@@ -100,19 +134,29 @@ class Beat:
         self.started_at = time.time()
         self.last_alert_at = None
         self.counters = {"alerts": 0, "incidents": 0, "analyzed": 0, "skipped": 0}
+        self._recv: list = []   # 최근 수신 시각 — 누적 수로는 "요즘" 을 판정할 수 없다
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
 
     def mark_alert(self):
+        now = time.time()
         with self._lock:
             self.counters["alerts"] += 1
-            self.last_alert_at = time.time()
+            self.last_alert_at = now
+            self._recv.append(now)
+            self._recv[:] = [t for t in self._recv if now - t <= RECENT_WINDOW_S]
 
     def mark(self, name: str):
         with self._lock:
             if name in self.counters:
                 self.counters[name] += 1
+
+    def recent_alerts(self, now: float = None) -> int:
+        now = time.time() if now is None else now
+        with self._lock:
+            self._recv[:] = [t for t in self._recv if now - t <= RECENT_WINDOW_S]
+            return len(self._recv)
 
     def values(self, now: float = None) -> dict:
         now = time.time() if now is None else now
@@ -122,7 +166,7 @@ class Beat:
         # 알림을 한 번도 못 받았으면 기동 시각을 기준으로 잰다 — 값을 비우면 Zabbix 가
         # "아직 없음"과 "오래 없음"을 구분하지 못한다.
         since = now - (last if last else self.started_at)
-        return {
+        out = {
             "gateway.alive": 1,
             "gateway.uptime": int(now - self.started_at),
             "gateway.since_last_alert": int(since),
@@ -130,7 +174,14 @@ class Beat:
             "gateway.incidents": c["incidents"],
             "gateway.analyzed": c["analyzed"],
             "gateway.skipped": c["skipped"],
+            "gateway.recent_alerts": self.recent_alerts(now),
         }
+        # 발행 측이 같은 창에 몇 건을 만들었는지. 못 읽으면 아예 안 보낸다 — 0 을 보내면
+        # "발행 측도 조용했다"로 읽혀 경로 고장을 정상으로 만든다.
+        produced = zabbix_recent_events(RECENT_WINDOW_S, now)
+        if produced is not None:
+            out["gateway.zbx_events"] = produced
+        return out
 
     def start(self):
         if not enabled():
