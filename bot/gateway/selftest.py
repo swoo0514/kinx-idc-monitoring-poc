@@ -272,6 +272,7 @@ def main():
     class_tag_checks = _class_tag_checks()
     class_map_checks = _class_map_checks()
     pending_checks = _pending_checks()
+    idem_checks = _idempotency_checks()
     analyze_checks = _analyze_ref_checks()
     beat_checks = _heartbeat_checks()
     registry_checks = _registry_checks()
@@ -284,7 +285,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1180,6 +1181,78 @@ def _incident_checks() -> int:
     return 25 + len(CASES_CLASSIFY) + gate_checks
 
 
+def _idempotency_checks() -> int:
+    """중복 판정 — 여러 스레드가 동시에 들어와도 한 번만 통과해야 한다.
+
+    웹훅이 `async def` 가 아니라 동기 함수라 FastAPI 가 워커 스레드에서 돌린다. 즉 이
+    판정은 처음부터 멀티스레드에 노출돼 있었다. 확인과 등록 사이에 틈이 있으면 같은
+    이벤트가 둘 다 통과해 인시던트에 두 번 담기고, 그러면 병합으로 보여 발동 조건까지
+    바뀐다. 낡은 항목을 지우는 순회 중에 다른 스레드가 넣으면 예외도 난다.
+    """
+    import threading
+    import time
+
+    from . import app as app_mod
+
+    # 확인과 등록 사이의 틈을 **강제로 벌린다.** 그냥 스레드를 여럿 던지면 CPython
+    # 에서는 틈이 너무 좁아 우연히 통과한다. 그러면 잠금을 안 걸어도 통과하는 검사가
+    # 되어, 검사가 아니라 운을 시험하는 것이 된다. 조회에 아주 짧은 지연을 넣어
+    # 논리 자체를 본다 — 잠금이 있으면 지연이 있어도 한 번만 통과해야 한다.
+    class _SlowSeen(dict):
+        def __contains__(self, k):
+            res = dict.__contains__(self, k)   # 판정을 먼저 하고
+            time.sleep(0.05)                   # 등록하기 전에 밀린다 — 이게 그 틈이다
+            return res
+
+    real_seen = app_mod._seen
+    app_mod._seen = _SlowSeen()
+    passed, errors = [], []
+    key = ("zabbix-internal", "e-1", 1)
+
+    # 출발선을 맞춘다. 스레드를 그냥 던지면 시작 간격이 지연보다 커서 겹치지 않는다.
+    n_threads = 8
+    bar = threading.Barrier(n_threads)
+
+    def _hit():
+        try:
+            bar.wait(timeout=10)
+            if not app_mod._duplicate(key):
+                passed.append(1)
+        except Exception as e:      # noqa: BLE001 — 무엇이든 기록만
+            errors.append(e)
+
+    ts = [threading.Thread(target=_hit) for _ in range(n_threads)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(timeout=10)
+    app_mod._seen = real_seen
+    assert not errors, f"동시 판정에서 예외: {errors[:2]}"
+    assert len(passed) == 1, f"같은 이벤트가 {len(passed)}번 통과했다 — 중복 억제가 뚫린다"
+
+    # 낡은 항목 청소가 도는 동안 새 항목이 들어와도 예외가 나면 안 된다
+    app_mod._seen.clear()
+    for i in range(500):
+        app_mod._seen[("s", "old-%d" % i, 1)] = 0.0      # 아주 오래된 것으로 심는다
+    errors2 = []
+
+    def _churn(n):
+        for i in range(200):
+            try:
+                app_mod._duplicate(("s", "new-%d-%d" % (n, i), 1))
+            except Exception as e:  # noqa: BLE001
+                errors2.append(e)
+
+    ts2 = [threading.Thread(target=_churn, args=(n,)) for n in range(4)]
+    for t in ts2:
+        t.start()
+    for t in ts2:
+        t.join(timeout=15)
+    assert not errors2, f"청소 중 예외: {errors2[:2]}"
+    app_mod._seen.clear()
+    return 4
+
+
 def _pending_checks() -> int:
     """대기 알림 기록 — 창이 닫히기 전에 죽어도 알림이 남아 있는지.
 
@@ -1228,10 +1301,45 @@ def _pending_checks() -> int:
             os.chmod(os.path.dirname(pending.PATH), 0o700)
         if os.name != "nt" and os.geteuid() != 0:
             assert wrote is False, "쓰지 못했는데 참을 돌려줬다"
+
+        # 동시성 — drop 은 파일 전체를 읽어 다시 쓴다. 그 사이에 다른 스레드가 넣은
+        # 줄이 덮어쓰기에 밀려 사라지면, 웹훅이 이미 200 을 준 알림이 없어진다.
+        # Zabbix 는 성공을 받았으므로 다시 보내지 않는다. 실제로 이 순서는 폭주 때
+        # 늘 일어난다 — 사건 마감(drop)과 새 알림 도착(append)이 겹친다.
+        import threading
+
+        for i in range(60):
+            pending.append({"source": "s", "event_id": "old-%d" % i})
+        added, errors = [], []
+
+        def _adder():
+            for i in range(120):
+                try:
+                    if pending.append({"source": "s", "event_id": "new-%d" % i}):
+                        added.append("new-%d" % i)
+                except Exception as e:      # noqa: BLE001 — 무엇이든 기록만
+                    errors.append(e)
+
+        def _dropper():
+            for i in range(60):
+                try:
+                    pending.drop([{"source": "s", "event_id": "old-%d" % i}])
+                except Exception as e:      # noqa: BLE001
+                    errors.append(e)
+
+        t1 = threading.Thread(target=_adder)
+        t2 = threading.Thread(target=_dropper)
+        t1.start(), t2.start()
+        t1.join(timeout=30), t2.join(timeout=30)
+        assert not errors, f"동시 접근에서 예외: {errors[:2]}"
+        left = {r.get("event_id") for r in pending.load()}
+        lost = [k for k in added if k not in left]
+        assert not lost, (f"append 가 참을 돌려줬는데 파일에서 사라졌다 {len(lost)}건 "
+                          f"(예: {lost[:3]}). 200 을 준 알림이 유실되는 경로다")
     finally:
         pending.PATH, pending.MAX_REPLAY = saved_path, saved_max
         shutil.rmtree(d, ignore_errors=True)
-    return 10
+    return 12
 
 
 def _analyze_ref_checks() -> int:

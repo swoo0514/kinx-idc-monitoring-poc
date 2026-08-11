@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import logging
 import os
+import threading
 import time
 from typing import Optional
 
@@ -110,6 +111,7 @@ async def _replay_pending():
 
 IDEMPOTENCY_TTL_S = 3600
 _seen: dict = {}  # (source, event_id, event_value) -> monotonic. 프로덕션은 Redis (가이드 §10)
+_seen_lock = threading.Lock()
 
 
 def _token_ok(token: str) -> bool:
@@ -118,13 +120,24 @@ def _token_ok(token: str) -> bool:
 
 
 def _duplicate(key: tuple) -> bool:
+    """이미 처리한 알림인가. 확인과 등록이 한 동작이어야 한다.
+
+    웹훅이 `async def` 가 아니라 동기 함수라 FastAPI 가 워커 스레드에서 돌린다. 즉 이
+    함수는 처음부터 여러 스레드에서 동시에 불린다. 확인과 등록 사이에 틈이 있으면
+    같은 알림이 둘 다 통과해 인시던트에 두 번 담기고, 그러면 병합으로 보여 발동 조건
+    까지 바뀐다(병합은 상한을 안 거친다). 틈을 벌려 재현해 보니 8개가 전부 통과했다.
+
+    낡은 항목을 지우는 순회도 같은 잠금 안에 둔다. 순회 중에 다른 스레드가 넣으면
+    사전 크기가 바뀌어 예외가 나고, 그 알림은 500 으로 거절된다.
+    """
     now = time.monotonic()
-    for k in [k for k, ts in _seen.items() if now - ts > IDEMPOTENCY_TTL_S]:
-        del _seen[k]
-    if key in _seen:
-        return True
-    _seen[key] = now
-    return False
+    with _seen_lock:
+        for k in [k for k, ts in _seen.items() if now - ts > IDEMPOTENCY_TTL_S]:
+            del _seen[k]
+        if key in _seen:
+            return True
+        _seen[key] = now
+        return False
 
 
 class ZabbixEvent(BaseModel):
