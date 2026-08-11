@@ -1114,6 +1114,10 @@ def _heartbeat_checks() -> int:
 
     saved = {k: os.environ.get(k) for k in
              ("HEARTBEAT_ZABBIX_SERVER", "HEARTBEAT_ZABBIX_PORT", "HEARTBEAT_HOST")}
+    # 배포된 서버에는 이 값이 들어 있다. 지우고 검사하지 않으면 그 서버에서만 깨지고,
+    # 설정 문제인지 코드 문제인지 구분할 수 없다(선판정·연계 규칙에서 겪은 것과 같다).
+    for k in saved:
+        os.environ.pop(k, None)
     try:
         assert heartbeat.enabled() is False, "설정이 없으면 꺼져 있어야"
         assert heartbeat.send({"x": 1})["ok"] is False, "미설정이면 보내지 말아야"
