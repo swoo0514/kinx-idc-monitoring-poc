@@ -15,6 +15,7 @@ from . import heartbeat
 from . import incident
 from . import keep
 from . import pending
+from . import registry
 from . import router as tag_router
 from . import severity
 from . import slack
@@ -63,6 +64,18 @@ _beat = heartbeat.Beat()
 
 @app.on_event("startup")
 async def _start_heartbeat():
+    # 명부 로드 결과를 여기서 남긴다. 명부는 모듈을 들여올 때 읽히는데 그때는 로깅
+    # 설정 전이라 성공도 실패도 기록이 사라진다. 못 읽으면 환경변수 설정으로 조용히
+    # 도는 것이 설계이므로, 기록이 없으면 잘못 도는 것을 아무도 모른다.
+    st = registry.status()
+    if not st["path"]:
+        log.info("호스트 명부 미설정 — 환경변수 설정으로 동작한다(HOST_REGISTRY_FILE)")
+    elif st["error"]:
+        log.error("호스트 명부 %s 를 못 읽었다(%s) — 환경변수 설정으로 동작한다",
+                  st["path"], st["error"])
+    else:
+        log.info("호스트 명부 %s — 호스트 %d건 / 감시 서버 %s",
+                 st["path"], st["entries"], registry.source_names() or "미기재(단일)")
     _beat.start()
 
 
