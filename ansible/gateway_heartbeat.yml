@@ -75,3 +75,93 @@
           description: >-
             봇은 살아 있는데 알림이 오래 들어오지 않았다. 발행 측 액션이나 미디어가
             멈췄을 수 있다. 조용한 시간대가 정상인 환경이면 hb_quiet_window 를 늘린다.
+
+# ── 알림 경로 — 게이트웨이를 거치지 않는 독립 경로 ──────────────────────────
+# 게이트웨이가 죽었다는 알림을 게이트웨이로 보내면 그 알림도 같이 죽는다. 랩에서
+# 실제로 그 상태였다(활성 액션이 게이트웨이 웹훅 하나뿐). Zabbix 서버가 Slack 으로
+# 바로 보내는 경로를 따로 둔다. 채널도 분리한다 — 근거는 GATEWAY_GUIDE §20-5.
+- name: Self-watch notification path (independent of the gateway)
+  hosts: zabbix
+  gather_facts: false
+  vars:
+    ansible_zabbix_auth_key: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+    hb_host: "kinx-gateway"
+    sw_media_name: "Selfwatch Slack"
+    sw_user: "Admin"
+    # 크리덴셜은 파일에 넣지 않는다. 실행 전에 export 한다.
+    sw_bot_token: "{{ lookup('env', 'SELFWATCH_SLACK_BOT_TOKEN') }}"
+    sw_channel: "{{ lookup('env', 'SELFWATCH_SLACK_CHANNEL') }}"
+  tasks:
+    - name: 크리덴셜 확인 — 비어 있으면 알림이 조용히 안 간다
+      ansible.builtin.assert:
+        that:
+          - sw_bot_token | length > 0
+          - sw_channel | length > 0
+        fail_msg: >-
+          SELFWATCH_SLACK_BOT_TOKEN 과 SELFWATCH_SLACK_CHANNEL 을 export 한 뒤 실행한다.
+          봇이 쓰는 채널과 **다른 채널**을 지정한다.
+
+    - name: 감시 도구 전용 미디어 타입 (Zabbix 서버가 Slack 으로 직접 발송)
+      community.zabbix.zabbix_mediatype:
+        name: "{{ sw_media_name }}"
+        type: webhook
+        status: enabled
+        webhook_script: "{{ lookup('file', '../bot/gateway/zabbix_media_selfwatch.js') }}"
+        webhook_params:
+          - name: bot_token
+            value: "{{ sw_bot_token }}"
+          - name: channel
+            value: "{{ sw_channel }}"
+          - name: event_name
+            value: "{EVENT.NAME}"
+          - name: event_value
+            value: "{EVENT.VALUE}"
+          - name: event_date
+            value: "{EVENT.DATE}"
+          - name: event_time
+            value: "{EVENT.TIME}"
+          - name: event_opdata
+            value: "{EVENT.OPDATA}"
+          - name: host
+            value: "{HOST.HOST}"
+          - name: severity
+            value: "{EVENT.SEVERITY}"
+        state: present
+
+    - name: 수신 사용자에게 이 미디어 연결
+      community.zabbix.zabbix_user:
+        username: "{{ sw_user }}"
+        user_medias:
+          - mediatype: "{{ sw_media_name }}"
+            sendto: "{{ sw_channel }}"
+            severity:
+              not_classified: false
+              information: false
+              warning: true
+              average: true
+              high: true
+              disaster: true
+            active: true
+        state: present
+
+    - name: 액션 — 이 호스트의 알림만, 이 미디어로만
+      community.zabbix.zabbix_action:
+        name: "감시 도구 자체 알림 (게이트웨이 미경유)"
+        event_source: trigger
+        status: enabled
+        # 조건을 안 걸면 전체 알림이 이 경로로도 나가 채널이 무의미해진다.
+        conditions:
+          - type: host
+            operator: "="
+            value: "{{ hb_host }}"
+        operations:
+          - type: send_message
+            media_type: "{{ sw_media_name }}"
+            send_to_users:
+              - "{{ sw_user }}"
+        recovery_operations:
+          - type: send_message
+            media_type: "{{ sw_media_name }}"
+            send_to_users:
+              - "{{ sw_user }}"
+        state: present
