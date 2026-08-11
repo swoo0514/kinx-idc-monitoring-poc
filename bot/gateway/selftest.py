@@ -286,7 +286,13 @@ def main():
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
                 + analyze_checks + beat_checks + flush_checks + registry_checks
                 + concurrency_checks)
-    print(f"ALL OK ({_assert_count()} asserts / 선언 {declared})")
+    counted = _assert_count()
+    print(f"ALL OK ({counted} asserts / 선언 {declared})")
+    # 선언 숫자는 사람이 적는다. 실제보다 작으면 어딘가 검사가 세어지지 않은 것이고,
+    # 지나치게 크면 지운 검사의 숫자가 남은 것이다. 반복문 안의 assert 때문에 정확히
+    # 같을 수는 없으므로, 눈에 띄게 벌어질 때만 알린다.
+    if not (counted * 0.7 <= declared <= counted * 2.0):
+        print(f"[!] 선언 {declared} 과 실제 {counted} 가 많이 어긋난다 — 검사 개수를 확인할 것")
 
 
 def _assert_count() -> int:
@@ -461,6 +467,15 @@ def _source_status_checks() -> int:
                                   "security": collector.SOURCE_OK}}
     fired, why = incident.should_triage(single, un_ctx)
     assert fired is True and "이름 불일치" in why, why
+
+    # 절단은 조회한 쪽이 알려 준다. 받는 쪽이 개수로 추측하면, 조회 측이 현재
+    # 이벤트를 목록에서 빼는 순간 199 가 되어 200 과 비교하는 판정이 영원히 안 걸린다.
+    many = [1000.0 - i for i in range(199)]
+    assert prejudge.judge(many, now=1000.0, listed_truncated=True)["count_truncated"] is True
+    assert prejudge.judge(many, now=1000.0, listed_truncated=False)["count_truncated"] is False
+    # 개수를 받았으면 절단이 아니다 — 목록이 잘렸어도 총계는 정확하다
+    assert prejudge.judge(many, now=1000.0, total_count=5000,
+                          listed_truncated=True)["count_truncated"] is False
 
     # 사유별 수치는 통제가 아니라 관측이다. 게이트는 몇 번이 오든 판단을 바꾸지
     # 않고, 대신 무엇 때문에 돌았는지를 센다. 부하 보호는 호출 지점이 맡는다.
@@ -660,9 +675,26 @@ def _open_link_checks() -> int:
     (유형 혼합 0건) 브리지 그룹만으로는 발동하지 않는다. 이 경로가 그 공백을 메우므로
     조용히 죽으면 알아채기 어렵다. 설계는 private/docs/open_problem_linkage_design.md.
     """
+    import importlib
+    import os
+
     from . import incident, masking
 
     n = 0
+    # 측정 파일이 없으면 연계 자체가 꺼져야 한다. 예전에는 예시값(비율 0.90)이 실렸는데,
+    # 시스템 프롬프트가 그 수치를 "실제로 측정된 값"이라고 모델에 알려 주므로 근거 없는
+    # 비율이 분석 근거로 게시됐다. 없는 근거보다 없는 문장이 낫다.
+    saved_rules = os.environ.pop("OPEN_LINK_RULES_FILE", None)
+    try:
+        m0 = importlib.reload(incident)
+        assert m0.OPEN_LINK_RULES == {}, f"파일이 없는데 규칙이 있다: {m0.OPEN_LINK_RULES}"
+        assert m0.OPEN_LINK_MEASURED == "", m0.OPEN_LINK_MEASURED
+        n += 2
+    finally:
+        if saved_rules is not None:
+            os.environ["OPEN_LINK_RULES_FILE"] = saved_rules
+        incident = importlib.reload(incident)
+
     # 규칙 매칭 — **값이 아니라 기제를 검사한다.** 특정 수치에 묶으면 측정 파일을 바꿀 때마다
     # 테스트가 깨지고, 그 결합이야말로 이 설계가 없애려던 것이다.
     #
@@ -976,6 +1008,12 @@ def _incident_checks() -> int:
 
     from . import incident, llm, masking
 
+    # 분류 사례는 배포 서버의 선언 파일·사이트 관용구에 영향을 받는다. 그 서버에서만
+    # 결과가 갈리면 설정 문제인지 코드 문제인지 구분할 수 없다. 지우고 돌린다.
+    _env_saved = {k: os.environ.pop(k, None)
+                  for k in ("INCIDENT_CLASS_FILE", "SITE_CLASS_KEYWORDS")}
+    incident = importlib.reload(incident)
+
     # 분류 — 표준 템플릿·랩 실측 알림명 전수
     for name, expected in CASES_CLASSIFY:
         got = incident.classify(name)
@@ -1135,6 +1173,10 @@ def _incident_checks() -> int:
         os.environ.pop(k, None)
     r = llm.triage_reply(inc_ctx, "SEV2")
     assert r["degraded"] and "병합" in r["text"], r
+    for _k, _v in _env_saved.items():
+        if _v is not None:
+            os.environ[_k] = _v
+    importlib.reload(incident)
     return 25 + len(CASES_CLASSIFY) + gate_checks
 
 
@@ -1580,6 +1622,8 @@ def _llm_concurrency_checks() -> int:
         # 파일 -> 왜 아직 출구 밖인가. 옮기면 여기서 지운다.
         KNOWN_OUTSIDE = {
             "holmes.py": "심층조사는 별도 프로세스 API 호출 — 미해소(가이드 §21)",
+            "latency_bench.py": "응답시간 실측 도구 — 출구를 거치면 상한·마스킹이 "
+                                "측정값을 흐린다. 운영 경로가 아니다",
         }
         # 어댑터를 부르는 것은 출구만 한다.
         CALLS_ADAPTER = [(r"\.complete\s*\(", "어댑터 직접 호출"),
@@ -1590,8 +1634,13 @@ def _llm_concurrency_checks() -> int:
         TALKS_PROVIDER = [(r"/api/chat(?![.\w])", "채팅 API"),
                           (r"/v1/messages", "Anthropic 메시지 API"),
                           (r"\banthropic\.", "Anthropic SDK")]
+        # gateway/ 만 보면 그 바깥에 새 길이 나도 못 잡는다. bot/ 도 같이 본다 —
+        # latency_bench.py 가 실제로 공급자를 직접 부르고 있었고, 이 검사는 그걸
+        # 보지 못했다. "출구가 하나"라는 말의 범위를 좁게 잡으면 말만 남는다.
         here = os.path.dirname(__file__)
-        for f in sorted(glob.glob(os.path.join(here, "*.py"))):
+        files = (sorted(glob.glob(os.path.join(here, "*.py")))
+                 + sorted(glob.glob(os.path.join(here, "..", "*.py"))))
+        for f in files:
             base = os.path.basename(f)
             if base == "selftest.py":
                 continue
