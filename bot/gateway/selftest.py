@@ -599,9 +599,18 @@ def _class_map_checks() -> int:
         # 위 검사들은 classify 를 직접 부른다. 실제로는 웹훅이 rule_id 를 안 넘겨서
         # 파일의 wazuh 절이 통째로 죽어 있었는데, 파일 로드 로그는 정상이라 설정한
         # 사람은 적용됐다고 믿었다. 그래서 웹훅이 넘기는지를 따로 본다.
-        from . import app as app_mod
+        import shutil
+        import tempfile
+
+        from . import app as app_mod, pending
 
         importlib.reload(app_mod)
+        # 이 검사는 실제 triage 경로를 태우므로 대기 파일에 쓴다. 배포된 서버에서
+        # 돌리면 운영 대기 목록에 검사 기록이 들어가고, 재기동 때 그것이 되살아나
+        # 없는 알림으로 사건이 열린다. 랩에서 실제로 그렇게 남아 있었다.
+        _tmpd = tempfile.mkdtemp(prefix="classmap-test-")
+        _saved_pending = pending.PATH
+        pending.PATH = os.path.join(_tmpd, "pending.jsonl")
 
         class _FakeBg:
             def __init__(self):
@@ -617,7 +626,11 @@ def _class_map_checks() -> int:
         assert alerts, "triage 경로가 아무것도 안 넘겼다"
         assert alerts[0].incident_class == "config_change", \
             f"웹훅이 rule_id 를 분류로 안 넘긴다 — 파일의 wazuh 절이 죽는다: {alerts[0].incident_class}"
-        return 8
+        # 검사가 운영 대기 목록을 건드리지 않았는지도 본다
+        assert pending.PATH.startswith(_tmpd), pending.PATH
+        pending.PATH = _saved_pending
+        shutil.rmtree(_tmpd, ignore_errors=True)
+        return 9
     finally:
         os.unlink(path)
         if saved is None:
