@@ -23,7 +23,7 @@ Wazuh Integrator ──────────┘                              
 | `gateway/severity.py` | 통합 심각도 정규화 상수 정의 — [`severity-normalization.md`](../docs/02-design/severity-normalization.md)의 코드 구현체 |
 | `gateway/router.py` | 태그 기반 라우팅 로직 — `automate`, `scope` 태그 조합을 통한 처리 경로 분기 |
 | `gateway/selftest.py` | 파이프라인 순수 제어 로직 독립 검증 모듈 (FastAPI 의존성 없이 실행) |
-| `gateway/zabbix_media_webhook.js` | Zabbix 서버에 등록하는 Webhook 미디어 타입 연동 스크립트 |
+
 | `gateway/collector.py` | Zabbix, Loki, Wazuh 텔레메트리 데이터 비동기 교차 수집기 |
 | `gateway/prejudge.py` | 과거 90일 발생 이력 기반 결정론적 만성/신규 장애 선판정 모듈 |
 | `gateway/incident.py` | (호스트, 알림 유형) 기반 디바운스 창 제어 및 알림 병합(Incident Merging) 모듈 |
@@ -35,6 +35,8 @@ Wazuh Integrator ──────────┘                              
 | `gateway/pending.py` | 디바운스 대기 알림 영속화 및 재기동 시 재투입 (§8-4) |
 | `gateway/heartbeat.py` | 생존 신호 전송 및 처리량 집계 (§20) |
 | `gateway/holmes.py` | HolmesGPT 심층 조사 연동 (§10) |
+
+**Zabbix 서버 측 스크립트는 본 패키지에 두지 않습니다.** 웹훅 미디어 타입 스크립트(`ansible/files/zabbix_media_webhook.js`·`zabbix_media_selfwatch.js`)는 Zabbix 서버 내장 엔진에서 실행되며 게이트웨이 프로세스가 읽거나 실행하지 않습니다. Ansible 이 `lookup('file')` 로 본문을 읽어 API 로 등록하고, 이후에는 Zabbix 서버 DB 에 저장된 사본이 동작합니다. 파이썬 패키지 내에 배치할 경우 게이트웨이 구성 요소로 오인됩니다.
 
 ---
 
@@ -113,7 +115,9 @@ Wazuh Manager 커스텀 연동 스크립트로부터 경보 데이터를 수신�
 
 ## 5. Zabbix 미디어 타입 배선 명세
 
-Zabbix Administration ➔ Media types ➔ Create Media Type: Type = **Webhook**, Script = `zabbix_media_webhook.js`
+Zabbix Administration ➔ Media types ➔ Create Media Type: Type = **Webhook**, Script = `ansible/files/zabbix_media_webhook.js`
+
+스크립트 본문은 Ansible 이 `lookup('file')` 로 읽어 API 로 등록하며, 이후 Zabbix 서버 DB(`media_type.script`)에 저장되어 **Zabbix 서버 내장 엔진에서 실행**됩니다. 게이트웨이 프로세스는 본 스크립트를 읽거나 실행하지 않습니다.
 
 ### 설정 파라미터 매핑표
 
@@ -435,7 +439,7 @@ python3 probe.py names
 
 | 구성 요소 | 내용 |
 |---|---|
-| 미디어 타입 | `Selfwatch Slack` (webhook) — `bot/gateway/zabbix_media_selfwatch.js` |
+| 미디어 타입 | `Selfwatch Slack` (webhook) — `ansible/files/zabbix_media_selfwatch.js` |
 | 액션 조건 | 호스트 = `kinx-gateway` 단일 조건. 미지정 시 전체 알림이 본 경로로 유입되어 채널이 무의미해짐 |
 | 발송 채널 | **봇 사용 채널과 분리.** 게이트웨이 중단 시 봇 채널은 무음 상태가 되며, 그 무음 자체가 증상이므로 동일 채널에 경고를 배치하면 두 상태가 혼재함 |
 | 크리덴셜 | 실행 시 환경 변수로 주입(`SELFWATCH_SLACK_BOT_TOKEN`·`SELFWATCH_SLACK_CHANNEL`). 미설정 시 플레이북 중단 |

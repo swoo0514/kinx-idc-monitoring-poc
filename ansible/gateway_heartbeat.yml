@@ -116,7 +116,7 @@
         name: "{{ sw_media_name }}"
         type: webhook
         status: enabled
-        webhook_script: "{{ lookup('file', '../bot/gateway/zabbix_media_selfwatch.js') }}"
+        webhook_script: "{{ lookup('file', 'files/zabbix_media_selfwatch.js') }}"
         webhook_params:
           - name: bot_token
             value: "{{ sw_bot_token }}"

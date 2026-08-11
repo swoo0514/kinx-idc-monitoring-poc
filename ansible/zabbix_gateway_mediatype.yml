@@ -8,7 +8,7 @@
 #
 # 무엇을 하나:
 #   1) mediatype.get 으로 있는지 보고, 없으면 create / 있으면 update (멱등)
-#   2) 스크립트 본문은 bot/gateway/zabbix_media_webhook.js 를 그대로 읽어 넣는다 (사본 금지)
+#   2) 스크립트 본문은 ansible/files/zabbix_media_webhook.js 를 그대로 읽어 넣는다 (사본 금지)
 #   3) 파라미터를 매크로로 박는다 — 손으로 칠 일이 없어지므로 오타가 구조적으로 사라진다
 #
 # 무엇을 안 하나: 액션(Action) 생성·수정. 액션은 호스트그룹·태그 조건이 환경마다 달라
@@ -25,7 +25,7 @@
   gather_facts: false
   vars:
     mediatype_name: "KINX Gateway"
-    script_path: "{{ playbook_dir }}/../bot/gateway/zabbix_media_webhook.js"
+    script_path: "{{ playbook_dir }}/files/zabbix_media_webhook.js"
   tasks:
     - name: 필요한 변수가 들어왔는지 확인
       ansible.builtin.assert:
