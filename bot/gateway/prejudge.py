@@ -1,8 +1,9 @@
 """만성/신규 선판정 — 과거 발생 이력만으로 결정적 판정(LLM은 재판정 안 함).
 
-기준값 근거·변수화는 bot/GATEWAY_GUIDE.md §9.
+기준값 근거·변수화는 bot/GATEWAY_GUIDE.md §7-3.
 """
 
+import math
 import os
 import time
 
@@ -15,8 +16,34 @@ def _env_int(name: str, default: int) -> int:
 
 
 WINDOW_DAYS = _env_int("PREJUDGE_WINDOW_DAYS", 90)
-CHRONIC_MIN_COUNT = _env_int("PREJUDGE_CHRONIC_MIN", 5)
 WINDOW_S = WINDOW_DAYS * 24 * 3600
+
+# 만성의 기준은 횟수가 아니라 **재발 간격**으로 둔다. 횟수로 두면 "왜 5회인가"에 답할 수
+# 없고, 관측 창을 90일에서 180일로 늘리면 같은 5회가 두 배로 느슨해지는데 아무도 모른다.
+#
+# 30일로 잡은 근거는 우리가 만든 월간 리포트다. 한 달에 한 번 이상 반복되면 리포트가
+# 나올 때마다 그 항목이 실리고, 매달 실리는데 안 고쳐지고 있으면 그것이 정비 대상이다.
+# 즉 "월간 리포트에 매번 등장하는 것"이 만성이다. 리포트 주기가 바뀌면 이 값도 바뀐다.
+#
+# 참고로 밖에는 정해진 수치가 없다. ITIL 문헌에 "같은 증상이 30일에 3건 이상이면 별도
+# 관리 대상"이라는 관행이 언급되나 같은 자료가 표준이 아니라 조직별 조정값이라고 밝힌다.
+# 우연히 우리 값과 같은 간격이다.
+CHRONIC_INTERVAL_DAYS = _env_int("PREJUDGE_CHRONIC_INTERVAL_DAYS", 30)
+
+
+def chronic_min_for(window_days: int, interval_days: int) -> int:
+    """관측 창 안에서 그 간격으로 반복되려면 몇 번 나야 하는가.
+
+    1회는 반복이 아니므로 하한은 2다.
+    """
+    if interval_days <= 0:
+        return 2
+    return max(2, math.ceil(window_days / interval_days))
+
+
+# 명시하면 그 값을 그대로 쓴다 — 이미 값을 정해 둔 환경을 조용히 바꾸지 않기 위해서다.
+CHRONIC_MIN_COUNT = (_env_int("PREJUDGE_CHRONIC_MIN", 0)
+                     or chronic_min_for(WINDOW_DAYS, CHRONIC_INTERVAL_DAYS))
 
 
 def judge(past_clocks: list, now: float = None,

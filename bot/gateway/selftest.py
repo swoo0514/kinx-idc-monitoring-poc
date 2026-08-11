@@ -155,7 +155,16 @@ def main():
     assert j["verdict"] == "만성" and j["count_window"] == 6, j
     j = prejudge.judge([now - 120 * day], now=now, **fix)   # 창 밖 이력은 무시 → 신규
     assert j["verdict"] == "신규", j
-    prejudge_checks = 4
+
+    # 만성 하한은 횟수가 아니라 재발 간격에서 나온다. 창을 늘리면 하한도 같이 올라가야
+    # 한다 — 안 그러면 같은 값이 조용히 두 배로 느슨해진다.
+    assert prejudge.chronic_min_for(90, 30) == 3, "월 1회 = 90일에 3회"
+    assert prejudge.chronic_min_for(180, 30) == 6, "창이 두 배면 하한도 두 배"
+    assert prejudge.chronic_min_for(90, 10) == 9, "ITIL 관행(30일 3건) 환산"
+    assert prejudge.chronic_min_for(30, 30) == 2, "1회는 반복이 아니므로 하한 2"
+    assert prejudge.chronic_min_for(90, 0) == 2, "간격 0 이어도 죽지 않아야"
+    assert prejudge.chronic_min_for(90, 100) == 2, "창보다 긴 간격도 하한 2"
+    prejudge_checks = 10
 
     # 수집기 읽기 전용 가드 — .get 이외 메서드는 코드 레벨에서 거부
     import asyncio
