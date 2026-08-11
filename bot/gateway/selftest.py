@@ -111,6 +111,10 @@ CASES_CLASSIFY = [
     ("/etc/passwd has been changed", "auth_security"),
     # 보강이 기존 판정을 뺏지 않는지 고정한다 — "restarted" 가 network 를 가로채면 안 된다.
     ("Interface ae1: Link down after restart", "network"),
+    # BGP 피어 단절은 회선 사건 — service_down 의 "down" 이 먼저 잡던 것을 고정한다
+    ("BGP peer 10.0.0.1 is down", "network"),
+    ("BGP 피어 다운", "network"),
+    ("Route server BGP session flapping", "network"),
     # "무엇이 잘못됐나"가 아니라 "무엇이 바뀌었나" — 다른 축이라 별도 클래스로 둔다.
     ("Listened ports status (netstat) changed (new port opened or closed).", "config_change"),
     ("Linux: Number of installed packages has been changed", "config_change"),

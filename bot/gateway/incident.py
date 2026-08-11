@@ -52,6 +52,10 @@ CLASS_RULES = [
                     "space is", "pused",
                     "디스크 여유", "여유 공간", "용량 부족", "파일시스템", "파티션"]),
     ("network", ["interface", "packet", "drop", "crc", "link down", "ifoperstatus",
+                 # BGP 피어 단절은 회선 사건인데 service_down 의 "down" 이 먼저 잡았다
+                 # (실환경 90일 기준 98%). 이름을 소문자로 맞춰 보므로 한글 알림명의
+                 # "BGP 피어 다운"도 이 한 낱말로 걸린다.
+                 "bgp",
                  # network 만 한글 키워드가 없어 한글 트리거명이 미분류로 떨어졌다.
                  "인터페이스", "패킷", "링크 다운", "인바운드 에러", "아웃바운드 에러",
                  "회선"]),
