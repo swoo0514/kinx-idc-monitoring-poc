@@ -240,13 +240,14 @@ def main():
     pending_checks = _pending_checks()
     analyze_checks = _analyze_ref_checks()
     beat_checks = _heartbeat_checks()
+    flush_checks = _flush_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
              + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks + class_tag_checks
-             + class_map_checks + pending_checks + analyze_checks + beat_checks)
+             + class_map_checks + pending_checks + analyze_checks + beat_checks + flush_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -1164,6 +1165,70 @@ def _heartbeat_checks() -> int:
             else:
                 os.environ[k] = val
     return 14
+
+
+def _flush_checks() -> int:
+    """정상 종료 시 마감 — 대기 중인 사건이 버려지지 않는지.
+
+    버려져도 대기 파일이 받아 주므로 겉으로는 멀쩡해 보인다. 그래서 조용히 깨진다.
+    깨지면 재기동마다 창을 처음부터 다시 세고 재시도 횟수가 올라가, 배포 몇 번에
+    아직 처리도 안 한 알림이 한도에 걸려 버려진다.
+    """
+    import asyncio
+    import time
+
+    from . import incident
+
+    def _alert(host, cls, name="n"):
+        return incident.Alert(source="zabbix-internal", event_id=name, trigger_id="1",
+                              host=host, alert_name=name, sev="SEV2",
+                              incident_class=cls, recv=time.monotonic())
+
+    closed = []
+
+    async def _run2():
+        async def on_close(inc):
+            closed.append(inc.key)
+        m = incident.IncidentManager(on_close=on_close, debounce_s=999, max_window_s=999)
+        await m.submit(_alert("h1", "disk_space"))
+        await m.submit(_alert("h2", "cpu_io_pressure"))
+        n = await m.flush()
+        return n, len(m._open), len(m._timers)
+
+    n, left, timers = asyncio.run(_run2())
+    assert n == 2 and left == 0, (n, left)
+    assert timers == 0, "마감 후 타이머가 남으면 종료가 안 끝난다"
+    # 키의 유형 자리는 브리지 식별자로 접히므로 호스트로 확인한다
+    assert sorted(k[0] for k in closed) == ["h1", "h2"], closed
+
+    # 열린 사건이 없으면 아무 일도 하지 않는다
+    async def _empty():
+        m = incident.IncidentManager(on_close=lambda inc: None)
+        return await m.flush()
+    assert asyncio.run(_empty()) == 0
+
+    # 제한 시간을 넘기면 남은 것은 그대로 둔다 — 대기 파일이 받아 재기동 후 처리한다
+    async def _slow():
+        async def never(inc):
+            await asyncio.sleep(5)
+        m = incident.IncidentManager(on_close=never, debounce_s=999, max_window_s=999)
+        await m.submit(_alert("h3", "disk_space"))
+        n = await m.flush(timeout_s=0.2)
+        return n
+    # 마감 건수에 안 잡혀야 한다. 메모리에 남는지는 중요하지 않다 — 종료 중이고,
+    # 처리를 못 끝냈으므로 대기 파일이 그대로 갖고 있어 재기동 후 다시 처리된다.
+    assert asyncio.run(_slow()) == 0
+
+    # 마감 중 예외가 나도 종료가 멈추면 안 된다
+    async def _boom():
+        async def boom(inc):
+            raise RuntimeError("분석 실패")
+        m = incident.IncidentManager(on_close=boom, debounce_s=999, max_window_s=999)
+        await m.submit(_alert("h4", "disk_space"))
+        return await m.flush(timeout_s=2), len(m._open)
+    n3, left3 = asyncio.run(_boom())
+    assert n3 == 1 and left3 == 0, (n3, left3)
+    return 8
 
 
 if __name__ == "__main__":

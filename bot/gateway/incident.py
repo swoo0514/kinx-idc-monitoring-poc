@@ -519,12 +519,49 @@ class IncidentManager:
                 await asyncio.sleep(delay)
         except asyncio.CancelledError:
             return
+        await self._close(key)
+
+    async def _close(self, key, done=None):
         inc = self._open.pop(key, None)
-        self._timers.pop(key, None)
+        timer = self._timers.pop(key, None)
         self._locks.pop(key, None)
+        if timer and not timer.done():
+            timer.cancel()
         if inc is None:
             return
         try:
             await self._on_close(inc)
         except Exception as e:
             log.warning("on_close failed for incident %s: %s", key, e)
+        # 여기까지 왔으면 처리가 끝난 것이다. 중간에 취소되면 이 줄에 도달하지 않으므로
+        # 마감 건수에 안 잡히고, 알림은 대기 파일에 남아 재기동 후 다시 처리된다.
+        if done is not None:
+            done.append(key)
+
+    async def flush(self, timeout_s: float = None):
+        """열려 있는 사건을 창 마감을 기다리지 않고 지금 닫는다.
+
+        정상 종료 때 부른다. 안 부르면 대기 중이던 사건이 버려지고 재기동 후 파일에서
+        다시 집어 처리하는데, 그러면 디바운스 창을 처음부터 다시 세고 재시도 횟수도
+        재기동한 만큼 올라간다. 배포로 몇 번 재기동하면 아직 처리도 안 한 알림이
+        한도에 걸려 버려진다.
+
+        timeout_s 를 넘기면 남은 것은 파일에 남겨 둔 채 나간다 — 종료가 무한정
+        늦어지면 관리자가 강제로 죽이고, 그건 정상 종료가 아니게 된다.
+        """
+        keys = list(self._open)
+        if not keys:
+            return 0
+        timeout_s = _env_float("INCIDENT_FLUSH_TIMEOUT_S", 25) if timeout_s is None else timeout_s
+        log.info("종료 전 열린 사건 %d건을 마감한다(제한 %.0f초)", len(keys), timeout_s)
+        done = []
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*[self._close(k, done) for k in keys],
+                               return_exceptions=True),
+                timeout=timeout_s)
+        except asyncio.TimeoutError:
+            log.warning("마감 시간이 초과됐다 — %d건은 대기 파일에 남긴다(재기동 후 처리)",
+                        len(keys) - len(done))
+        log.info("종료 전 마감 완료 %d건 / 전체 %d건", len(done), len(keys))
+        return len(done)

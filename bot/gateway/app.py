@@ -49,12 +49,12 @@ async def _close_incident(inc):
     뒤에 빼는 쪽을 골랐다.
     """
     _beat.mark("incidents")
-    try:
-        res = await triage.run_incident(inc)
-        _beat.mark("skipped" if res and res.get("gated_out") else "analyzed")
-        return res
-    finally:
-        pending.drop([{"source": a.source, "event_id": a.event_id} for a in inc.alerts])
+    res = await triage.run_incident(inc)   # 예외를 위로 던지지 않는다
+    _beat.mark("skipped" if res and res.get("gated_out") else "analyzed")
+    # 여기까지 와야 목록에서 뺀다. finally 에 두면 종료 중 취소됐을 때도 지워져서
+    # 처리하지 않은 알림이 사라진다(종료 마감 시간 초과가 그 경우다).
+    pending.drop([{"source": a.source, "event_id": a.event_id} for a in inc.alerts])
+    return res
 
 
 _incidents = incident.IncidentManager(on_close=_close_incident, on_signal=_raw_ping)
@@ -64,6 +64,20 @@ _beat = heartbeat.Beat()
 @app.on_event("startup")
 async def _start_heartbeat():
     _beat.start()
+
+
+@app.on_event("shutdown")
+async def _flush_open_incidents():
+    """정상 종료 — 대기 중인 사건을 마감하고 나간다 (GATEWAY_GUIDE §8-6).
+
+    강제 종료는 대기 파일이 받아 준다(§8-4). 이 경로는 그 앞단이다 — 재기동 때마다
+    창을 처음부터 다시 세고 재시도 횟수가 올라가는 것을 막는다.
+    """
+    _beat.stop()
+    try:
+        await _incidents.flush()
+    except Exception as e:
+        log.warning("종료 전 마감 실패: %s", e)
 
 
 @app.on_event("startup")
