@@ -239,13 +239,14 @@ def main():
     class_map_checks = _class_map_checks()
     pending_checks = _pending_checks()
     analyze_checks = _analyze_ref_checks()
+    beat_checks = _heartbeat_checks()
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
              + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks + class_tag_checks
-             + class_map_checks + pending_checks + analyze_checks)
+             + class_map_checks + pending_checks + analyze_checks + beat_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -1071,6 +1072,98 @@ def _analyze_ref_checks() -> int:
         except RuntimeError:
             pass
     return 8
+
+
+def _heartbeat_checks() -> int:
+    """생존 신호 — 프로토콜이 실제로 통하는지, 안 켰을 때 조용한지.
+
+    가짜 Zabbix 를 띄워 바이트를 그대로 주고받는다. 헤더를 손으로 조립하는 코드라
+    형식이 틀리면 실환경에서야 드러나고, 그때는 신호가 끊긴 것과 구분되지 않는다.
+    """
+    import json
+    import os
+    import socket
+    import struct
+    import threading
+
+    from . import heartbeat
+
+    got = {}
+
+    def fake_server(sock):
+        conn, _ = sock.accept()
+        with conn:
+            head = conn.recv(13)
+            got["head"] = head
+            (n,) = struct.unpack("<I", head[5:9])
+            body = b""
+            while len(body) < n:
+                body += conn.recv(n - len(body))
+            got["body"] = json.loads(body.decode("utf-8"))
+            res = json.dumps({"response": "success",
+                              "info": "processed: 7; failed: 0; total: 7"}).encode()
+            conn.sendall(b"ZBXD" + struct.pack("<II", len(res), 0) + res)
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    t = threading.Thread(target=fake_server, args=(srv,), daemon=True)
+    t.start()
+
+    saved = {k: os.environ.get(k) for k in
+             ("HEARTBEAT_ZABBIX_SERVER", "HEARTBEAT_ZABBIX_PORT", "HEARTBEAT_HOST")}
+    try:
+        assert heartbeat.enabled() is False, "설정이 없으면 꺼져 있어야"
+        assert heartbeat.send({"x": 1})["ok"] is False, "미설정이면 보내지 말아야"
+
+        os.environ["HEARTBEAT_ZABBIX_SERVER"] = "127.0.0.1"
+        os.environ["HEARTBEAT_ZABBIX_PORT"] = str(port)
+        os.environ["HEARTBEAT_HOST"] = "gw-01"
+        assert heartbeat.enabled() is True
+
+        beat = heartbeat.Beat(interval_s=999)
+        beat.mark_alert()
+        beat.mark_alert()
+        beat.mark("incidents")
+        beat.mark("analyzed")
+        beat.mark("없는이름")   # 모르는 이름은 조용히 무시한다
+        v = beat.values(now=beat.started_at + 30)
+        assert v["gateway.alerts"] == 2 and v["gateway.incidents"] == 1, v
+        assert v["gateway.analyzed"] == 1 and v["gateway.skipped"] == 0, v
+        assert v["gateway.uptime"] == 30, v
+
+        res = heartbeat.send(v)
+        t.join(timeout=5)
+        assert res["ok"] is True, res
+        assert got["head"][:5] == b"ZBXD", got.get("head")
+        assert got["body"]["request"] == "sender data", got["body"]
+        keys = {d["key"] for d in got["body"]["data"]}
+        assert "gateway.alive" in keys and "gateway.since_last_alert" in keys, keys
+        assert all(d["host"] == "gw-01" for d in got["body"]["data"])
+        # 값은 문자열로 보낸다 — Zabbix 는 아이템 자료형에 맞춰 해석한다
+        assert all(isinstance(d["value"], str) for d in got["body"]["data"])
+    finally:
+        srv.close()
+        for k, val in saved.items():
+            if val is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = val
+
+    # 닿지 않는 곳으로 보내도 예외를 던지지 않는다 — 봇 흐름이 멈추면 안 된다
+    os.environ["HEARTBEAT_ZABBIX_SERVER"] = "127.0.0.1"
+    os.environ["HEARTBEAT_ZABBIX_PORT"] = "1"
+    os.environ["HEARTBEAT_HOST"] = "gw-01"
+    try:
+        assert heartbeat.send({"gateway.alive": 1})["ok"] is False
+    finally:
+        for k, val in saved.items():
+            if val is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = val
+    return 14
 
 
 if __name__ == "__main__":

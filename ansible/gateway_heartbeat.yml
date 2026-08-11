@@ -1,0 +1,77 @@
+---
+# 게이트웨이 생존 감시 — Zabbix 측 수신 항목과 부재 감지 트리거.
+# 봇 측 전송은 bot/gateway/heartbeat.py. 근거와 운영 기준은 ansible/DEPLOY_GUIDE.md.
+#
+# ⚠ 실환경에는 그대로 돌리지 않는다. 이 플레이북은 항목과 트리거를 **생성**하므로
+#   실환경 읽기 전용 원칙에 어긋난다. 실환경은 같은 정의를 담당자가 반영한다.
+- name: Gateway heartbeat receiver (Zabbix side)
+  hosts: zabbix
+  gather_facts: false
+  vars:
+    ansible_zabbix_auth_key: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+    hb_host: "kinx-gateway"
+    hb_group: "Applications"
+    # 전송 주기(기본 60초)의 3배. 한 번 놓쳤다고 깨우면 재기동 때마다 알림이 뜬다.
+    hb_nodata_window: "3m"
+    # 알림이 이만큼 안 들어오면 발행 측(액션·미디어)이 멈췄는지 확인한다.
+    # 사내는 하루 400건대라 30분 무알림은 드물다. 조용한 환경이면 늘린다.
+    hb_quiet_window: "1800"
+  tasks:
+    - name: 게이트웨이 전용 호스트 (에이전트 없이 트래퍼만 받는다)
+      community.zabbix.zabbix_host:
+        host_name: "{{ hb_host }}"
+        host_groups: ["{{ hb_group }}"]
+        status: enabled
+        state: present
+
+    - name: 수신 항목 — 봇이 보내는 값 그대로
+      community.zabbix.zabbix_item:
+        host_name: "{{ hb_host }}"
+        name: "{{ item.name }}"
+        params:
+          type: zabbix_trapper
+          key: "{{ item.key }}"
+          value_type: numeric_unsigned
+          units: "{{ item.units | default('') }}"
+          # 트래퍼는 서버가 값을 받을 때만 기록되므로 수집 주기가 없다.
+          history: 31d
+          trends: 365d
+        state: present
+      loop:
+        - { name: "게이트웨이 생존", key: "gateway.alive" }
+        - { name: "게이트웨이 구동 시간", key: "gateway.uptime", units: "s" }
+        - { name: "마지막 알림 이후 경과", key: "gateway.since_last_alert", units: "s" }
+        - { name: "수신 알림 수(누적)", key: "gateway.alerts" }
+        - { name: "사건 수(누적)", key: "gateway.incidents" }
+        - { name: "분석 수행 수(누적)", key: "gateway.analyzed" }
+        - { name: "분석 생략 수(누적)", key: "gateway.skipped" }
+
+    - name: 트리거 — 신호가 끊긴 것과 알림이 안 들어오는 것을 나눠 본다
+      community.zabbix.zabbix_trigger:
+        name: "{{ item.name }}"
+        host_name: "{{ hb_host }}"
+        # 설명문은 params 가 아니라 최상위 인자다(모듈이 API 의 comments 로 넣는다).
+        description: "{{ item.description }}"
+        params:
+          expression: "{{ item.expression }}"
+          severity: "{{ item.severity }}"
+          # 봇이 이 트리거의 알림을 자기에게 보내면 죽었을 때 아무 데도 안 간다.
+          # 이 호스트의 알림은 봇을 거치지 않는 경로로 보낸다(가이드 §20).
+          manual_close: true
+        state: present
+      loop:
+        - name: "게이트웨이 신호 끊김"
+          expression: "nodata(/{{ hb_host }}/gateway.alive,{{ hb_nodata_window }})=1"
+          severity: high
+          description: >-
+            봇이 {{ hb_nodata_window }} 동안 생존 신호를 보내지 않았다. 프로세스가
+            죽었거나 Zabbix 로 가는 경로가 끊긴 것이다. 알림은 계속 들어오는데
+            아무도 분석하지 않는 상태일 수 있다.
+        - name: "알림이 들어오지 않음"
+          expression: >-
+            last(/{{ hb_host }}/gateway.alive)=1 and
+            last(/{{ hb_host }}/gateway.since_last_alert)>{{ hb_quiet_window }}
+          severity: average
+          description: >-
+            봇은 살아 있는데 알림이 오래 들어오지 않았다. 발행 측 액션이나 미디어가
+            멈췄을 수 있다. 조용한 시간대가 정상인 환경이면 hb_quiet_window 를 늘린다.

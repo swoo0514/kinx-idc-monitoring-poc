@@ -11,6 +11,7 @@ from typing import Optional
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from . import heartbeat
 from . import incident
 from . import keep
 from . import pending
@@ -47,13 +48,22 @@ async def _close_incident(inc):
     한 번 더 분석해 카드가 겹칠 수 있다. 겹치는 것은 눈에 보이고 사라지는 것은 안 보여서
     뒤에 빼는 쪽을 골랐다.
     """
+    _beat.mark("incidents")
     try:
-        return await triage.run_incident(inc)
+        res = await triage.run_incident(inc)
+        _beat.mark("skipped" if res and res.get("gated_out") else "analyzed")
+        return res
     finally:
         pending.drop([{"source": a.source, "event_id": a.event_id} for a in inc.alerts])
 
 
 _incidents = incident.IncidentManager(on_close=_close_incident, on_signal=_raw_ping)
+_beat = heartbeat.Beat()
+
+
+@app.on_event("startup")
+async def _start_heartbeat():
+    _beat.start()
 
 
 @app.on_event("startup")
@@ -156,6 +166,7 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
               tags=None, groups=None):
     """경로별 후속 처리를 백그라운드로 넘긴다 — 웹훅은 즉시 200(발송측 타임아웃 회피)."""
     route = decision["route"]
+    _beat.mark_alert()
     cls = incident.classify(alert_name, tags=tags, groups=groups)
     log.info("event=%s source=%s host=%s sev=%s class=%s route=%s playbook=%s",
              event_id, source, host, sev, cls, route, decision["playbook"])
