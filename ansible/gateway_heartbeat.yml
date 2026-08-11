@@ -27,6 +27,27 @@
     # 1시간 안에 이만큼이 "조회 실패" 사유로 발동했으면 관측 소스를 본다.
     # 예전 사유별 한도(30)와 같은 값이나 역할이 다르다 — 막지 않고 알린다.
     hb_degraded_warn: "30"
+    zbx_api: "http://{{ hostvars[inventory_hostname].ansible_host }}:{{ ansible_httpapi_port | default(8080) }}/api_jsonrpc.php"
+    # 항목 목록을 한 곳에 둔다. 아래 이름 동기화와 생성이 같은 목록을 봐야
+    # 한쪽만 고쳐 어긋나는 일이 없다.
+    hb_items:
+      - { name: "게이트웨이 생존", key: "gateway.alive" }
+      - { name: "게이트웨이 구동 시간", key: "gateway.uptime", units: "s" }
+      - { name: "마지막 알림 이후 경과", key: "gateway.since_last_alert", units: "s" }
+      - { name: "수신 알림 수(누적)", key: "gateway.alerts" }
+      - { name: "사건 수(누적)", key: "gateway.incidents" }
+      - { name: "분석 수행 수(누적)", key: "gateway.analyzed" }
+      - { name: "분석 생략 수(누적)", key: "gateway.skipped" }
+      - { name: "최근 창 수신 알림 수", key: "gateway.recent_alerts" }
+      - { name: "최근 창 발행 측 이벤트 수", key: "gateway.zbx_events" }
+      - { name: "LLM 최고 동시 호출 수(1시간)", key: "gateway.llm_peak_inflight" }
+      - { name: "LLM 대기 포기 수(누적)", key: "gateway.llm_queue_timeouts" }
+      - { name: "LLM 시간당 상한 차단 수(누적)", key: "gateway.llm_hour_blocked" }
+      - { name: "LLM 최근 1시간 호출 수", key: "gateway.llm_calls_1h" }
+      - { name: "LLM 호출 - 트리아지(1시간)", key: "gateway.llm_calls_triage_1h" }
+      - { name: "LLM 호출 - 월간리포트(1시간)", key: "gateway.llm_calls_monthly_1h" }
+      - { name: "발동 사유 조회실패(1시간)", key: "gateway.fire_degraded_1h" }
+      - { name: "발동 사유 신규(1시간)", key: "gateway.fire_new_1h" }
   tasks:
     - name: 게이트웨이 전용 호스트 (에이전트 없이 트래퍼만 받는다)
       community.zabbix.zabbix_host:
@@ -34,6 +55,65 @@
         host_groups: ["{{ hb_group }}"]
         status: enabled
         state: present
+
+    # 항목 모듈은 **표시명으로** 기존 항목을 찾는다. 그래서 표시명만 바꾸면 없는
+    # 줄 알고 새로 만들려다 "키가 이미 있다"로 실패한다(실제로 겪었다). 키가 같은
+    # 항목의 표시명을 먼저 맞춰 두면 그다음은 평소대로 돈다.
+    - name: 호스트 식별자 조회
+      ansible.builtin.uri:
+        url: "{{ zbx_api }}"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: host.get
+          params:
+            output: ["hostid"]
+            filter: { host: ["{{ hb_host }}"] }
+      register: hb_hostid
+
+    - name: 기존 항목 조회 (키 -> 표시명)
+      ansible.builtin.uri:
+        url: "{{ zbx_api }}"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: item.get
+          params:
+            hostids: "{{ hb_hostid.json.result[0].hostid }}"
+            output: ["itemid", "key_", "name"]
+      register: hb_existing
+
+    - name: 표시명이 바뀐 항목 이름 맞추기
+      ansible.builtin.uri:
+        url: "{{ zbx_api }}"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: item.update
+          params:
+            itemid: "{{ item.itemid }}"
+            name: "{{ (hb_items | selectattr('key', 'equalto', item.key_) | first).name }}"
+      loop: "{{ hb_existing.json.result }}"
+      when:
+        - item.key_ in (hb_items | map(attribute='key') | list)
+        - item.name != (hb_items | selectattr('key', 'equalto', item.key_) | first).name
+      loop_control:
+        label: "{{ item.key_ }}"
 
     - name: 수신 항목 — 봇이 보내는 값 그대로
       community.zabbix.zabbix_item:
@@ -48,24 +128,7 @@
           history: 31d
           trends: 365d
         state: present
-      loop:
-        - { name: "게이트웨이 생존", key: "gateway.alive" }
-        - { name: "게이트웨이 구동 시간", key: "gateway.uptime", units: "s" }
-        - { name: "마지막 알림 이후 경과", key: "gateway.since_last_alert", units: "s" }
-        - { name: "수신 알림 수(누적)", key: "gateway.alerts" }
-        - { name: "사건 수(누적)", key: "gateway.incidents" }
-        - { name: "분석 수행 수(누적)", key: "gateway.analyzed" }
-        - { name: "분석 생략 수(누적)", key: "gateway.skipped" }
-        - { name: "최근 창 수신 알림 수", key: "gateway.recent_alerts" }
-        - { name: "최근 창 발행 측 이벤트 수", key: "gateway.zbx_events" }
-        - { name: "LLM 최고 동시 호출 수(1시간)", key: "gateway.llm_peak_inflight" }
-        - { name: "LLM 대기 포기 수(누적)", key: "gateway.llm_queue_timeouts" }
-        - { name: "LLM 시간당 상한 차단 수(누적)", key: "gateway.llm_hour_blocked" }
-        - { name: "LLM 최근 1시간 호출 수", key: "gateway.llm_calls_1h" }
-        - { name: "LLM 호출 - 트리아지(1시간)", key: "gateway.llm_calls_triage_1h" }
-        - { name: "LLM 호출 - 월간리포트(1시간)", key: "gateway.llm_calls_monthly_1h" }
-        - { name: "발동 사유 조회실패(1시간)", key: "gateway.fire_degraded_1h" }
-        - { name: "발동 사유 신규(1시간)", key: "gateway.fire_new_1h" }
+      loop: "{{ hb_items }}"
 
     # 감시 서버가 둘 이상이면 서버마다 따로 봐야 한다. 한 서버의 이벤트 수만 세면
     # 그쪽이 멀쩡한 동안 다른 서버의 알림 경로가 끊겨도 판정되지 않는다. 트래퍼
