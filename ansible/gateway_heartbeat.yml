@@ -55,6 +55,8 @@
         - { name: "분석 생략 수(누적)", key: "gateway.skipped" }
         - { name: "최근 창 수신 알림 수", key: "gateway.recent_alerts" }
         - { name: "최근 창 발행 측 이벤트 수", key: "gateway.zbx_events" }
+        - { name: "LLM 최고 동시 호출 수", key: "gateway.llm_peak_inflight" }
+        - { name: "LLM 대기 포기 수(누적)", key: "gateway.llm_queue_timeouts" }
 
     # 감시 서버가 둘 이상이면 서버마다 따로 봐야 한다. 한 서버의 이벤트 수만 세면
     # 그쪽이 멀쩡한 동안 다른 서버의 알림 경로가 끊겨도 판정되지 않는다. 트래퍼
@@ -121,6 +123,25 @@
             감시 서버는 최근 창에 이벤트를 만들었는데 봇은 한 건도 받지 못했다.
             액션·미디어 타입·웹훅 주소 중 하나가 끊긴 것이다. 알림이 없는 조용한
             상태와는 다르다 — 조용하면 양쪽 다 0 이라 이 조건은 성립하지 않는다.
+
+    # 상한에 밀려 분석이 열화로 내려간 것은 화면 어디에도 안 나타난다. 카드가 올라오긴
+    # 하는데 내용이 코드 판정만 남는다. 그래서 별도로 잡는다. 최근 한 시간 안에
+    # 늘어난 적이 있으면 발화하고, 멎으면 한 시간 뒤 스스로 풀린다.
+    - name: 트리거 — LLM 동시 호출 상한에 밀림
+      community.zabbix.zabbix_trigger:
+        name: "LLM 분석이 동시 호출 상한에 밀림"
+        host_name: "{{ hb_host }}"
+        description: >-
+          동시 호출 상한이 차서 대기를 포기하고 코드 판정만 회신한 사건이 있다.
+          알림은 정상 처리됐고 분석 깊이만 내려간 상태다. 상한값을 올릴지, 호출이
+          몰리는 원인을 볼지 판단한다.
+        params:
+          expression: >-
+            (last(/{{ hb_host }}/gateway.llm_queue_timeouts)-
+             min(/{{ hb_host }}/gateway.llm_queue_timeouts,1h))>0
+          severity: warning
+          manual_close: true
+        state: present
 
     - name: 트리거 — 감시 서버별 수신 경로
       community.zabbix.zabbix_trigger:

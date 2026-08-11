@@ -195,6 +195,15 @@ class Beat:
             "gateway.skipped": c["skipped"],
             "gateway.recent_alerts": self.recent_alerts(now),   # 아래에서 같은 구간으로 맞춘다
         }
+        # LLM 혼잡. 상한에 밀려 열화로 내려간 건수가 늘면 분석 품질이 조용히 떨어진
+        # 것이므로 밖에서 보여야 한다. 값을 못 읽어도 생존 신호는 계속 보낸다.
+        try:
+            from . import llm
+            st = llm.stats()
+            out["gateway.llm_peak_inflight"] = st["peak_inflight"]
+            out["gateway.llm_queue_timeouts"] = st["queue_timeouts"]
+        except Exception as e:
+            log.warning("LLM 혼잡 지표 수집 실패: %s", e)
         # 발행 측이 **같은 구간에** 몇 건을 만들었는지. 창을 기동 이후로 자르는 것이
         # 중요하다 — 재기동하면 우리 수신 기록은 비는데 발행 측은 지난 한 시간을 그대로
         # 세므로, 자르지 않으면 재기동 직후 한 시간 동안 "저쪽엔 있는데 이쪽은 0" 이

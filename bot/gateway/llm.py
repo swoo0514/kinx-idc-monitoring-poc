@@ -8,6 +8,7 @@
 import json
 import logging
 import os
+import threading
 import time
 
 from .masking import Masker, build_llm_context
@@ -180,13 +181,39 @@ def monthly_reply(stats: dict, incidents: list) -> dict:
             "provider": "none", "elapsed_s": round(time.monotonic() - t0, 2), "degraded": True}
 
 
-def triage_reply(context: dict, sev: str) -> dict:
-    """마스킹 → Claude/Ollama/열화 → 역치환 → 회신 dict. 예외를 위로 던지지 않음."""
-    masker = Masker()
-    masked = build_llm_context(context, sev, masker)
-    user = build_user_prompt(masked)
-    t0 = time.monotonic()
+# 동시에 나가는 호출 수 상한. 발동 게이트에 시간당 예산이 있지만 경로 5종 중
+# 3종(SEV1·병합·교차 신호)은 그것도 안 거치고, 예산은 건수 제한이라 동시 호출 수를
+# 제어하지 않는다. 여러 호스트가 한꺼번에 무너지면 대기 창도 비슷한 시각에 닫혀
+# 호출이 몰린다. 값 산정 근거는 GATEWAY_GUIDE §21.
+MAX_CONCURRENCY = int(os.environ.get("LLM_MAX_CONCURRENCY", "3"))
+# 자리를 기다리는 상한. 무한정 기다리면 스레드가 대기로 가득 차 Slack 게시 같은
+# 다른 일까지 멈춘다. 넘기면 기다리지 않고 열화 모드로 내려간다.
+QUEUE_WAIT_S = float(os.environ.get("LLM_QUEUE_WAIT_S", "60"))
 
+_sem = threading.BoundedSemaphore(MAX_CONCURRENCY)
+_stats = {"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0}
+_stats_lock = threading.Lock()
+
+
+def stats() -> dict:
+    """혼잡 상태. 밀린 사실을 세지 않으면 분석 품질만 조용히 내려간다."""
+    with _stats_lock:
+        return dict(_stats)
+
+
+def _enter():
+    with _stats_lock:
+        _stats["inflight"] += 1
+        _stats["peak_inflight"] = max(_stats["peak_inflight"], _stats["inflight"])
+
+
+def _leave():
+    with _stats_lock:
+        _stats["inflight"] -= 1
+
+
+def _ask(user: str, masker: Masker, t0: float):
+    """어댑터 체인 호출. 성공하면 회신 dict, 전부 실패하면 None."""
     for adapter in (ClaudeAdapter(), OllamaAdapter()):
         if not adapter.available():
             continue
@@ -196,14 +223,41 @@ def triage_reply(context: dict, sev: str) -> dict:
                     "elapsed_s": round(time.monotonic() - t0, 2), "degraded": False}
         except Exception as e:  # 타임아웃·429·529 포함 — 전부 다음 어댑터로 폴백
             log.warning("llm adapter %s failed: %s", adapter.name, e)
+    return None
+
+
+def triage_reply(context: dict, sev: str) -> dict:
+    """마스킹 → Claude/Ollama/열화 → 역치환 → 회신 dict. 예외를 위로 던지지 않음."""
+    masker = Masker()
+    masked = build_llm_context(context, sev, masker)
+    user = build_user_prompt(masked)
+    t0 = time.monotonic()
+
+    note = ""
+    if _sem.acquire(timeout=QUEUE_WAIT_S):
+        _enter()
+        try:
+            got = _ask(user, masker, t0)
+        finally:
+            _leave()
+            _sem.release()
+        if got:
+            return got
+    else:
+        with _stats_lock:
+            _stats["queue_timeouts"] += 1
+        note = (f" — 동시 호출 {MAX_CONCURRENCY}건이 {QUEUE_WAIT_S:.0f}초 넘게 차 있어"
+                " 대기를 포기했다")
+        log.warning("llm 대기 초과 — 동시 상한 %d, 대기 %.0fs. 열화 모드로 회신한다",
+                    MAX_CONCURRENCY, QUEUE_WAIT_S)
 
     inc = context.get("incident")
     if inc:
-        text = ("(LLM 분석 불가 — 코드 판정만 회신)\n"
+        text = (f"(LLM 분석 불가 — 코드 판정만 회신{note})\n"
                 f"{inc.get('alert_count', '?')}건 병합 사건 — {inc.get('merge_reason', '')}")
     else:
         pj = context.get("prejudge") or {}
-        text = ("(LLM 분석 불가 — 코드 판정만 회신)\n"
+        text = (f"(LLM 분석 불가 — 코드 판정만 회신{note})\n"
                 f"판정: {pj.get('verdict', '?')} — {pj.get('statement', '')}")
     return {"text": text, "provider": "none",
             "elapsed_s": round(time.monotonic() - t0, 2), "degraded": True}

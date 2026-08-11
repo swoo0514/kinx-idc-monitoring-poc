@@ -275,6 +275,7 @@ def main():
     analyze_checks = _analyze_ref_checks()
     beat_checks = _heartbeat_checks()
     registry_checks = _registry_checks()
+    concurrency_checks = _llm_concurrency_checks()
     flush_checks = _flush_checks()
 
     if fails:
@@ -282,7 +283,8 @@ def main():
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
              + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks + class_tag_checks
-             + class_map_checks + pending_checks + analyze_checks + beat_checks + flush_checks + registry_checks)
+             + class_map_checks + pending_checks + analyze_checks + beat_checks + flush_checks + registry_checks
+             + concurrency_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -772,7 +774,7 @@ def _remediation_checks() -> int:
     finally:
         if saved is not None:
             os.environ["KEEP_URL"] = saved
-    return 30
+    return 11
 
 
 def _fastpath_checks() -> int:
@@ -1309,6 +1311,77 @@ def _flush_checks() -> int:
     return 8
 
 
+def _llm_concurrency_checks() -> int:
+    """LLM 동시 호출 상한 — 상한이 실제로 걸리는지, 대기를 포기하면 열화로 내려가는지.
+
+    상한이 안 걸려도 평소에는 아무 증상이 없다. 여러 호스트가 한꺼번에 무너져
+    창이 동시에 닫힐 때만 드러나고, 그때는 429 와 비용으로 나타난다.
+    """
+    import threading
+    import time
+
+    from . import llm
+
+    ctx = {"prejudge": {"verdict": "신규", "statement": "처음"}, "sources": {}}
+
+    class _Slow:
+        name = "fake"
+
+        def available(self):
+            return True
+
+        def complete(self, _sys, _user):
+            time.sleep(0.3)
+            return "분석 결과"
+
+    class _Absent:
+        name = "absent"
+
+        def available(self):
+            return False
+
+        def complete(self, _sys, _user):
+            raise AssertionError("불러선 안 된다")
+
+    saved = (llm.ClaudeAdapter, llm.OllamaAdapter, llm._sem,
+             llm.MAX_CONCURRENCY, llm.QUEUE_WAIT_S, dict(llm._stats))
+    llm.ClaudeAdapter, llm.OllamaAdapter = _Slow, _Absent
+    llm.MAX_CONCURRENCY = 2
+    llm._sem = threading.BoundedSemaphore(2)
+    llm._stats.update({"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0})
+    try:
+        out = []
+        ts = [threading.Thread(target=lambda: out.append(llm.triage_reply(ctx, "SEV3")))
+              for _ in range(8)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(timeout=20)
+        assert len(out) == 8, len(out)
+        assert all(not r["degraded"] for r in out), "상한을 걸어도 전부 성공해야"
+        st = llm.stats()
+        assert st["peak_inflight"] <= 2, f"동시 호출이 상한을 넘었다: {st}"
+        assert st["peak_inflight"] >= 2, f"직렬로만 돌았다 — 상한 자체가 무의미: {st}"
+        assert st["inflight"] == 0, st
+        assert st["queue_timeouts"] == 0, st
+
+        # 자리를 못 잡으면 던지지 않고 열화로 내려간다 — 알림이 사라지면 안 된다
+        llm.QUEUE_WAIT_S = 0.01
+        llm._sem = threading.BoundedSemaphore(1)
+        llm._sem.acquire()          # 자리를 미리 다 차지한다
+        r = llm.triage_reply(ctx, "SEV3")
+        assert r["degraded"] is True and r["provider"] == "none", r
+        assert "대기를 포기" in r["text"], r["text"]
+        assert "처음" in r["text"], "열화여도 코드 판정은 실어야"
+        assert llm.stats()["queue_timeouts"] == 1, llm.stats()
+    finally:
+        (llm.ClaudeAdapter, llm.OllamaAdapter, llm._sem,
+         llm.MAX_CONCURRENCY, llm.QUEUE_WAIT_S, restore) = saved
+        llm._stats.clear()
+        llm._stats.update(restore)
+    return 10
+
+
 def _registry_checks() -> int:
     """호스트 명부 — 한 호스트의 사실이 한 곳에서 읽히는지.
 
@@ -1443,7 +1516,7 @@ def _registry_checks() -> int:
     # 파일을 안 지정하면 비어 있고 조용하다 — 기존 환경은 그대로 돈다
     assert registry.status()["entries"] == 0
     assert registry.entry("zabbix-internal", "node1") == {}
-    return 11
+    return 30
 
 
 if __name__ == "__main__":
