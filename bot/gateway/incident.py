@@ -303,9 +303,41 @@ def _bridge_id(cls: str) -> str:
     return cls
 
 
-def incident_key(host: str, cls: str) -> tuple:
+# 호스트 이름은 감시 서버 안에서만 유일하다. 감시 서버가 둘이면(사내·MSP) 서로 다른
+# 기계가 같은 이름을 가질 수 있고, 이름만으로 묶으면 남의 고객 알림이 한 사건이 된다.
+# 그래서 "어느 감시 영역의 무슨 이름"으로 식별한다.
+#
+# 소스를 그대로 쓰지 않는 이유가 있다. 같은 기계를 Zabbix 와 Wazuh 가 각각 보고하는데,
+# 소스를 키에 넣으면 그 둘이 갈라져 교차 소스 병합이 아예 불가능해진다. 영역은 소스보다
+# 위의 개념이다 — 사내 Zabbix 와 사내 Wazuh 는 같은 영역이고, MSP Zabbix 는 다른 영역이다.
+#
+# 형식: "소스=영역,소스=영역"  예) zabbix-internal=internal,zabbix-msp=msp,wazuh=internal
+# 안 적으면 전부 한 영역으로 본다 — 감시 서버가 하나인 환경의 현행 동작 그대로다.
+def _realm_map():
+    out = {}
+    for pair in os.environ.get("INCIDENT_REALM_MAP", "").split(","):
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+REALM_MAP = _realm_map()
+if REALM_MAP:
+    log.info("감시 영역 구분 적용: %s", REALM_MAP)
+else:
+    log.info("감시 영역 미설정 — 전부 한 영역으로 본다. 감시 서버가 둘 이상이면 "
+             "INCIDENT_REALM_MAP 을 설정한다(호스트명이 겹치면 남의 사건과 묶인다)")
+
+
+def realm_for(source: str) -> str:
+    """이 알림이 어느 감시 영역에서 왔는가. 미설정이면 빈 문자열(단일 영역)."""
+    return REALM_MAP.get(source or "", "")
+
+
+def incident_key(source: str, host: str, cls: str) -> tuple:
     """같은 키의 알림은 한 인시던트. 브리지 조합이면 다른 class여도 같은 키."""
-    return (host, _bridge_id(cls))
+    return (realm_for(source), host, _bridge_id(cls))
 
 
 @dataclass
@@ -350,7 +382,12 @@ class Incident:
         return len(self.alerts) > 1
 
     def fingerprint(self) -> str:
-        raw = f"{self.host}|{self.key[1]}|{','.join(sorted(self.classes()))}"
+        # 영역을 넣어야 서로 다른 고객의 같은 이름 호스트가 관제 화면에서 한 행으로
+        # 합쳐지지 않는다. 키의 앞 두 칸이 (영역, 호스트)다.
+        # 키를 통째로 넣는다. 키에 영역이 들어 있으므로 서로 다른 고객의 같은 이름
+        # 호스트가 관제 화면에서 한 행으로 합쳐지지 않는다. 키 모양이 바뀌어도 따라간다.
+        raw = "|".join([str(x) for x in self.key]
+                       + [self.host, ",".join(sorted(self.classes()))])
         return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
     def merge_reason(self) -> str:
@@ -472,7 +509,7 @@ class IncidentManager:
         self._locks: dict = {}
 
     async def submit(self, a: Alert):
-        key = incident_key(a.host, a.incident_class)
+        key = incident_key(a.source, a.host, a.incident_class)
         inc = self._open.get(key)
         new = inc is None
         if new:

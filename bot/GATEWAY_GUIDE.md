@@ -23,10 +23,9 @@ Wazuh Integrator ──────────┘                              
 | `gateway/severity.py` | 통합 심각도 정규화 상수 정의 — [`severity-normalization.md`](../docs/02-design/severity-normalization.md)의 코드 구현체 |
 | `gateway/router.py` | 태그 기반 라우팅 로직 — `automate`, `scope` 태그 조합을 통한 처리 경로 분기 |
 | `gateway/selftest.py` | 파이프라인 순수 제어 로직 독립 검증 모듈 (FastAPI 의존성 없이 실행) |
-
 | `gateway/collector.py` | Zabbix, Loki, Wazuh 텔레메트리 데이터 비동기 교차 수집기 |
 | `gateway/prejudge.py` | 과거 90일 발생 이력 기반 결정론적 만성/신규 장애 선판정 모듈 |
-| `gateway/incident.py` | (호스트, 알림 유형) 기반 디바운스 창 제어 및 알림 병합(Incident Merging) 모듈 |
+| `gateway/incident.py` | (감시 영역, 호스트, 알림 유형) 기반 디바운스 창 제어 및 알림 병합(Incident Merging) 모듈 |
 | `gateway/llm.py` | Claude/Ollama LLM 어댑터 및 양방향 가명화(Masking) 파이프라인 |
 | `gateway/slack.py` | Slack Block Kit 기반 알림 카드 및 트리아지 결과 회신 모듈 |
 | `gateway/triage.py` | 수집 ➔ 가명화 ➔ LLM 연산 ➔ Slack 회신 전체 파이프라인 오케스트레이터 |
@@ -210,6 +209,28 @@ Zabbix Administration ➔ Media types ➔ Create Media Type: Type = **Webhook**,
   - `{replication, cpu_io_pressure}`: DB 복제 지연 알림과 CPU/IO 자원 경합 알림을 단일 사건으로 병합
   - `{disk_space, service_down}`: 디스크 용량 초과 알림과 서비스 중단 알림을 단일 사건으로 병합
   - `auth_security` (보안 경보) 항목은 브리지 그룹에 포함하지 않고 항상 독립 사건으로 격리 처리합니다.
+
+### 8-1-1. 감시 영역 구분 (Monitoring Realm)
+
+**호스트명은 개별 감시 서버 내에서만 고유합니다.** 사내 Zabbix 와 MSP Zabbix 를 동시에 수용하는 구성에서는 서로 다른 물리 장비가 동일한 호스트명을 가질 수 있으며, 호스트명만으로 병합할 경우 **서로 다른 고객사의 알림이 단일 인시던트로 병합**됩니다. 이 경우 단일 Slack 카드·단일 LLM 호출·단일 리포트 항목에 복수 고객사의 데이터가 포함됩니다.
+
+이에 병합 키를 `(감시 영역, 호스트, 브리지 ID)` 로 구성합니다.
+
+| 환경 변수 | 형식 | 기본값 |
+|---|---|---|
+| `INCIDENT_REALM_MAP` | `소스=영역,소스=영역` | (미설정 — 전 소스 단일 영역) |
+
+**소스가 아닌 영역 단위로 구분하는 이유:** 동일 장비를 Zabbix 와 Wazuh 가 각각 보고하므로, 소스를 그대로 키에 포함하면 두 관측 소스가 분리되어 교차 소스 병합이 성립하지 않습니다. 영역은 소스의 상위 개념으로, 사내 Zabbix 와 사내 Wazuh 는 동일 영역, MSP Zabbix 는 별도 영역으로 분류합니다.
+
+```bash
+INCIDENT_REALM_MAP=zabbix-internal=internal,zabbix-msp=msp,wazuh=internal
+```
+
+**미설정 시 동작:** 전 소스를 단일 영역으로 처리하며, 이는 감시 서버가 1대인 환경의 기존 동작과 동일합니다. 기동 시 미설정 상태를 로그로 표시합니다.
+
+**인시던트 지문에도 영역이 포함됩니다.** 미포함 시 관제 도구(Keep)에서 서로 다른 고객사의 동일 유형 사건이 단일 레코드로 중복 제거되며, 심층 조사 결과가 타 고객사 레코드에 병합될 수 있습니다.
+
+**적용 범위 한계:** 본 항목은 병합·지문 단계의 구분입니다. 컨텍스트 수집 시 조회 대상 Zabbix 서버를 영역에 따라 선택하는 기능은 미구현 상태로, 현재는 `ZABBIX_URL` 단일 인스턴스만 조회합니다(§7-2). 복수 감시 서버 환경에서는 후속 반영이 필요합니다.
 
 ### 8-2. 디바운스 창 제어 (Debounce Window Control)
 

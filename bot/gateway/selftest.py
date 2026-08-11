@@ -878,6 +878,7 @@ def _holmes_gate_checks() -> int:
 def _incident_checks() -> int:
     """인시던트 병합 — 순수 로직 + 비동기 버퍼(짧은 디바운스) + 마스킹 누수."""
     import asyncio
+    import importlib
     import json
     import os
 
@@ -890,10 +891,10 @@ def _incident_checks() -> int:
 
     # memory_pressure 는 어떤 브리지에도 속하지 않는다 — 자원 경합(swap→iowait)과 OOM→서비스
     # 정지 양쪽에 인과 후보가 걸치는데 그룹은 겹칠 수 없고, 실측 근거도 아직 없다(P0-3 판정).
-    assert (incident.incident_key("h1", "memory_pressure")
-            != incident.incident_key("h1", "cpu_io_pressure"))
-    assert (incident.incident_key("h1", "memory_pressure")
-            != incident.incident_key("h1", "service_down"))
+    assert (incident.incident_key("zabbix-internal", "h1", "memory_pressure")
+            != incident.incident_key("zabbix-internal", "h1", "cpu_io_pressure"))
+    assert (incident.incident_key("zabbix-internal", "h1", "memory_pressure")
+            != incident.incident_key("zabbix-internal", "h1", "service_down"))
 
     # 브리지 그룹은 서로 겹치면 안 된다 — 겹치면 뒤 그룹이 死코드가 되므로 import 때 막는다
     try:
@@ -903,16 +904,50 @@ def _incident_checks() -> int:
         pass
 
     # 브리지 — replication + cpu_io_pressure 는 같은 키, auth_security 는 분리
-    k_repl = incident.incident_key("h1", "replication")
-    k_io = incident.incident_key("h1", "cpu_io_pressure")
-    k_sec = incident.incident_key("h1", "auth_security")
+    k_repl = incident.incident_key("zabbix-internal", "h1", "replication")
+    k_io = incident.incident_key("zabbix-internal", "h1", "cpu_io_pressure")
+    k_sec = incident.incident_key("zabbix-internal", "h1", "auth_security")
     assert k_repl == k_io, (k_repl, k_io)
     assert k_sec != k_repl
-    assert incident.incident_key("h2", "replication") != k_repl   # 호스트 다르면 분리
+    assert incident.incident_key("zabbix-internal", "h2", "replication") != k_repl   # 호스트 다르면 분리
 
     # 브리지 2번 그룹 — 디스크 포화 + 서비스 정지 = 한 사건 (데모 B), 1번 그룹과는 분리
-    k_disk = incident.incident_key("h1", "disk_space")
-    k_svc = incident.incident_key("h1", "service_down")
+    # 감시 서버가 둘이면 호스트 이름이 겹칠 수 있다. 이름만으로 묶으면 남의 고객
+    # 알림이 한 사건이 된다 — 이름은 감시 서버 안에서만 유일하다.
+    saved_realm = os.environ.get("INCIDENT_REALM_MAP")
+    os.environ["INCIDENT_REALM_MAP"] = "zabbix-internal=internal,zabbix-msp=msp,wazuh=internal"
+    try:
+        importlib.reload(incident)
+        same = incident.incident_key("zabbix-internal", "db01", "disk_space")
+        other = incident.incident_key("zabbix-msp", "db01", "disk_space")
+        assert same != other, "이름이 같아도 감시 서버가 다르면 갈라져야"
+        # 같은 영역이면 소스가 달라도 묶인다 — 교차 소스 병합이 막히면 안 된다
+        wz = incident.incident_key("wazuh", "db01", "disk_space")
+        assert wz == same, "같은 영역의 다른 소스는 계속 묶여야"
+        assert incident.realm_for("zabbix-msp") == "msp"
+        assert incident.realm_for("모르는소스") == "", "모르는 소스는 기본 영역"
+
+        # 지문도 갈라져야 관제 화면에서 두 고객이 한 행으로 합쳐지지 않는다
+        def _inc(src):
+            a = incident.Alert(source=src, event_id="1", trigger_id="1", host="db01",
+                               alert_name="n", sev="SEV2", incident_class="disk_space",
+                               recv=0.0)
+            return incident.Incident(key=incident.incident_key(src, "db01", "disk_space"),
+                                     host="db01", alerts=[a], opened_at=0.0, last_at=0.0)
+        assert _inc("zabbix-internal").fingerprint() != _inc("zabbix-msp").fingerprint()
+    finally:
+        if saved_realm is None:
+            os.environ.pop("INCIDENT_REALM_MAP", None)
+        else:
+            os.environ["INCIDENT_REALM_MAP"] = saved_realm
+        importlib.reload(incident)
+
+    # 미설정이면 전부 한 영역 — 감시 서버가 하나인 환경의 현행 동작 그대로
+    assert (incident.incident_key("zabbix-internal", "db01", "disk_space")
+            == incident.incident_key("zabbix-msp", "db01", "disk_space"))
+
+    k_disk = incident.incident_key("zabbix-internal", "h1", "disk_space")
+    k_svc = incident.incident_key("zabbix-internal", "h1", "service_down")
     assert k_disk == k_svc, (k_disk, k_svc)
     assert k_disk != k_repl, "두 브리지 그룹이 같은 키로 뭉쳤다"
 
@@ -1236,8 +1271,8 @@ def _flush_checks() -> int:
     n, left, timers = asyncio.run(_run2())
     assert n == 2 and left == 0, (n, left)
     assert timers == 0, "마감 후 타이머가 남으면 종료가 안 끝난다"
-    # 키의 유형 자리는 브리지 식별자로 접히므로 호스트로 확인한다
-    assert sorted(k[0] for k in closed) == ["h1", "h2"], closed
+    # 키는 (영역, 호스트, 브리지) 세 칸이다 — 호스트 자리로 확인한다
+    assert sorted(k[1] for k in closed) == ["h1", "h2"], closed
 
     # 열린 사건이 없으면 아무 일도 하지 않는다
     async def _empty():

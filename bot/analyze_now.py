@@ -63,7 +63,7 @@ def main():
     alerts = parse_ref(a.ref, a.host)
     now = time.monotonic()
     inc = incident.Incident(
-        key=incident.incident_key(a.host, alerts[0].incident_class),
+        key=incident.incident_key(alerts[0].source, a.host, alerts[0].incident_class),
         host=a.host, alerts=alerts, opened_at=now, last_at=now)
 
     print("요청 분석: 호스트 %s / 알림 %d건" % (a.host, len(alerts)), file=sys.stderr)
