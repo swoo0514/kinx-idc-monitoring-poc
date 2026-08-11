@@ -164,7 +164,32 @@ def main():
     assert prejudge.chronic_min_for(30, 30) == 2, "1회는 반복이 아니므로 하한 2"
     assert prejudge.chronic_min_for(90, 0) == 2, "간격 0 이어도 죽지 않아야"
     assert prejudge.chronic_min_for(90, 100) == 2, "창보다 긴 간격도 하한 2"
-    prejudge_checks = 10
+
+    # 발생 횟수는 목록 길이가 아니라 따로 센 개수를 쓴다. 목록은 상한에 걸리므로
+    # 상한을 넘는 것들이 전부 같은 수로 보이면 무엇이 더 자주 나는지 가릴 수 없다
+    # (실환경 90일: 상한 초과 12계열이 이벤트의 95%, 실제 값은 547~21,585회).
+    from . import collector as _col
+    lim = _col.PAST_EVENT_LIMIT
+    packed = [now - (i % 80) * day for i in range(lim)]      # 창 안에 상한만큼
+    j = prejudge.judge(packed, now=now, **fix)
+    assert j["count_window"] == lim and j["count_truncated"] is True, j
+    assert "상한" in j["statement"], j["statement"]
+
+    j = prejudge.judge(packed, now=now, total_count=3000, **fix)
+    assert j["count_window"] == 3000 and j["count_truncated"] is False, j
+    assert "상한" not in j["statement"], j["statement"]
+
+    # 개수가 목록보다 작게 오면(창 경계에서 어긋날 수 있다) 목록 길이를 쓴다 —
+    # 실제로 본 것보다 적게 세지 않는다.
+    j = prejudge.judge(packed, now=now, total_count=3, **fix)
+    assert j["count_window"] == lim, j
+
+    # 응답 형태가 이상하면 개수를 지어내지 않는다
+    assert _col._as_count("41") == 41
+    assert _col._as_count(41) == 41
+    assert _col._as_count(["a"]) is None
+    assert _col._as_count(None) is None
+    prejudge_checks = 19
 
     # 수집기 읽기 전용 가드 — .get 이외 메서드는 코드 레벨에서 거부
     import asyncio

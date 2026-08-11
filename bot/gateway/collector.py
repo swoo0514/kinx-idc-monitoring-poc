@@ -25,6 +25,8 @@ CORR_WINDOW_S = 900   # 15분
 LOKI_LIMIT = 40
 LOKI_LINE_MAX = 300   # 라인당 최대 문자 (토큰 억제)
 WAZUH_LIMIT = 20
+# 과거 이벤트 목록 상한. 개수는 따로 세므로 이 값이 판정에 영향을 주지 않는다.
+PAST_EVENT_LIMIT = 200
 
 # 호스트 이름이 그 소스에 등록돼 있는지 확인할 때 되짚는 기간
 KNOWN_HOST_LOOKBACK_S = 7 * 86400
@@ -74,18 +76,24 @@ class ZabbixClient:
 async def _zabbix_alert_context(zbx: ZabbixClient, client: httpx.AsyncClient,
                                 event_id: str, trigger_id: str, now: int) -> dict:
     """트리거 1건의 Zabbix 컨텍스트(이벤트·트리거·호스트·메트릭·선판정). 로그·보안 제외."""
-    cur_event, trigger, metrics, past = await asyncio.gather(
+    # 과거 이력은 **개수와 최근 목록을 따로** 받는다. 한 번에 받으면 상한에 걸려
+    # 만성끼리 순위가 안 나온다(실환경 90일: 상한 초과 12계열이 이벤트의 95%이고,
+    # 21,585회와 547회가 똑같이 상한값으로 보였다). 근거는 GATEWAY_GUIDE §7-3.
+    past_window = {"objectids": trigger_id, "source": 0, "object": 0, "value": 1,
+                   "time_from": now - prejudge.WINDOW_S, "time_till": now}
+    cur_event, trigger, metrics, past, past_count = await asyncio.gather(
         zbx.call(client, "event.get", {
             "eventids": event_id, "selectTags": "extend", "output": "extend"}),
         zbx.call(client, "trigger.get", {
             "triggerids": trigger_id, "output": "extend",
             "expandExpression": True, "selectHosts": ["hostid", "host", "name"]}),
         _metrics_trend(zbx, client, trigger_id, now),
-        zbx.call(client, "event.get", {
-            "objectids": trigger_id, "source": 0, "object": 0, "value": 1,
-            "time_from": now - prejudge.WINDOW_S, "time_till": now,
+        # 목록은 마지막 발생 시각을 알기 위한 것이라 최근 것만 있으면 된다.
+        zbx.call(client, "event.get", dict(past_window, **{
             "output": ["eventid", "clock"], "sortfield": "clock", "sortorder": "DESC",
-            "limit": 200}),
+            "limit": PAST_EVENT_LIMIT})),
+        # 개수는 내용을 안 받으므로 몇만 건이어도 응답이 한 줄이다(공식: countOutput).
+        zbx.call(client, "event.get", dict(past_window, countOutput=True)),
     )
     host = {}
     hosts = (trigger[0].get("hosts") if trigger else None) or []
@@ -97,13 +105,26 @@ async def _zabbix_alert_context(zbx: ZabbixClient, client: httpx.AsyncClient,
     if not host.get("host") and hosts:
         host = {**host, "host": hosts[0].get("host", "")}
     past_clocks = [int(e["clock"]) for e in past if e.get("eventid") != str(event_id)]
+    # countOutput 은 숫자를 문자열로 돌려준다. 현재 이벤트가 창 안에 있으므로 1 을 뺀다.
+    total = _as_count(past_count)
+    if total is not None:
+        total = max(0, total - 1)
     return {
         "event": cur_event[0] if cur_event else {},
         "trigger": trigger[0] if trigger else {},
         "host": host,
         "metrics": metrics,
-        "prejudge": prejudge.judge(past_clocks, now=now),
+        "prejudge": prejudge.judge(past_clocks, now=now, total_count=total),
     }
+
+
+def _as_count(res) -> int:
+    """countOutput 응답을 정수로. 형태가 다르면 None — 개수를 지어내지 않는다."""
+    try:
+        return int(res)
+    except (TypeError, ValueError):
+        log.warning("countOutput 응답을 숫자로 못 읽었다(%r) — 목록 길이로 대체", res)
+        return None
 
 
 async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> dict:

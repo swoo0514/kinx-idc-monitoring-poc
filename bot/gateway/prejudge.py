@@ -46,15 +46,24 @@ CHRONIC_MIN_COUNT = (_env_int("PREJUDGE_CHRONIC_MIN", 0)
                      or chronic_min_for(WINDOW_DAYS, CHRONIC_INTERVAL_DAYS))
 
 
-def judge(past_clocks: list, now: float = None,
-          window_s: int = None, chronic_min: int = None) -> dict:
-    """past_clocks: 현재 이벤트 제외한 동일 트리거 과거 발생 unix time 목록."""
+def judge(past_clocks: list, now: float = None, window_s: int = None,
+          chronic_min: int = None, total_count: int = None) -> dict:
+    """past_clocks: 현재 이벤트 제외한 동일 트리거 과거 발생 unix time 목록.
+
+    total_count 는 창 안 전체 발생 수다. 목록은 조회 상한이 있어 잘리므로 개수를 따로
+    받는다 — 안 그러면 상한을 넘는 것들이 전부 같은 수로 보여 무엇이 더 자주 나는지
+    가릴 수 없다. 목록은 마지막 발생 시각에만 쓴다.
+    """
     now = now or time.time()
     window_s = window_s or WINDOW_S
     chronic_min = chronic_min or CHRONIC_MIN_COUNT
     window_days = round(window_s / 86400)
     in_window = sorted(c for c in past_clocks if now - c <= window_s)
-    count = len(in_window)
+    listed = len(in_window)
+    # 개수를 못 받았으면 목록 길이로 떨어진다. 그 경우 상한에 걸렸을 수 있으므로
+    # 아래에서 그 사실을 함께 남긴다 — 잘린 값을 실제 값처럼 쓰면 안 된다.
+    count = listed if total_count is None else max(total_count, listed)
+    truncated = total_count is None and listed >= _list_limit()
 
     if count == 0:
         verdict = "신규"
@@ -74,10 +83,20 @@ def judge(past_clocks: list, now: float = None,
                          f"(마지막 {last_seen_days}일 전) — 간헐 재발. "
                          f"이전 발생과의 공통점 확인 권장.")
 
+    if truncated:
+        statement += f" (조회 상한에 걸려 실제 발생 수는 {count}회보다 많을 수 있음)"
+
     return {
         "verdict": verdict,
         "count_window": count,
         "window_days": window_days,
         "last_seen_days": last_seen_days,
+        "count_truncated": truncated,   # 잘린 값인지 — 순위·집계에서 걸러내는 데 쓴다
         "statement": statement,   # LLM 프롬프트에 그대로 주입
     }
+
+
+def _list_limit() -> int:
+    """수집기의 목록 상한. 순환 import 를 피해 여기서 늦게 읽는다."""
+    from . import collector
+    return collector.PAST_EVENT_LIMIT
