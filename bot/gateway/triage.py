@@ -114,7 +114,8 @@ async def run_incident(inc, force: bool = False) -> dict:
     sev = inc.dominant_sev()
 
     try:
-        zbx = collector.ZabbixClient()
+        # 알림이 온 감시 서버에 되묻는다 — 서버가 둘 이상이면 이게 갈린다.
+        zbx = collector.ZabbixClient(source=inc.alerts[0].source if inc.alerts else "")
         context = await collector.collect_incident_context(zbx, inc)
     except Exception as e:
         log.warning("collect_incident failed for %s: %s", inc.fingerprint(), e)

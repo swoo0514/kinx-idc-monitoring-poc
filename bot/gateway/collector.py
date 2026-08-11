@@ -40,10 +40,26 @@ SOURCE_UNMATCHED = "unmatched"      # 조회는 됐으나 그 호스트 이름�
 
 
 class ZabbixClient:
-    def __init__(self, url: str = None, token: str = None):
+    """감시 서버 하나에 붙는 조회 전용 클라이언트.
+
+    감시 서버가 둘 이상이면 **알림이 온 곳에 되물어야 한다.** 사내 알림의 이력을 MSP
+    서버에 물으면 없는 호스트라 빈 결과가 오거나, 더 나쁘게는 이름이 같은 남의 호스트
+    자료가 온다. 어느 서버에 물을지는 명부의 감시 서버 절에서 고른다.
+    """
+
+    def __init__(self, url: str = None, token: str = None, source: str = ""):
+        conf = registry.source_conf(source) if source else {}
+        if url is None and conf.get("url"):
+            url = conf["url"]
+            # 토큰은 파일이 아니라 환경변수에서 읽는다(명부는 깃에 올라간다).
+            token = token or os.environ.get(conf.get("token_env") or "", "")
+            if not token:
+                log.error("감시 서버 %s 의 토큰이 비었다(%s 미설정) — 조회가 실패한다",
+                          source, conf.get("token_env"))
         base = (url or os.environ.get("ZABBIX_URL", "")).rstrip("/")
         self.api = base + "/api_jsonrpc.php"
         self.token = token or os.environ.get("ZABBIX_TOKEN", "")
+        self.source = source
         self._id = 0
 
     async def call(self, client: httpx.AsyncClient, method: str, params: dict):

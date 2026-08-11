@@ -22,12 +22,13 @@ log = logging.getLogger("gateway.registry")
 PATH = os.environ.get("HOST_REGISTRY_FILE", "")
 
 _ENTRIES: list = []
+_SOURCES: list = []
 _LOAD_ERROR = ""
 
 
 def _load():
-    global _ENTRIES, _LOAD_ERROR
-    _ENTRIES, _LOAD_ERROR = [], ""
+    global _ENTRIES, _SOURCES, _LOAD_ERROR
+    _ENTRIES, _SOURCES, _LOAD_ERROR = [], [], ""
     if not PATH:
         return
     try:
@@ -42,7 +43,10 @@ def _load():
             doc = yaml.safe_load(f) or {}
         rows = doc.get("hosts") or []
         _ENTRIES = [r for r in rows if isinstance(r, dict) and r.get("name")]
-        log.info("호스트 명부 %s 에서 %d건 로드", PATH, len(_ENTRIES))
+        srcs = doc.get("sources") or []
+        _SOURCES = [r for r in srcs if isinstance(r, dict) and r.get("name")]
+        log.info("호스트 명부 %s 에서 호스트 %d건 / 감시 서버 %d건 로드",
+                 PATH, len(_ENTRIES), len(_SOURCES))
         if len(_ENTRIES) != len(rows):
             log.warning("명부에서 이름 없는 항목 %d건을 건너뛰었다", len(rows) - len(_ENTRIES))
     except Exception as e:
@@ -56,7 +60,25 @@ _load()
 
 def status() -> dict:
     """진단용. 명부를 실제로 읽었는지 사람이 확인할 수 있어야 한다."""
-    return {"path": PATH, "entries": len(_ENTRIES), "error": _LOAD_ERROR}
+    return {"path": PATH, "entries": len(_ENTRIES),
+            "sources": len(_SOURCES), "error": _LOAD_ERROR}
+
+
+def source_conf(name: str) -> dict:
+    """그 감시 서버의 접속 정보. 없으면 빈 dict.
+
+    토큰은 파일에 넣지 않는다 — 명부는 깃에 올라가고 크리덴셜은 올라가면 안 된다.
+    파일에는 **어느 환경변수에 들어 있는지**만 적고 값은 실행 환경에서 읽는다.
+    """
+    for s in _SOURCES:
+        if s.get("name") == name:
+            return s
+    return {}
+
+
+def source_realm(name: str) -> str:
+    """감시 서버 절에 적힌 영역. 없으면 빈 문자열."""
+    return str(source_conf(name).get("realm") or "")
 
 
 def entry(source: str, host: str) -> dict:
@@ -85,6 +107,10 @@ def realm(source: str, host: str, env_map: dict) -> str:
     e = entry(source, host)
     if e.get("realm"):
         return str(e["realm"])
+    # 감시 서버 절에 적힌 영역이 그다음이다 — 호스트마다 안 적어도 서버 단위로 정해진다.
+    sr = source_realm(source)
+    if sr:
+        return sr
     if source in env_map:
         return env_map[source]
     return source or ""

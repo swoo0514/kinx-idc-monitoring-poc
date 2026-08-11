@@ -772,7 +772,7 @@ def _remediation_checks() -> int:
     finally:
         if saved is not None:
             os.environ["KEEP_URL"] = saved
-    return 11
+    return 20
 
 
 def _fastpath_checks() -> int:
@@ -1363,9 +1363,47 @@ def _registry_checks() -> int:
         # 명부에 없으면 모름 — 기존 규칙으로 넘어간다
         assert registry.axis_on("zabbix-internal", "무명호스트", "logs") is None
 
+        # 감시 서버 절 — 알림이 온 곳에 되물어야 한다
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("""sources:
+  - name: zabbix-internal
+    realm: internal
+    url: http://internal:8080
+    token_env: TOK_INTERNAL
+  - name: zabbix-msp
+    realm: msp
+    url: http://msp:8080
+    token_env: TOK_MSP
+""")
+        importlib.reload(registry)
+        assert registry.status()["sources"] == 2, registry.status()
+        assert registry.source_conf("zabbix-msp")["url"] == "http://msp:8080"
+        assert registry.source_conf("없는서버") == {}
+
+        from . import collector as _c
+        os.environ["TOK_INTERNAL"] = "tok-a"
+        os.environ["TOK_MSP"] = "tok-b"
+        try:
+            a = _c.ZabbixClient(source="zabbix-internal")
+            b = _c.ZabbixClient(source="zabbix-msp")
+            assert a.api == "http://internal:8080/api_jsonrpc.php", a.api
+            assert b.api == "http://msp:8080/api_jsonrpc.php", b.api
+            assert (a.token, b.token) == ("tok-a", "tok-b"), "서버마다 다른 토큰을 써야"
+            # 명부에 없는 소스는 환경변수 하나로 떨어진다(감시 서버가 하나인 환경)
+            os.environ["ZABBIX_URL"] = "http://only:8080"
+            assert _c.ZabbixClient(source="모르는곳").api == "http://only:8080/api_jsonrpc.php"
+        finally:
+            for k in ("TOK_INTERNAL", "TOK_MSP", "ZABBIX_URL"):
+                os.environ.pop(k, None)
+
+        # 감시 서버 절의 영역이 호스트에 상속된다 — 호스트마다 안 적어도 된다
+        assert registry.realm("zabbix-msp", "무명호스트", {}) == "msp"
+
         # 영역: 명부 > 환경변수 > 소스 그대로
         assert registry.realm("zabbix-msp", "db01", {}) == "msp"
-        assert registry.realm("zabbix-internal", "무명", {"zabbix-internal": "x"}) == "x"
+        # 명부에 없는 소스만 환경변수로 떨어진다(우선순위: 명부 > 서버 절 > 환경변수 > 소스)
+        assert registry.realm("옛소스", "무명", {"옛소스": "x"}) == "x"
+        assert registry.realm("zabbix-internal", "무명", {"zabbix-internal": "x"}) == "internal",             "감시 서버 절이 환경변수보다 우선이어야"
         assert registry.realm("새소스", "무명", {}) == "새소스", "안 적으면 소스가 곧 영역"
     finally:
         if saved is None:
