@@ -273,6 +273,7 @@ def main():
     class_map_checks = _class_map_checks()
     pending_checks = _pending_checks()
     idem_checks = _idempotency_checks()
+    overflow_checks = _overflow_checks()
     analyze_checks = _analyze_ref_checks()
     beat_checks = _heartbeat_checks()
     registry_checks = _registry_checks()
@@ -285,7 +286,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1251,6 +1252,64 @@ def _idempotency_checks() -> int:
     assert not errors2, f"청소 중 예외: {errors2[:2]}"
     app_mod._seen.clear()
     return 4
+
+
+def _overflow_checks() -> int:
+    """창 안에 알림이 상한을 넘겼을 때 넘친 것이 어떻게 되는가.
+
+    넘친 알림은 어떤 사건에도 안 들어가므로, 사건이 끝날 때 대기 파일에서 지워지지
+    않는다(지우는 목록이 `inc.alerts` 이기 때문이다). 그러면 재기동마다 되살아나
+    이미 끝난 사건의 알림으로 새 사건이 열리고, 세 번 반복하면 버려진다. 웹훅은
+    200 을 줬고 파일에도 적혔는데 아무도 안 본 알림이 된다.
+    """
+    import asyncio
+    import os
+    import shutil
+    import tempfile
+    import time as _t
+
+    from . import incident, pending
+
+    d = tempfile.mkdtemp(prefix="overflow-test-")
+    saved_path = pending.PATH
+    pending.PATH = os.path.join(d, "pending.jsonl")
+    try:
+        closed = []
+
+        async def _on_close(inc):
+            closed.append(inc)
+
+        mgr = incident.IncidentManager(on_close=_on_close, debounce_s=0.05,
+                                       max_window_s=0.3, max_alerts=3)
+
+        async def _run():
+            for i in range(6):
+                rec = {"source": "zabbix-internal", "event_id": "e%d" % i}
+                pending.append(rec)
+                await mgr.submit(incident.Alert(
+                    source="zabbix-internal", event_id="e%d" % i, trigger_id="1",
+                    host="h1", alert_name="disk full", sev="SEV3",
+                    incident_class="disk_space", recv=_t.monotonic()))
+            await asyncio.sleep(0.6)
+
+        asyncio.run(_run())
+        assert closed, "사건이 안 닫혔다"
+        assert len(closed[0].alerts) == 3, f"상한이 안 걸렸다: {len(closed[0].alerts)}"
+        # 사건이 끝날 때마다 실제 경로처럼 대기 목록에서 지운다
+        for inc in closed:
+            pending.drop([{"source": a.source, "event_id": a.event_id}
+                          for a in inc.alerts])
+        left = {r.get("event_id") for r in pending.load()}
+        assert not left, (f"넘친 알림 {sorted(left)} 이 어떤 사건에도 안 들어가 대기 "
+                          "파일에 남았다 — 재기동마다 되살아나 이미 끝난 사건의 알림으로 "
+                          "새 사건이 열린다")
+        # 버리지 않고 다음 사건으로 넘겼는지 — 사건 수와 알림 총수로 확인한다
+        assert len(closed) >= 2, f"넘친 알림이 새 사건으로 안 이어졌다: {len(closed)}"
+        assert sum(len(i.alerts) for i in closed) == 6,             [len(i.alerts) for i in closed]
+        return 4
+    finally:
+        pending.PATH = saved_path
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def _pending_checks() -> int:

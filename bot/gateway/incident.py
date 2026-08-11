@@ -533,9 +533,23 @@ class IncidentManager:
             self._open[key] = inc
         else:
             if not inc.add(a, self.max_alerts):
-                log.warning("incident %s at max_alerts(%d) — dropping extra %s",
-                            key, self.max_alerts, a.alert_name)
-                return
+                # 넘친 알림을 버리면 안 된다. 그 알림은 어떤 사건에도 안 들어가므로
+                # 사건이 끝날 때 대기 파일에서 지워지지 않는다(지우는 목록이
+                # inc.alerts 다). 그러면 재기동마다 되살아나 이미 끝난 사건의 알림으로
+                # 새 사건이 열리고, 세 번 반복하면 버려진다. 웹훅은 200 을 줬고 파일에도
+                # 적혔는데 아무도 안 본 알림이 된다.
+                #
+                # 그래서 지금 사건을 즉시 마감하고 이 알림으로 다음 사건을 연다.
+                # 상한은 한 사건이 지나치게 커지는 것을 막자는 것이지 알림을 버리자는
+                # 것이 아니다. 창이 이어지는 폭주에서는 사건이 여러 개로 쪼개진다 —
+                # 그게 알림을 잃는 것보다 낫고, 카드에도 그렇게 보인다.
+                log.info("incident %s at max_alerts(%d) — 마감하고 새 사건으로 이어간다: %s",
+                         key, self.max_alerts, a.alert_name)
+                await self._close(key)
+                inc = Incident(key=key, host=a.host, alerts=[a],
+                               opened_at=a.recv, last_at=a.recv)
+                self._open[key] = inc
+                new = True
         self._schedule(key, inc)
         if self._on_signal:
             async with self._locks.setdefault(key, asyncio.Lock()):
