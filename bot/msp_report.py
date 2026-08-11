@@ -147,7 +147,10 @@ def security_posture(agent_filter: str, days: int) -> dict:
     """
     if not os.environ.get("WAZUH_INDEXER_URL"):
         return {"status": "disabled"}
-    who = [{"wildcard": {"agent.name": "*%s*" % agent_filter}}] if agent_filter else []
+    # 접두 일치로 잡는다. 양쪽 와일드카드(`*db*`)로 두면 다른 고객의 취약점·파일 변경
+    # 수치가 이 고객 리포트 숫자에 합산된다. 고객 호스트는 접두를 공유하도록 이름을
+    # 짓는 것이 온보딩 규칙이므로(`customer-b-*`), 접두면 충분하다.
+    who = [{"prefix": {"agent.name": agent_filter}}] if agent_filter else []
     win = {"range": {"@timestamp": {"gte": "now-%dd" % days}}}
     # 절마다 따로 잡는다 — 취약점 인덱스 하나가 없다고 SCA·FIM 결과까지 버리면
     # "보안 절 전체 조회 불가" 가 되어 있는 것도 못 보게 된다.

@@ -274,6 +274,7 @@ def main():
     pending_checks = _pending_checks()
     idem_checks = _idempotency_checks()
     overflow_checks = _overflow_checks()
+    tenant_checks = _tenant_scope_checks()
     analyze_checks = _analyze_ref_checks()
     beat_checks = _heartbeat_checks()
     registry_checks = _registry_checks()
@@ -286,7 +287,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + tenant_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1252,6 +1253,68 @@ def _idempotency_checks() -> int:
     assert not errors2, f"청소 중 예외: {errors2[:2]}"
     app_mod._seen.clear()
     return 4
+
+
+def _tenant_scope_checks() -> int:
+    """보안 조회가 남의 호스트까지 긁어오지 않는가.
+
+    양쪽 와일드카드로 이름을 맞추면 `db01` 조회가 `customer-b-db01` 의 경보까지
+    가져온다. 그 항목은 이번 사건 호스트만 등록된 마스커를 거치므로 **다른 고객의
+    파일 경로·규칙 설명이 원문 그대로** 외부로 나가고, Slack 카드에는 이 호스트의
+    침해 신호처럼 보인다.
+    """
+    import asyncio
+    import json
+    import os
+
+    from . import collector
+
+    sent = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"hits": {"hits": []}}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, **kw):
+            # 조회가 두 번 간다(본 조회 + 이름 확인). 덮어쓰면 한쪽만 보게 되므로
+            # 전부 모은다.
+            sent.setdefault("bodies", []).append(kw.get("json"))
+            return _Resp()
+
+    class _Httpx:
+        def AsyncClient(self, **_kw):
+            return _Client()
+
+    saved_httpx = collector.httpx
+    saved_env = {k: os.environ.get(k) for k in ("WAZUH_INDEXER_URL",)}
+    collector.httpx = _Httpx()
+    os.environ["WAZUH_INDEXER_URL"] = "https://127.0.0.1:9200"
+    try:
+        asyncio.run(collector._wazuh_alerts("db01", 1000.0))
+    finally:
+        collector.httpx = saved_httpx
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    bodies = sent.get("bodies") or []
+    assert len(bodies) >= 2, f"본 조회와 이름 확인이 다 안 갔다: {len(bodies)}"
+    text = json.dumps(bodies, ensure_ascii=False)
+    assert "wildcard" not in text,         f"보안 조회가 부분 일치다 — 다른 고객 호스트 경보가 섞인다: {text}"
+    assert '"db01"' in text, text
+    return 3
 
 
 def _overflow_checks() -> int:

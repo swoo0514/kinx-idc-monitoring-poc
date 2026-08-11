@@ -435,7 +435,15 @@ async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "", source: s
         "size": WAZUH_LIMIT,
         "sort": [{"@timestamp": {"order": "desc"}}],
         "query": {"bool": {"must": [
-            {"wildcard": {"agent.name": f"*{agent_name}*"}},
+            # 이름이 정확히 같은 것만. 양쪽 와일드카드로 두면 db01 조회가
+            # customer-b-db01 의 경보까지 가져오는데, 그 항목은 이번 사건 호스트만
+            # 등록된 마스커를 거치므로 다른 고객의 파일 경로·규칙 설명이 원문 그대로
+            # 나가고 카드에는 이 호스트의 침해 신호처럼 보인다.
+            #
+            # 이름이 안 맞으면 결과가 비고, 그때는 아래 _wazuh_name_status 가
+            # "이름 불일치"인지 "정말 경보가 없음"인지 갈라 준다. 그 계약이 이미
+            # 있으므로 여기서 느슨하게 맞출 이유가 없다.
+            {"term": {"agent.name": agent_name}},
             {"range": {"@timestamp": {"gte": f"now-{CORR_WINDOW_S // 60}m"}}},
         ]}},
         "_source": ["@timestamp", "rule.level", "rule.description", "agent.name",
@@ -474,7 +482,10 @@ async def _wazuh_name_status(client, url: str, user: str, pw: str, agent_name: s
     비어 있음을 "침해 배제"로 읽어도 되는 것은 이름이 맞을 때뿐이다.
     """
     body = {"size": 0, "query": {"bool": {"must": [
-        {"wildcard": {"agent.name": f"*{agent_name}*"}},
+        # 여기도 정확히 일치하는 것만 센다. 느슨하게 세면 이름이 비슷한 다른 호스트가
+        # 있다는 이유로 "이 이름은 알려져 있다"가 되어, 실제로는 이름이 안 맞는 상태를
+        # "정말 경보가 없음"으로 보고하게 된다.
+        {"term": {"agent.name": agent_name}},
         {"range": {"@timestamp": {"gte": "now-%dd" % (KNOWN_HOST_LOOKBACK_S // 86400)}}},
     ]}}}
     try:
