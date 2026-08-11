@@ -439,13 +439,16 @@ def _source_status_checks() -> int:
     fired, why = incident.should_triage(single, un_ctx)
     assert fired is True and "이름 불일치" in why, why
 
-    # 보수적 발동에도 상한이 있어야 한다 — 인덱서가 하루 죽으면 전 알림이 LLM 으로 간다
+    # 사유별 수치는 통제가 아니라 관측이다. 게이트는 몇 번이 오든 판단을 바꾸지
+    # 않고, 대신 무엇 때문에 돌았는지를 센다. 부하 보호는 호출 지점이 맡는다.
     for q in incident._fires.values():
         q.clear()
-    fired_n = sum(1 for _ in range(incident.GATE_DEGRADED_MAX_PER_HOUR + 5)
+    fired_n = sum(1 for _ in range(40)
                   if incident.should_triage(single, fail_ctx, now=500.0)[0])
-    assert fired_n == incident.GATE_DEGRADED_MAX_PER_HOUR, fired_n
-    assert incident.should_triage(single, fail_ctx, now=500.0 + 3601)[0] is True, "1시간 뒤엔 회복"
+    assert fired_n == 40, f"관측 수치가 판단을 막았다: {fired_n}"
+    assert incident.fire_counts(now=500.0)["degraded"] == 40, incident.fire_counts(now=500.0)
+    # 1시간이 지난 것은 세지 않는다 — 누계가 아니라 최근 1시간이어야 신호가 된다
+    assert incident.fire_counts(now=500.0 + 3601)["degraded"] == 0
     for q in incident._fires.values():
         q.clear()
     assert "unmatched" in masking._STATUS_VALUES, "이름 불일치 상태가 전송 화이트리스트에 있어야"
@@ -462,14 +465,16 @@ def _source_status_checks() -> int:
     assert fired is True and "처음 보는 문제" in why, why
     assert incident.should_triage(single, chronic_ctx, now=1000.0)[0] is False, "만성은 스킵이어야"
 
-    # 시간당 상한 — 새 트리거가 다수 호스트에 한꺼번에 붙으면 발동이 폭주한다
-    incident._fires["new"].clear()
-    fired_n = sum(1 for _ in range(incident.GATE_NEW_MAX_PER_HOUR + 5)
-                  if incident.should_triage(single, new_ctx, now=1000.0)[0])
-    assert fired_n == incident.GATE_NEW_MAX_PER_HOUR, fired_n
-    assert incident.should_triage(single, new_ctx, now=1000.0 + 3601)[0] is True, "1시간 뒤엔 회복"
-    # 예산은 사유별로 따로 — 신규가 다 써도 조회 실패는 여전히 발동해야 한다
-    assert incident.should_triage(single, fail_ctx, now=1000.0)[0] is True, "예산이 섞였다"
+    # 사유는 섞이지 않아야 한다. 섞이면 "관측 소스가 죽었다"와 "새 트리거를 대량으로
+    # 붙였다"가 한 숫자로 합쳐져, 수치가 올라도 무엇을 고쳐야 할지 알 수 없다.
+    for q in incident._fires.values():
+        q.clear()
+    for _ in range(7):
+        incident.should_triage(single, new_ctx, now=1000.0)
+    for _ in range(3):
+        incident.should_triage(single, fail_ctx, now=1000.0)
+    cnt = incident.fire_counts(now=1000.0)
+    assert cnt == {"new": 7, "degraded": 3}, cnt
     for q in incident._fires.values():
         q.clear()
 
@@ -1343,8 +1348,8 @@ def _llm_concurrency_checks() -> int:
         def complete(self, _sys, _user):
             raise AssertionError("불러선 안 된다")
 
-    saved = (llm.ClaudeAdapter, llm.OllamaAdapter, llm._sem,
-             llm.MAX_CONCURRENCY, llm.QUEUE_WAIT_S, dict(llm._stats))
+    saved = (llm.ClaudeAdapter, llm.OllamaAdapter, llm._sem, llm.MAX_CONCURRENCY,
+             llm.QUEUE_WAIT_S, llm.MAX_PER_HOUR, dict(llm._stats))
     llm.ClaudeAdapter, llm.OllamaAdapter = _Slow, _Absent
     llm.MAX_CONCURRENCY = 2
     llm._sem = threading.BoundedSemaphore(2)
@@ -1374,12 +1379,31 @@ def _llm_concurrency_checks() -> int:
         assert "대기를 포기" in r["text"], r["text"]
         assert "처음" in r["text"], "열화여도 코드 판정은 실어야"
         assert llm.stats()["queue_timeouts"] == 1, llm.stats()
+
+        # 시간당 총량 — 동시 수를 눌러도 폭풍이 길게 이어지면 총량은 계속 는다.
+        # 게이트가 아니라 여기서 세므로, 게이트 규칙이 몇 개든 구멍이 안 생긴다.
+        llm._sem = threading.BoundedSemaphore(2)
+        llm.QUEUE_WAIT_S = 5
+        llm.MAX_PER_HOUR = 3
+        llm._calls.clear()
+        llm._stats["hour_blocked"] = 0
+        assert [llm.triage_reply(ctx, "SEV3")["degraded"] for _ in range(3)] == [False] * 3
+        blocked = llm.triage_reply(ctx, "SEV3")
+        assert blocked["degraded"] is True, "상한을 넘겼는데 호출됐다"
+        assert "1시간 호출이 상한" in blocked["text"], blocked["text"]
+        assert llm.stats()["hour_blocked"] == 1, llm.stats()
+        # 위중한 사건은 상한을 안 받는다 — 폭풍 때 정작 위중한 것이 막히면 사고가 커진다
+        assert llm.triage_reply(ctx, "SEV1")["degraded"] is False, "SEV1 이 상한에 막혔다"
+        # 1시간이 지나면 창이 비므로 다시 부른다
+        llm._calls[:] = [t - 3601 for t in llm._calls]
+        assert llm.triage_reply(ctx, "SEV3")["degraded"] is False, "1시간 뒤엔 회복해야"
     finally:
-        (llm.ClaudeAdapter, llm.OllamaAdapter, llm._sem,
-         llm.MAX_CONCURRENCY, llm.QUEUE_WAIT_S, restore) = saved
+        (llm.ClaudeAdapter, llm.OllamaAdapter, llm._sem, llm.MAX_CONCURRENCY,
+         llm.QUEUE_WAIT_S, llm.MAX_PER_HOUR, restore) = saved
+        llm._calls.clear()
         llm._stats.clear()
         llm._stats.update(restore)
-    return 10
+    return 17
 
 
 def _registry_checks() -> int:

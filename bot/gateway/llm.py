@@ -189,9 +189,17 @@ MAX_CONCURRENCY = int(os.environ.get("LLM_MAX_CONCURRENCY", "3"))
 # 자리를 기다리는 상한. 무한정 기다리면 스레드가 대기로 가득 차 Slack 게시 같은
 # 다른 일까지 멈춘다. 넘기면 기다리지 않고 열화 모드로 내려간다.
 QUEUE_WAIT_S = float(os.environ.get("LLM_QUEUE_WAIT_S", "60"))
+# 시간당 총량. 동시 수를 눌러도 폭풍이 길게 이어지면 총량은 계속 는다.
+#
+# 이 상한을 게이트가 아니라 여기에 두는 이유가 있다. 게이트에 두면 규칙 가지마다
+# 한도를 걸어야 하고, 규칙을 추가할 때 빠뜨리면 조용히 구멍이 난다(예전 구조가
+# 그랬다). 호출이 실제로 나가는 지점은 하나뿐이므로 여기서 세면 규칙이 몇 개든
+# 구멍이 안 생긴다. 값 산정 근거는 GATEWAY_GUIDE §21.
+MAX_PER_HOUR = int(os.environ.get("LLM_MAX_PER_HOUR", "200"))
 
 _sem = threading.BoundedSemaphore(MAX_CONCURRENCY)
-_stats = {"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0}
+_calls: list = []          # 최근 1시간 호출 시각
+_stats = {"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0, "hour_blocked": 0}
 _stats_lock = threading.Lock()
 
 
@@ -199,6 +207,29 @@ def stats() -> dict:
     """혼잡 상태. 밀린 사실을 세지 않으면 분석 품질만 조용히 내려간다."""
     with _stats_lock:
         return dict(_stats)
+
+
+def calls_last_hour(now: float = None) -> int:
+    now = time.time() if now is None else now
+    with _stats_lock:
+        _calls[:] = [t for t in _calls if now - t <= 3600]
+        return len(_calls)
+
+
+def _take_hour(exempt: bool, now: float = None) -> bool:
+    """시간당 총량에서 한 칸 쓴다. 남았으면 True.
+
+    exempt 는 위중한 사건이다. 총량과 무관하게 통과시킨다 — 폭풍 때 정작 위중한
+    것이 막히면 상한이 사고를 키운다. 대신 쓴 것은 똑같이 센다.
+    """
+    now = time.time() if now is None else now
+    with _stats_lock:
+        _calls[:] = [t for t in _calls if now - t <= 3600]
+        if not exempt and len(_calls) >= MAX_PER_HOUR:
+            _stats["hour_blocked"] += 1
+            return False
+        _calls.append(now)
+        return True
 
 
 def _enter():
@@ -234,7 +265,11 @@ def triage_reply(context: dict, sev: str) -> dict:
     t0 = time.monotonic()
 
     note = ""
-    if _sem.acquire(timeout=QUEUE_WAIT_S):
+    if not _take_hour(sev == "SEV1"):
+        note = (f" — 최근 1시간 호출이 상한 {MAX_PER_HOUR}건에 닿아 이번 건은 부르지 않았다."
+                " 폭주 제동이며, 위중(SEV1) 사건은 이 상한을 받지 않는다")
+        log.warning("llm 시간당 상한 도달 — %d건/1h. 열화 모드로 회신한다", MAX_PER_HOUR)
+    elif _sem.acquire(timeout=QUEUE_WAIT_S):
         _enter()
         try:
             got = _ask(user, masker, t0)

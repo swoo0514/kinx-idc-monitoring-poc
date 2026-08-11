@@ -198,10 +198,18 @@ class Beat:
         # LLM 혼잡. 상한에 밀려 열화로 내려간 건수가 늘면 분석 품질이 조용히 떨어진
         # 것이므로 밖에서 보여야 한다. 값을 못 읽어도 생존 신호는 계속 보낸다.
         try:
-            from . import llm
+            from . import incident, llm
             st = llm.stats()
             out["gateway.llm_peak_inflight"] = st["peak_inflight"]
             out["gateway.llm_queue_timeouts"] = st["queue_timeouts"]
+            out["gateway.llm_hour_blocked"] = st["hour_blocked"]
+            out["gateway.llm_calls_1h"] = llm.calls_last_hour(now)
+            # 무엇 때문에 분석이 돌았는지. 조회 실패 쪽이 치솟으면 봇이 아니라
+            # 관측 소스를 고쳐야 한다는 신호다. 예전에는 이 신호가 조용한 차단으로
+            # 나타나 밖에서 보이지 않았다.
+            fc = incident.fire_counts(now)
+            out["gateway.fire_degraded_1h"] = fc.get("degraded", 0)
+            out["gateway.fire_new_1h"] = fc.get("new", 0)
         except Exception as e:
             log.warning("LLM 혼잡 지표 수집 실패: %s", e)
         # 발행 측이 **같은 구간에** 몇 건을 만들었는지. 창을 기동 이후로 자르는 것이

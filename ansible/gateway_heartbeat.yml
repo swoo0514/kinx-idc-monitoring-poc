@@ -24,6 +24,9 @@
     # 비워 두면 감시 서버가 하나인 환경으로 보고 예전 키 그대로 만든다.
     # 실행 예: -e '{"hb_sources":["zabbix-internal","zabbix-msp"]}'
     hb_sources: []
+    # 1시간 안에 이만큼이 "조회 실패" 사유로 발동했으면 관측 소스를 본다.
+    # 예전 사유별 한도(30)와 같은 값이나 역할이 다르다 — 막지 않고 알린다.
+    hb_degraded_warn: "30"
   tasks:
     - name: 게이트웨이 전용 호스트 (에이전트 없이 트래퍼만 받는다)
       community.zabbix.zabbix_host:
@@ -57,6 +60,10 @@
         - { name: "최근 창 발행 측 이벤트 수", key: "gateway.zbx_events" }
         - { name: "LLM 최고 동시 호출 수", key: "gateway.llm_peak_inflight" }
         - { name: "LLM 대기 포기 수(누적)", key: "gateway.llm_queue_timeouts" }
+        - { name: "LLM 시간당 상한 차단 수(누적)", key: "gateway.llm_hour_blocked" }
+        - { name: "LLM 최근 1시간 호출 수", key: "gateway.llm_calls_1h" }
+        - { name: "발동 사유 조회실패(1시간)", key: "gateway.fire_degraded_1h" }
+        - { name: "발동 사유 신규(1시간)", key: "gateway.fire_new_1h" }
 
     # 감시 서버가 둘 이상이면 서버마다 따로 봐야 한다. 한 서버의 이벤트 수만 세면
     # 그쪽이 멀쩡한 동안 다른 서버의 알림 경로가 끊겨도 판정되지 않는다. 트래퍼
@@ -139,6 +146,22 @@
           expression: >-
             (last(/{{ hb_host }}/gateway.llm_queue_timeouts)-
              min(/{{ hb_host }}/gateway.llm_queue_timeouts,1h))>0
+          severity: warning
+          manual_close: true
+        state: present
+
+    # 관측 소스가 죽으면 그 뒤 모든 알림이 "미상"으로 분석을 받는다. 분석은 계속
+    # 되므로 화면상 이상이 없고, 정작 고칠 것은 Loki·Wazuh 쪽이다. 예전에는 이걸
+    # 조용한 차단으로 눌렀는데, 눌러 놓으면 원인을 아무도 안 본다.
+    - name: 트리거 — 조회 실패로 인한 발동이 몰림
+      community.zabbix.zabbix_trigger:
+        name: "관측 소스 조회 실패가 분석 발동을 지배"
+        host_name: "{{ hb_host }}"
+        description: >-
+          최근 1시간 분석 발동의 상당수가 "조회 실패·이름 불일치" 사유다. 봇이
+          아니라 관측 소스(Loki·Wazuh)나 호스트 이름 매핑을 먼저 확인한다.
+        params:
+          expression: "last(/{{ hb_host }}/gateway.fire_degraded_1h)>{{ hb_degraded_warn }}"
           severity: warning
           manual_close: true
         state: present

@@ -426,27 +426,39 @@ def dominant_verdict(context: dict) -> str:
 
 GATE_MIN_CROSS = _env_int("INCIDENT_GATE_MIN_CROSS", 1)
 GATE_FIRE_ON_NEW = os.environ.get("INCIDENT_GATE_FIRE_ON_NEW", "1") not in ("0", "false", "no")
-GATE_NEW_MAX_PER_HOUR = _env_int("INCIDENT_GATE_NEW_MAX_PER_HOUR", 20)
-GATE_DEGRADED_MAX_PER_HOUR = _env_int("INCIDENT_GATE_DEGRADED_MAX_PER_HOUR", 30)
 
-# 사유별 발동 시각 (최근 1시간). 사유마다 폭주하는 원인이 달라 예산을 나눠 둔다.
+# 사유별 발동 횟수 (최근 1시간). **통제가 아니라 관측이다.**
+#
+# 예전에는 이 수치가 사유별 한도로 쓰였다. 그 구조에는 세 가지 문제가 있었다.
+# 첫째, 한도가 규칙 가지마다 붙어 있어 보호 범위가 규칙 목록에 묶였다. 규칙을 늘릴
+# 때마다 한도를 또 걸어야 했고, 빠뜨려도 아무 신호가 없었다(실제로 5개 중 3개가
+# 빠져 있었고 폭주 때 실제로 터지는 경로가 그 안에 있었다). 둘째, 한도에 걸린
+# 사건은 다시 시도되지 않고 그대로 버려졌다. 늦게 왔다는 이유로 분석에서 빠졌다.
+# 셋째, 20·30 이라는 값에 산정 근거가 없었다.
+#
+# 그래서 부하 보호는 호출이 실제로 나가는 한 지점(llm.triage_reply)으로 옮겼다.
+# 게이트는 "볼 만한 사건인가"만 판단한다. 여기 남은 수치는 무엇 때문에 분석이
+# 돌았는지를 밖에서 보기 위한 것이다 — 조회 실패 수가 치솟으면 관측 소스를
+# 고치라는 신호다. 근거는 GATEWAY_GUIDE §8-3.
 _fires = {"new": [], "degraded": []}
 
 
-def budget_left(kind: str, cap: int, now: float = None) -> int:
+def fire_counts(now: float = None) -> dict:
+    """최근 1시간 사유별 발동 횟수. 생존 신호로 내보낸다."""
     now = time.time() if now is None else now
+    out = {}
+    for kind, q in _fires.items():
+        q[:] = [t for t in q if now - t <= 3600]
+        out[kind] = len(q)
+    return out
+
+
+def _mark(kind: str, now: float) -> int:
+    """이 사유로 발동했다고 세고, 최근 1시간 누계를 돌려준다."""
     q = _fires.setdefault(kind, [])
     q[:] = [t for t in q if now - t <= 3600]
-    return cap - len(q)
-
-
-def _take(kind: str, cap: int, now: float) -> int:
-    """예산이 남으면 한 칸 쓰고 잔여를 돌려준다. 없으면 -1."""
-    left = budget_left(kind, cap, now)
-    if left <= 0:
-        return -1
-    _fires[kind].append(now)
-    return left - 1
+    q.append(now)
+    return len(q)
 
 
 def should_triage(incident, context: dict, min_cross: int = None, now: float = None) -> tuple:
@@ -468,21 +480,16 @@ def should_triage(incident, context: dict, min_cross: int = None, now: float = N
         why = (f"조회 실패({', '.join(failed)})" if failed else "") + \
               (" · " if failed and unmatched else "") + \
               (f"이름 불일치({', '.join(unmatched)})" if unmatched else "")
-        left = _take("degraded", GATE_DEGRADED_MAX_PER_HOUR, now)
-        if left < 0:
-            return False, (f"{why} — 미상이나 시간당 상한({GATE_DEGRADED_MAX_PER_HOUR}건) 도달. "
-                           f"관측 소스가 계속 죽어 있다는 뜻이므로 소스를 먼저 고친다")
-        return True, f"교차 소스 {why} — 신호 없음이 아니라 미상, 보수적 발동 (잔여 {left}건)"
+        n = _mark("degraded", now)
+        return True, f"교차 소스 {why} — 신호 없음이 아니라 미상, 보수적 발동 (1시간 {n}건째)"
 
     cross = sum(1 for k in ("logs", "security") if context.get(k))
     if cross >= min_cross:
         return True, f"단일 알림 + 교차 소스 {cross}종(로그/보안)"
 
     if GATE_FIRE_ON_NEW and dominant_verdict(context) == "신규":
-        left = _take("new", GATE_NEW_MAX_PER_HOUR, now)
-        if left < 0:
-            return False, f"처음 보는 문제이나 시간당 상한({GATE_NEW_MAX_PER_HOUR}건) 도달 — 스킵"
-        return True, f"처음 보는 문제 — 과거 이력 없음 (시간당 잔여 {left}건)"
+        n = _mark("new", now)
+        return True, f"처음 보는 문제 — 과거 이력 없음 (1시간 {n}건째)"
     return False, "단일 축·교차 신호 없음(조회는 정상) — LLM 스킵"
 
 
