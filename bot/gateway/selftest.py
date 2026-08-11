@@ -1342,6 +1342,12 @@ def _event_time_checks() -> int:
                               alerts=[_alert(now + 99999)], opened_at=0.0, last_at=0.0)
     assert collector.reference_time(future, now) == now
 
+    # 감시 서버가 돌려준 이벤트 시각이 가장 정확하고, 발송 설정과 무관하게 온다.
+    # 알림에 시각이 없어도 이 값으로 창을 맞춘다.
+    assert collector.reference_time(no_clock, now, [now - 5400]) == now - 5400
+    # 둘 다 있으면 이른 쪽을 쓴다 — 사건이 시작된 시점이 기준이다
+    assert collector.reference_time(old_inc, now, [now - 9000]) == now - 9000
+
     # 배선 — 웹훅이 받은 시각이 알림과 대기 기록까지 이어져야 한다. 한 군데만 끊겨도
     # 재기동 뒤에는 값이 없어 지금 기준으로 떨어진다.
     import importlib
@@ -1372,7 +1378,7 @@ def _event_time_checks() -> int:
     finally:
         pending.PATH = saved_path
         shutil.rmtree(d, ignore_errors=True)
-    return 5
+    return 7
 
 
 def _wrong_server_checks() -> int:
