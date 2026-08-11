@@ -24,9 +24,13 @@ def should_investigate(sev: str, degraded: bool, sources, merged: bool = False,
     """
     if os.environ.get("HOLMES_ENABLED", "") != "1":
         return False, "disabled"
-    masked = os.environ.get("HOLMES_MASKED", "") == "1"
-    if severity.SOURCE_ZABBIX_MSP in (sources or []) and not masked:
-        return False, "msp-tenant(no-masking)"
+    # 이 플래그는 마스킹을 켜지 않는다. investigate() 는 호스트명을 원문으로 보낸다.
+    # 예전 이름은 HOLMES_MASKED 였는데, 이름과 예시 파일 주석이 "켜면 가려진다"로
+    # 읽혀서 그대로 두면 MSP 고객사 이름이 나간다. 실제 의미대로 이름을 바꾸고
+    # 기본을 차단으로 둔다. 마스킹이 붙으면 이 플래그 자체가 없어져야 한다.
+    allow_raw = os.environ.get("HOLMES_ALLOW_MSP_RAW", "") == "1"
+    if severity.SOURCE_ZABBIX_MSP in (sources or []) and not allow_raw:
+        return False, "msp-tenant(원문 전송이라 차단 — HOLMES_ALLOW_MSP_RAW)"
     if sev == severity.SEV1:
         return True, "sev1"
     if degraded:

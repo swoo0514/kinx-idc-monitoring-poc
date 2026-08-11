@@ -839,9 +839,9 @@ def _holmes_gate_checks() -> int:
     assert incident.dominant_verdict({"prejudge": {"verdict": "신규"}}) == "신규"   # 단건 경로
     assert incident.dominant_verdict({}) == ""
 
-    saved = {k: os.environ.get(k) for k in ("HOLMES_ENABLED", "HOLMES_MASKED")}
+    saved = {k: os.environ.get(k) for k in ("HOLMES_ENABLED", "HOLMES_ALLOW_MSP_RAW")}
     os.environ["HOLMES_ENABLED"] = "1"
-    os.environ.pop("HOLMES_MASKED", None)
+    os.environ.pop("HOLMES_ALLOW_MSP_RAW", None)
     try:
         zbx = ["zabbix-internal"]
         # 만성 = 아는 문제 → 병합이어도 억제 (G6 흡수)
@@ -856,8 +856,41 @@ def _holmes_gate_checks() -> int:
         # 판정이 없으면 종래 규칙(병합) 유지
         assert holmes.should_investigate("SEV2", False, zbx, merged=True)[0] is True
         assert holmes.should_investigate("SEV2", False, zbx, merged=False)[0] is False
-        # MSP 는 마스킹 없으면 신규여도 금지 (테넌트 경계가 우선)
+        # MSP 는 원문이 나가므로 신규여도 금지 (테넌트 경계가 우선)
         assert holmes.should_investigate("SEV2", False, ["zabbix-msp"], verdict="신규")[0] is False
+        # 차단이 기본이어야 한다. 예전 플래그(HOLMES_MASKED)는 이름과 예시 파일 주석이
+        # "켜면 가려진다"로 읽히는데 실제로는 차단만 풀었고 기본값이 1이었다.
+        os.environ["HOLMES_MASKED"] = "1"
+        try:
+            assert holmes.should_investigate("SEV2", False, ["zabbix-msp"],
+                                             verdict="신규")[0] is False,                 "옛 이름이 아직 차단을 푼다"
+        finally:
+            os.environ.pop("HOLMES_MASKED", None)
+        # 실제 의미대로 이름을 바꾼 플래그만 차단을 푼다
+        os.environ["HOLMES_ALLOW_MSP_RAW"] = "1"
+        try:
+            assert holmes.should_investigate("SEV2", False, ["zabbix-msp"],
+                                             verdict="신규")[0] is True
+        finally:
+            os.environ.pop("HOLMES_ALLOW_MSP_RAW", None)
+        # 심층조사 질문에 원문 호스트명이 들어간다는 사실을 검사로 고정한다.
+        # 심층조사가 호스트명을 원문으로 보낸다는 사실을 검사로 고정한다. 마스킹이
+        # 붙으면 이 검사가 깨지고, 그때 위 차단 플래그를 없애야 한다는 신호가 된다.
+        sent = {}
+        real_post = holmes.httpx.post
+
+        def _capture(url, **kw):
+            sent.update(kw.get("json") or {})
+            raise RuntimeError("보내지 않는다 — 잡기만 한다")
+
+        holmes.httpx.post = _capture
+        os.environ["HOLMES_URL"] = "http://127.0.0.1:1"
+        try:
+            holmes.investigate("cust-db01", "why")
+        finally:
+            holmes.httpx.post = real_post
+            os.environ.pop("HOLMES_URL", None)
+        assert "cust-db01" in str(sent.get("ask", "")),             f"원문 전송 사실이 바뀌었다 — 차단 플래그를 재검토할 것: {sent}"
 
         # 조사 질문이 "무슨 사건인지"를 담는가 (2026-07-31 회귀).
         # 종래에는 "{n}건이 1개 사건 · {host}" 만 넘겨서, 에이전틱인 홈즈가 사건과 무관하게
@@ -1372,6 +1405,12 @@ def _llm_concurrency_checks() -> int:
         assert st["inflight"] == 0, st
         assert st["queue_timeouts"] == 0, st
 
+        # 앞선 8건은 실제로 나갔으므로 예산을 쓴 것이 맞다. 아래에서 "안 나간 호출"만
+        # 따로 보려면 창을 비우고 시작해야 한다.
+        assert egress.calls_last_hour() == 8, egress.calls_last_hour()
+        egress._calls.clear()
+        egress._by_kind.clear()
+
         # 자리를 못 잡으면 던지지 않고 열화로 내려간다 — 알림이 사라지면 안 된다
         egress.QUEUE_WAIT_S = 0.01
         egress._sem = threading.BoundedSemaphore(1)
@@ -1381,6 +1420,32 @@ def _llm_concurrency_checks() -> int:
         assert "대기를 포기" in r["text"], r["text"]
         assert "처음" in r["text"], "열화여도 코드 판정은 실어야"
         assert egress.stats()["queue_timeouts"] == 1, egress.stats()
+        # 나가지도 않은 호출이 시간당 예산을 먹으면 안 된다. 예전에는 확인과 세기를
+        # 같이 해서, 키가 만료된 채 200건이 들어오면 실제 호출 0건으로 상한에 닿았다.
+        # 그리고 지표는 200건을 정상으로 썼다고 보고했다.
+        assert egress.calls_last_hour() == 0, \
+            f"대기 포기가 예산을 먹었다: {egress.calls_last_hour()}건"
+        assert egress.kind_counts() == {}, egress.kind_counts()
+        # 어댑터가 전멸해도 마찬가지다
+        egress._sem = threading.BoundedSemaphore(2)
+
+        class _Dead:
+            name = "dead"
+
+            def available(self):
+                return True
+
+            def complete(self, _s, _u):
+                raise RuntimeError("죽었다")
+
+        llm.ClaudeAdapter = _Dead
+        dead = llm.triage_reply(ctx, "SEV3")
+        assert dead["degraded"] is True, dead
+        # 붙을 어댑터가 있었으므로 시도는 셌다. 실제로 나갔기 때문이다.
+        assert egress.calls_last_hour() == 1, egress.calls_last_hour()
+        llm.ClaudeAdapter = _Slow
+        egress._calls.clear()
+        egress._by_kind.clear()
 
         # 시간당 총량 — 동시 수를 눌러도 폭풍이 길게 이어지면 총량은 계속 는다.
         # 게이트가 아니라 여기서 세므로, 게이트 규칙이 몇 개든 구멍이 안 생긴다.

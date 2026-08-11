@@ -607,6 +607,16 @@ def main():
         return
     if not a.keep_url:
         sys.exit("[!] --keep-url 또는 환경변수 KEEP_URL 이 필요하다")
+    # 범위 게이트 — 기본값을 거부로 둔다. 화면상 아무 문제가 없어 보이는 종류의 사고다.
+    #
+    # 이 게이트는 원래 발송 직전에 있었다. 그런데 그보다 앞에 외부 LLM 호출이 있어서,
+    # 범위 없이 실행하면 "안 보냈다"고 종료하기 전에 전 고객 집계가 이미 밖으로 나갔다.
+    # 게이트는 밖으로 나가는 첫 지점보다 앞이어야 한다.
+    if not (a.host_filter or a.agent_filter) and not a.allow_unscoped:
+        sys.exit("[!] 범위가 지정되지 않았다 — --host-filter 없이 돌리면 다른 고객·사내 "
+                 "호스트가 이 고객 리포트에 실리고, 외부 분석에도 그대로 나간다.\n"
+                 "    고객별: --host-filter <이 고객 호스트 접두>\n"
+                 "    랩 시연처럼 알고도 전체를 넣으려면: --allow-unscoped")
     alerts = fetch_alerts(a.keep_url, os.environ.get("KEEP_API_KEY", ""))
     res = aggregate(alerts, a.days, a.host_filter)
 
@@ -688,12 +698,6 @@ def main():
         return
     if not a.target:
         sys.exit("[!] --send 에는 --target 이 필요하다")
-    # 범위 게이트 — 기본값을 거부로 둔다. 화면상 아무 문제가 없어 보이는 종류의 사고다.
-    if not (a.host_filter or a.agent_filter) and not a.allow_unscoped:
-        sys.exit("[!] 범위가 지정되지 않았다 — --host-filter 없이 보내면 다른 고객·사내 "
-                 "호스트가 이 고객 리포트에 실린다.\n"
-                 "    고객별: --host-filter <이 고객 호스트 접두>\n"
-                 "    랩 시연처럼 알고도 전체를 넣으려면: --allow-unscoped")
     r = zbx_send(a.zabbix_server, a.zabbix_port, a.target, res)
     print("\n[send] %s -> %s" % (a.target, r.get("info", r)))
     # Zabbix 는 실패해도 HTTP 200 대신 info 문자열로 알린다 — failed 를 눈으로 봐야 한다.

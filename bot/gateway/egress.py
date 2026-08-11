@@ -73,8 +73,8 @@ def kind_counts(now: float = None) -> dict:
         return out
 
 
-def _take_hour(exempt: bool, kind: str, now: float = None) -> bool:
-    """시간당 총량에서 한 칸 쓴다. 남았으면 True.
+def _hour_ok(exempt: bool, now: float = None) -> bool:
+    """시간당 총량이 남았는지 본다. **세지는 않는다.**
 
     exempt 는 위중한 사건이다. 총량과 무관하게 통과시킨다 — 폭주 때 정작 위중한
     것이 막히면 상한이 사고를 키운다. 대신 쓴 것은 똑같이 센다.
@@ -85,11 +85,27 @@ def _take_hour(exempt: bool, kind: str, now: float = None) -> bool:
         if not exempt and len(_calls) >= MAX_PER_HOUR:
             _stats["hour_blocked"] += 1
             return False
+        return True
+
+
+def _record(kind: str, now: float = None) -> None:
+    """실제로 나가기 직전에 센다.
+
+    확인과 세는 것을 나눈 이유가 있다. 전에는 확인하면서 같이 셌는데, 그러면 자리를
+    못 잡아 대기를 포기하거나 어댑터가 전멸해서 **한 번도 안 나간 호출이 예산을
+    먹었다.** 키가 만료된 상태로 200건이 들어오면 실제 호출 0건으로 상한에 닿고,
+    지표는 200건을 정상으로 썼다고 보고했다.
+
+    확인과 세기 사이에 여러 스레드가 통과할 수 있으나, 그 폭은 동시 상한
+    (MAX_CONCURRENCY)만큼이라 총량 대비 무시할 수 있다.
+    """
+    now = time.time() if now is None else now
+    with _lock:
+        _calls[:] = [t for t in _calls if now - t <= 3600]
         _calls.append(now)
         q = _by_kind.setdefault(kind or "?", [])
         q[:] = [t for t in q if now - t <= 3600]
         q.append(now)
-        return True
 
 
 def peak_last_hour(now: float = None) -> int:
@@ -133,8 +149,9 @@ def call(adapters, system: str, user: str, exempt: bool = False,
         return {"text": text, "provider": provider, "degraded": degraded,
                 "reason": reason, "elapsed_s": round(time.monotonic() - t0, 2)}
 
-    # 총량을 먼저 본다. 총량에 걸린 건은 자리를 기다릴 이유가 없다.
-    if not _take_hour(exempt, kind):
+    # 총량을 먼저 본다. 총량에 걸린 건은 자리를 기다릴 이유가 없다. 다만 여기서는
+    # 확인만 하고 세지 않는다 — 실제로 나갈 때 센다.
+    if not _hour_ok(exempt):
         log.warning("시간당 상한 도달 — %d건/1h (용도 %s). 열화로 회신한다",
                     MAX_PER_HOUR, kind or "?")
         return _out("", "none", True, BLOCKED_HOUR)
@@ -151,6 +168,7 @@ def call(adapters, system: str, user: str, exempt: bool = False,
         for adapter in adapters:
             if not adapter.available():
                 continue
+            _record(kind)          # 이 어댑터로 실제로 나간다 — 여기서 센다
             try:
                 text = adapter.complete(system, user)
                 return _out(text, adapter.name, False)
@@ -159,4 +177,5 @@ def call(adapters, system: str, user: str, exempt: bool = False,
     finally:
         _leave()
         _sem.release()
+    # 어댑터가 하나도 안 붙었거나 전부 실패. 붙을 어댑터가 없었으면 아무것도 안 셌다.
     return _out("", "none", True, BLOCKED_NONE)
