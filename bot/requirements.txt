@@ -3,3 +3,5 @@ anthropic>=0.120.0
 fastapi>=0.110.0
 uvicorn>=0.27.0
 httpx>=0.25.0
+# 호스트 명부(hosts.yml) 파서. 없으면 명부 기능만 비활성되고 나머지는 돈다.
+pyyaml>=6.0

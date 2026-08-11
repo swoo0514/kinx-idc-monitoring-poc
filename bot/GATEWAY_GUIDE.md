@@ -226,11 +226,41 @@ Zabbix Administration ➔ Media types ➔ Create Media Type: Type = **Webhook**,
 INCIDENT_REALM_MAP=zabbix-internal=internal,zabbix-msp=msp,wazuh=internal
 ```
 
-**미설정 시 동작:** 전 소스를 단일 영역으로 처리하며, 이는 감시 서버가 1대인 환경의 기존 동작과 동일합니다. 기동 시 미설정 상태를 로그로 표시합니다.
+**미설정 시 동작:** 소스명을 영역으로 사용합니다. 사내 Zabbix 와 MSP Zabbix 는 소스가 상이하므로 **설정 없이도 자동 분리**됩니다. 본 매핑은 분리 목적이 아니라 **통합 목적**입니다 — 동일 장비를 Zabbix 와 Wazuh 가 각각 보고하는 경우 두 소스를 동일 영역으로 지정해야 교차 소스 병합이 성립합니다.
 
 **인시던트 지문에도 영역이 포함됩니다.** 미포함 시 관제 도구(Keep)에서 서로 다른 고객사의 동일 유형 사건이 단일 레코드로 중복 제거되며, 심층 조사 결과가 타 고객사 레코드에 병합될 수 있습니다.
 
 **적용 범위 한계:** 본 항목은 병합·지문 단계의 구분입니다. 컨텍스트 수집 시 조회 대상 Zabbix 서버를 영역에 따라 선택하는 기능은 미구현 상태로, 현재는 `ZABBIX_URL` 단일 인스턴스만 조회합니다(§7-2). 복수 감시 서버 환경에서는 후속 반영이 필요합니다.
+
+### 8-1-2. 호스트 명부 (Host Registry)
+
+호스트별 속성을 단일 파일로 관리합니다. 도입 이전에는 동일 성격의 정보가 환경 변수 4종(`HOST_LABEL_MAP`·`LOGS_EXEMPT_HOSTS`·`SECURITY_EXEMPT_HOSTS`·`INCIDENT_REALM_MAP`)에 각기 다른 형식으로 분산되어, 호스트 추가 시 4개소를 동시에 수정해야 했습니다.
+
+**명부는 식별자가 아니라 속성을 담습니다.** Zabbix 는 호스트명의 서버 내 유일성을 강제하므로(공식 문서), `(감시 서버, 호스트명)` 조합이 이미 유일한 식별자입니다. 따라서 **명부에 등재되지 않은 호스트도 정상 동작**하며, 명부는 조회 경로와 축 보유 여부를 보완하는 역할입니다.
+
+```yaml
+hosts:
+  - name: node1                        # Zabbix 호스트명
+    source: zabbix-internal            # 생략 시 전 소스에 적용
+    realm: internal                    # 감시 영역 (§8-1-1)
+    loki: vm-target-001.novalocal      # Loki 라벨값
+    wazuh: vm-target-001.novalocal     # Wazuh agent.name
+    logs: true                         # 로그 축 보유 여부
+    security: true                     # 보안 축 보유 여부
+    id: ""                             # 예약 (아래 참조)
+```
+
+| 항목 | 설명 |
+|---|---|
+| 설정 | `HOST_REGISTRY_FILE` — 미지정 시 기존 환경 변수로 동작 |
+| 우선순위 | 명부 → 환경 변수 → 기본값 |
+| 매칭 | `(source, name)` 완전 일치 우선, 미존재 시 `source` 미지정 항목 |
+| 초안 생성 | `python3 probe.py registry > hosts.yml` — Zabbix·Loki·Wazuh 실 조회 결과로 생성 |
+| 로드 실패 | 오류 로그 기록 후 환경 변수 경로로 동작(무음 실패 방지) |
+
+**`id` 필드 미사용 사유:** 호스트명 변경 시에도 이력을 연속 유지하기 위한 대체 키이나, 이를 활용하려면 게이트웨이가 기록을 축적하는 저장소가 선행되어야 합니다(§2-1-1). 현 시점에서는 참조하는 코드가 없으므로 형식만 정의하고 비워 둡니다.
+
+**pyyaml 의존성:** 명부 파싱에만 사용하며, 미설치 시 명부 기능만 비활성화되고 나머지 기능은 정상 동작합니다.
 
 ### 8-2. 디바운스 창 제어 (Debounce Window Control)
 

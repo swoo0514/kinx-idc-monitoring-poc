@@ -12,7 +12,7 @@ import time
 
 import httpx
 
-from . import prejudge
+from . import prejudge, registry
 
 log = logging.getLogger("gateway.collector")
 
@@ -134,10 +134,13 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
         base = await _zabbix_alert_context(zbx, client, event_id, trigger_id, now)
 
     zbx_host = base["host"].get("host") or ""
-    host_label = _resolve_label(zbx_host, base["host"])   # Zabbix명 → Loki/Wazuh FQDN 라벨
+    source = ""   # 단건 경로는 소스를 안 받는다 — 명부는 소스 없는 항목으로 매칭된다
+    # 축마다 이름이 다를 수 있다(Loki 라벨과 Wazuh 에이전트명이 갈리는 환경이 있다).
+    loki_label = _resolve_label(zbx_host, base["host"], source, "logs")
+    wz_label = _resolve_label(zbx_host, base["host"], source, "security")
     (logs, logs_status), (security, sec_status) = await asyncio.gather(
-        _loki_logs(host_label, now, zbx_host),
-        _wazuh_alerts(host_label, now, zbx_host),
+        _loki_logs(loki_label, now, zbx_host, source),
+        _wazuh_alerts(wz_label, now, zbx_host, source),
     )
     return {
         **base,
@@ -171,7 +174,9 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
             host_obj = r["host"]
             break
     zbx_host = host_obj.get("host") or incident.host
-    host_label = _resolve_label(zbx_host, host_obj) if host_obj else incident.host
+    source = incident.alerts[0].source if incident.alerts else ""
+    loki_label = _resolve_label(zbx_host, host_obj, source, "logs") if host_obj else zbx_host
+    wz_label = _resolve_label(zbx_host, host_obj, source, "security") if host_obj else zbx_host
 
     # 열린 문제 조회는 창 마감 시점에 1회만. 알림 도착 시점에 부르면 디바운스 창이
     # 외부 API 응답 시간만큼 흔들린다.
@@ -185,8 +190,8 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
             return await _open_problems(zbx, c2, hid, incident.classes(), exclude, now)
 
     (logs, logs_status), (security, sec_status), (opens, opens_status) = await asyncio.gather(
-        _loki_logs(host_label, now, zbx_host),
-        _wazuh_alerts(host_label, now, zbx_host),
+        _loki_logs(loki_label, now, zbx_host, source),
+        _wazuh_alerts(wz_label, now, zbx_host, source),
         _open_probe(),
     )
 
@@ -229,7 +234,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
     }
 
 
-def _resolve_label(zbx_host: str, host_obj: dict) -> str:
+def _resolve_label(zbx_host: str, host_obj: dict, source: str = "", axis: str = "logs") -> str:
     """Zabbix 호스트명 → Loki/Wazuh 라벨. 세 시스템이 이름을 달리 쓰고 공유 키가 없어 필요.
 
     우선순위: HOST_LABEL_MAP(명시) → 인터페이스 dns(FQDN 일 때만) → Zabbix 호스트명.
@@ -240,6 +245,10 @@ def _resolve_label(zbx_host: str, host_obj: dict) -> str:
     (`zabbix-agent2`·`snmpsim`), 그 이름은 여러 호스트가 공유할 수 있어 남의 로그를
     이 호스트 것으로 읽을 위험이 있다.
     """
+    # 명부가 먼저다. 호스트에 관한 사실은 한 곳에 모으고, 환경변수는 명부가 없을 때만 쓴다.
+    named = registry.label(source, zbx_host, axis)
+    if named:
+        return named
     mapping = {}
     for pair in os.environ.get("HOST_LABEL_MAP", "").split(","):
         if "=" in pair:
@@ -256,7 +265,7 @@ def _resolve_label(zbx_host: str, host_obj: dict) -> str:
     return zbx_host
 
 
-def axis_exempt(zbx_host: str, axis: str) -> bool:
+def axis_exempt(zbx_host: str, axis: str, source: str = "") -> bool:
     """그 축이 없는 것이 정상인 호스트인가. axis 는 "logs" 또는 "security".
 
     두 축은 커버리지가 다르다. 로그는 라벨로 컨테이너 여럿을 논리 호스트 하나에 붙일 수
@@ -266,6 +275,9 @@ def axis_exempt(zbx_host: str, axis: str) -> bool:
     안 적으면 그 호스트의 알림마다 이름 불일치로 분석이 돌고, 진짜 불일치에 쓸 상한을
     먼저 소진한다. 패턴은 Zabbix 호스트명에 맞추며 `*` 만 쓴다. 근거는 GATEWAY_GUIDE §12.
     """
+    on = registry.axis_on(source, zbx_host, axis)
+    if on is not None:
+        return not on          # 명부가 "이 축 없음"이라고 하면 조회하지 않는다
     var = {"logs": "LOGS_EXEMPT_HOSTS", "security": "SECURITY_EXEMPT_HOSTS"}[axis]
     # 축 구분 전에 쓰던 이름. 안 지운 설정이 조용히 무시되면 왜 안 먹는지 알 수 없다.
     raw = os.environ.get(var)
@@ -330,12 +342,12 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
     return out[:incident.OPEN_LINK_MAX], SOURCE_OK
 
 
-async def _loki_logs(host_label: str, now: int, zbx_host: str = "") -> tuple:
+async def _loki_logs(host_label: str, now: int, zbx_host: str = "", source: str = "") -> tuple:
     """Loki 최근 로그. 반환 (로그 목록, 조회 상태). 상태는 SOURCE_* 넷 중 하나."""
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url:
         return [], SOURCE_DISABLED
-    if zbx_host and axis_exempt(zbx_host, "logs"):
+    if zbx_host and axis_exempt(zbx_host, "logs", source):
         return [], SOURCE_DISABLED
     if not host_label:   # 호스트 라벨을 못 정하면 조회 자체가 불가 — 성공이 아니다
         log.warning("loki skipped: host label 미해석 (HOST_LABEL_MAP·인터페이스 dns 확인)")
@@ -384,7 +396,7 @@ async def _loki_name_status(client, url: str, host_label: str, now: int) -> str:
     return SOURCE_UNMATCHED
 
 
-async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "") -> tuple:
+async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "", source: str = "") -> tuple:
     """Wazuh Indexer(OpenSearch) 최근 경보. 반환 (경보 목록, 조회 상태).
 
     빈 목록을 "침해 배제"로 해석해도 되는 것은 상태가 SOURCE_OK 일 때뿐이다.
@@ -394,7 +406,7 @@ async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "") -> tuple:
     pw = os.environ.get("WAZUH_INDEXER_PASSWORD", "")
     if not url:
         return [], SOURCE_DISABLED
-    if zbx_host and axis_exempt(zbx_host, "security"):
+    if zbx_host and axis_exempt(zbx_host, "security", source):
         return [], SOURCE_DISABLED
     if not agent_name:
         log.warning("wazuh skipped: agent name 미해석")

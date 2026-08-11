@@ -13,6 +13,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
+from . import registry
 from .collector import SOURCE_UNAVAILABLE, SOURCE_UNMATCHED
 
 log = logging.getLogger("gateway.incident")
@@ -326,18 +327,18 @@ REALM_MAP = _realm_map()
 if REALM_MAP:
     log.info("감시 영역 구분 적용: %s", REALM_MAP)
 else:
-    log.info("감시 영역 미설정 — 전부 한 영역으로 본다. 감시 서버가 둘 이상이면 "
-             "INCIDENT_REALM_MAP 을 설정한다(호스트명이 겹치면 남의 사건과 묶인다)")
+    log.info("감시 영역 매핑 없음 — 소스 이름을 그대로 영역으로 쓴다(사내·MSP 자동 분리). "
+             "같은 기계를 두 소스가 보고하면 그 둘을 같은 영역으로 묶어야 한다")
 
 
-def realm_for(source: str) -> str:
-    """이 알림이 어느 감시 영역에서 왔는가. 미설정이면 빈 문자열(단일 영역)."""
-    return REALM_MAP.get(source or "", "")
+def realm_for(source: str, host: str = "") -> str:
+    """이 알림이 어느 감시 영역에서 왔는가. 명부 → 환경변수 → 소스 그대로."""
+    return registry.realm(source, host, REALM_MAP)
 
 
 def incident_key(source: str, host: str, cls: str) -> tuple:
     """같은 키의 알림은 한 인시던트. 브리지 조합이면 다른 class여도 같은 키."""
-    return (realm_for(source), host, _bridge_id(cls))
+    return (realm_for(source, host), host, _bridge_id(cls))
 
 
 @dataclass

@@ -274,6 +274,7 @@ def main():
     pending_checks = _pending_checks()
     analyze_checks = _analyze_ref_checks()
     beat_checks = _heartbeat_checks()
+    registry_checks = _registry_checks()
     flush_checks = _flush_checks()
 
     if fails:
@@ -281,7 +282,7 @@ def main():
     total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
              + masking_checks + degraded_checks + incident_checks + source_checks
              + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks + class_tag_checks
-             + class_map_checks + pending_checks + analyze_checks + beat_checks + flush_checks)
+             + class_map_checks + pending_checks + analyze_checks + beat_checks + flush_checks + registry_checks)
     print(f"ALL OK ({total} checks)")
 
 
@@ -925,7 +926,7 @@ def _incident_checks() -> int:
         wz = incident.incident_key("wazuh", "db01", "disk_space")
         assert wz == same, "같은 영역의 다른 소스는 계속 묶여야"
         assert incident.realm_for("zabbix-msp") == "msp"
-        assert incident.realm_for("모르는소스") == "", "모르는 소스는 기본 영역"
+        assert incident.realm_for("모르는소스") == "모르는소스", "안 적은 소스는 자기 이름이 영역"
 
         # 지문도 갈라져야 관제 화면에서 두 고객이 한 행으로 합쳐지지 않는다
         def _inc(src):
@@ -942,9 +943,13 @@ def _incident_checks() -> int:
             os.environ["INCIDENT_REALM_MAP"] = saved_realm
         importlib.reload(incident)
 
-    # 미설정이면 전부 한 영역 — 감시 서버가 하나인 환경의 현행 동작 그대로
+    # 매핑을 안 적어도 소스가 다르면 갈라진다. 설정을 안 한 사람이 가장 위험한 상태가
+    # 되면 안 된다 — 모르면 나뉘는 쪽으로 틀려야 한다.
     assert (incident.incident_key("zabbix-internal", "db01", "disk_space")
-            == incident.incident_key("zabbix-msp", "db01", "disk_space"))
+            != incident.incident_key("zabbix-msp", "db01", "disk_space"))
+    # 같은 소스면 당연히 같다
+    assert (incident.incident_key("zabbix-internal", "db01", "disk_space")
+            == incident.incident_key("zabbix-internal", "db01", "disk_space"))
 
     k_disk = incident.incident_key("zabbix-internal", "h1", "disk_space")
     k_svc = incident.incident_key("zabbix-internal", "h1", "service_down")
@@ -1302,6 +1307,78 @@ def _flush_checks() -> int:
     n3, left3 = asyncio.run(_boom())
     assert n3 == 1 and left3 == 0, (n3, left3)
     return 8
+
+
+def _registry_checks() -> int:
+    """호스트 명부 — 한 호스트의 사실이 한 곳에서 읽히는지.
+
+    명부에 없는 호스트도 그대로 돌아야 한다. 명부는 식별이 아니라 성질을 담고,
+    식별은 (감시 서버, 호스트명)이 이미 한다.
+    """
+    import importlib
+    import os
+    import tempfile
+
+    from . import registry
+
+    try:
+        import yaml   # noqa: F401
+    except ImportError:
+        return 0   # 파서가 없으면 명부 기능 자체가 비활성 — 검사할 것이 없다
+
+    d = tempfile.mkdtemp(prefix="registry-test-")
+    path = os.path.join(d, "hosts.yml")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("""hosts:
+  - name: node1
+    source: zabbix-internal
+    realm: internal
+    loki: vm-target-001.novalocal
+    wazuh: vm-target-001.novalocal
+    logs: true
+    security: true
+  - name: cert-example.com
+    realm: internal
+    logs: false
+    security: false
+  - name: db01
+    source: zabbix-msp
+    realm: msp
+""")
+    saved = os.environ.get("HOST_REGISTRY_FILE")
+    os.environ["HOST_REGISTRY_FILE"] = path
+    try:
+        importlib.reload(registry)
+        assert registry.status()["entries"] == 3, registry.status()
+
+        # 축마다 다른 이름을 쓸 수 있다
+        assert registry.label("zabbix-internal", "node1", "logs") == "vm-target-001.novalocal"
+        assert registry.label("zabbix-internal", "node1", "security") == "vm-target-001.novalocal"
+        # 소스가 다르면 그 항목이 아니다 — 이름이 같아도 다른 기계일 수 있다
+        assert registry.label("zabbix-msp", "node1", "logs") == ""
+
+        # source 를 안 적은 항목은 어느 소스에서 와도 걸린다
+        assert registry.axis_on("zabbix-internal", "cert-example.com", "logs") is False
+        assert registry.axis_on("zabbix-msp", "cert-example.com", "security") is False
+        # 명부에 없으면 모름 — 기존 규칙으로 넘어간다
+        assert registry.axis_on("zabbix-internal", "무명호스트", "logs") is None
+
+        # 영역: 명부 > 환경변수 > 소스 그대로
+        assert registry.realm("zabbix-msp", "db01", {}) == "msp"
+        assert registry.realm("zabbix-internal", "무명", {"zabbix-internal": "x"}) == "x"
+        assert registry.realm("새소스", "무명", {}) == "새소스", "안 적으면 소스가 곧 영역"
+    finally:
+        if saved is None:
+            os.environ.pop("HOST_REGISTRY_FILE", None)
+        else:
+            os.environ["HOST_REGISTRY_FILE"] = saved
+        importlib.reload(registry)
+        shutil.rmtree(d, ignore_errors=True)
+
+    # 파일을 안 지정하면 비어 있고 조용하다 — 기존 환경은 그대로 돈다
+    assert registry.status()["entries"] == 0
+    assert registry.entry("zabbix-internal", "node1") == {}
+    return 11
 
 
 if __name__ == "__main__":

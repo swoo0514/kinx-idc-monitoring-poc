@@ -5,6 +5,7 @@
   python3 probe.py map <trigger_id>    # 그 트리거 호스트의 Zabbix 이름·표시명·인터페이스 dns/ip
                                        #  + Loki host 라벨값 전체 + 각 후보로 Loki 조회 시 로그 수
   python3 probe.py names [limit]       # Zabbix 호스트 전체를 Loki·Wazuh 이름과 대조 (어긋난 호스트 목록)
+  python3 probe.py registry [source]   # 호스트 명부 초안 출력 (손으로 쓰지 않기 위한 것)
 환경변수: ZABBIX_URL·ZABBIX_TOKEN(필수), LOKI_URL(선택).
 """
 
@@ -326,9 +327,62 @@ async def names(limit: int = 500):
         print("\n[ Wazuh 대조 ] WAZUH_INDEXER_URL 미설정 — 생략")
 
 
+async def gen_registry(source: str = "zabbix-internal", limit: int = 500):
+    """호스트 명부 초안을 만든다. 손으로 쓰지 않기 위한 것이다.
+
+    names 와 같은 재료(Zabbix 호스트 목록·Loki 라벨 값·Wazuh 등록 여부)를 쓰되, 결과를
+    사람이 고쳐 쓸 수 있는 형태로 낸다. 그대로 쓰지 말고 **읽고 고친 뒤** 저장한다 —
+    이름이 안 맞는 호스트는 여기서도 안 맞은 채로 나온다.
+    """
+    from gateway import collector
+
+    z = collector.ZabbixClient()
+    async with httpx.AsyncClient() as c:
+        hosts = await z.call(c, "host.get", {
+            "output": ["host", "name"], "selectInterfaces": ["dns"], "limit": limit})
+    loki = set(await loki_host_values())
+
+    wz_url = os.environ.get("WAZUH_INDEXER_URL", "").rstrip("/")
+    known_wz = set()
+    if wz_url:
+        logging.getLogger("gateway.collector").setLevel(logging.ERROR)
+        async with httpx.AsyncClient(verify=False) as wc:
+            for h in hosts:
+                lb = collector._resolve_label(h["host"], h)
+                st = await collector._wazuh_name_status(
+                    wc, wz_url, os.environ.get("WAZUH_INDEXER_USER", ""),
+                    os.environ.get("WAZUH_INDEXER_PASSWORD", ""), lb)
+                if st == collector.SOURCE_OK:
+                    known_wz.add(h["host"])
+
+    print("# 호스트 명부 초안 — probe.py registry 로 생성. 읽고 고친 뒤 저장한다.")
+    print("# logs·security 는 '그 축이 있는가'다. false 면 조회하지 않는다.")
+    print("# realm 은 감시 영역. 감시 서버가 하나면 전부 같은 값이면 된다.")
+    print("hosts:")
+    for h in hosts:
+        name = h["host"]
+        lb = collector._resolve_label(name, h)
+        print("  - name: %s" % name)
+        print("    source: %s" % source)
+        print("    realm: %s" % source)
+        if lb in loki:
+            print("    loki: %s" % lb)
+            print("    logs: true")
+        else:
+            print("    logs: false        # Loki 에 이 이름이 없다 — 확인 후 고칠 것")
+        if name in known_wz:
+            print("    wazuh: %s" % lb)
+            print("    security: true")
+        else:
+            print("    security: false    # Wazuh 에 이 이름이 없다 — 확인 후 고칠 것")
+        print('    id: ""')
+
+
 def main():
     a = sys.argv
-    if len(a) >= 2 and a[1] == "names":
+    if len(a) >= 2 and a[1] == "registry":
+        asyncio.run(gen_registry(a[2] if len(a) >= 3 else "zabbix-internal"))
+    elif len(a) >= 2 and a[1] == "names":
         asyncio.run(names(int(a[2]) if len(a) >= 3 else 500))
     elif len(a) >= 2 and a[1] == "problems":
         asyncio.run(problems())
@@ -344,7 +398,7 @@ def main():
         asyncio.run(loki_probe(a[2], a[3] if len(a) >= 4 else 24))
     else:
         print(__doc__)
-        print("추가: env | names [limit] | loki <label> [hours]"
+        print("추가: env | names [limit] | registry [source] | loki <label> [hours]"
               " | openlink <zabbix호스트명> | context <event_id> <trigger_id>")
 
 
