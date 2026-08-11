@@ -278,6 +278,7 @@ def main():
     collect_fail_checks = _collect_failure_checks()
     wrong_srv_checks = _wrong_server_checks()
     evt_time_checks = _event_time_checks()
+    open_limit_checks = _open_limit_checks()
     analyze_checks = _analyze_ref_checks()
     beat_checks = _heartbeat_checks()
     registry_checks = _registry_checks()
@@ -290,7 +291,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + tenant_checks + collect_fail_checks + wrong_srv_checks + evt_time_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + tenant_checks + collect_fail_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1268,6 +1269,41 @@ def _idempotency_checks() -> int:
     assert not errors2, f"청소 중 예외: {errors2[:2]}"
     app_mod._seen.clear()
     return 4
+
+
+def _open_limit_checks() -> int:
+    """선행 문제 조회가 상한에 걸렸을 때 "없음" 으로 단언하지 않는가.
+
+    조회를 최근 순 100건으로 받는데, 폭주 중이면 그 100건이 전부 5분 미만이라 경과
+    필터에서 전멸한다. 그러면 빈 목록에 "조회 성공" 이 붙어, 세 시간째 미해소인 선행
+    문제가 "선행 문제 없음" 으로 단언된다. 선행 문제는 원래 **오래된** 것이므로
+    최근 순으로 받는 것 자체가 목적과 어긋난다.
+    """
+    import asyncio
+
+    from . import collector
+
+    asked = {}
+
+    class _Zbx:
+        def __init__(self, rows):
+            self.rows = rows
+
+        async def call(self, client, method, params):
+            asked["params"] = params
+            return self.rows
+
+    # 상한만큼 받았고 전부 최근 것 — 필터에서 전멸한다
+    now = 1_700_000_000
+    fresh = [{"eventid": str(9000 + i), "name": "n%d" % i, "clock": now - 10,
+              "severity": "3", "tags": []} for i in range(100)]
+    out, status = asyncio.run(
+        collector._open_problems(_Zbx(fresh), None, "10084", {"disk_space"}, set(), now))
+    assert not (out == [] and status == collector.SOURCE_OK),         "상한에 걸려 다 걸러졌는데 '선행 문제 없음' 으로 단언한다"
+
+    # 오래된 것부터 받아야 한다 — 선행 문제는 오래된 쪽이다
+    assert asked["params"].get("sortorder") == "ASC", asked["params"]
+    return 2
 
 
 def _event_time_checks() -> int:

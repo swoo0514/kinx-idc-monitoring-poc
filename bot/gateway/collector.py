@@ -28,6 +28,9 @@ WAZUH_LIMIT = 20
 # 과거 이벤트 목록 상한. 개수는 따로 세므로 이 값이 판정에 영향을 주지 않는다.
 PAST_EVENT_LIMIT = 200
 
+# 한 호스트에서 열린 문제를 몇 건까지 받아 볼지. 오래된 것부터 받는다.
+OPEN_PROBLEM_LIMIT = 100
+
 # 호스트 이름이 그 소스에 등록돼 있는지 확인할 때 되짚는 기간
 KNOWN_HOST_LOOKBACK_S = 7 * 86400
 LOKI_HOST_LABEL = os.environ.get("LOKI_HOST_LABEL", "host")
@@ -380,8 +383,11 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
             "selectTags": "extend",
             "recent": False,          # 미해소만. 기본값이지만 의도를 코드에 남긴다
             "sortfield": "eventid",
-            "sortorder": "DESC",
-            "limit": 100,
+            # 선행 문제는 **오래된** 쪽이다. 최근 순으로 받으면 폭주 중에 받은 100건이
+            # 전부 5분 미만이라 경과 필터에서 전멸하고, 세 시간째 열려 있는 진짜 선행
+            # 문제는 상한 밖으로 밀린다.
+            "sortorder": "ASC",
+            "limit": OPEN_PROBLEM_LIMIT,
         }) or []
     except Exception as e:
         log.warning("problem.get failed hostid=%s: %s", hostid, e)
@@ -410,6 +416,12 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
                     "link": link})
     # 최근 것을 먼저 — 상한에 걸려 잘릴 때 오래된 방치 항목이 아니라 선행 후보가 남게.
     out.sort(key=lambda x: x["open_for_s"])
+    if not out and len(rows) >= OPEN_PROBLEM_LIMIT:
+        # 상한만큼 받았는데 하나도 안 걸렸다. 상한 밖에 더 있을 수 있으므로 "없음"
+        # 이라고 말하면 안 된다. 없는 사실을 단언하는 것과 같다.
+        log.warning("열린 문제가 상한(%d)을 채웠는데 연계 후보가 없다 hostid=%s — "
+                    "없음이 아니라 미상으로 보고한다", OPEN_PROBLEM_LIMIT, hostid)
+        return [], SOURCE_UNAVAILABLE
     return out[:incident.OPEN_LINK_MAX], SOURCE_OK
 
 
