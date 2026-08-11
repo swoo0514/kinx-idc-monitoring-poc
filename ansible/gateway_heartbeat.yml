@@ -20,6 +20,10 @@
     # Zabbix 에는 직전 값이 남아 있으므로, 최근에 받은 값일 때만 판정한다. 이 조건이
     # 없으면 재기동 직후 옛 값과 빈 수신 기록이 만나 오탐이 난다.
     hb_fresh_window: "10m"
+    # 감시 서버 이름 목록. 봇의 호스트 명부 sources 절에 적은 name 과 같아야 한다.
+    # 비워 두면 감시 서버가 하나인 환경으로 보고 예전 키 그대로 만든다.
+    # 실행 예: -e '{"hb_sources":["zabbix-internal","zabbix-msp"]}'
+    hb_sources: []
   tasks:
     - name: 게이트웨이 전용 호스트 (에이전트 없이 트래퍼만 받는다)
       community.zabbix.zabbix_host:
@@ -51,6 +55,28 @@
         - { name: "분석 생략 수(누적)", key: "gateway.skipped" }
         - { name: "최근 창 수신 알림 수", key: "gateway.recent_alerts" }
         - { name: "최근 창 발행 측 이벤트 수", key: "gateway.zbx_events" }
+
+    # 감시 서버가 둘 이상이면 서버마다 따로 봐야 한다. 한 서버의 이벤트 수만 세면
+    # 그쪽이 멀쩡한 동안 다른 서버의 알림 경로가 끊겨도 판정되지 않는다. 트래퍼
+    # 호스트는 하나로 두고 아이템 키에 서버 이름을 붙인다.
+    - name: 수신 항목 — 감시 서버별
+      community.zabbix.zabbix_item:
+        host_name: "{{ hb_host }}"
+        name: "{{ item.1.name }} ({{ item.0 }})"
+        params:
+          type: zabbix_trapper
+          key: "{{ item.1.key }}[{{ item.0 }}]"
+          value_type: numeric_unsigned
+          history: 31d
+          trends: 365d
+        state: present
+      loop: "{{ hb_sources | product(hb_per_source_items) | list }}"
+      loop_control:
+        label: "{{ item.1.key }}[{{ item.0 }}]"
+      vars:
+        hb_per_source_items:
+          - { name: "최근 창 수신 알림 수", key: "gateway.recent_alerts" }
+          - { name: "최근 창 발행 측 이벤트 수", key: "gateway.zbx_events" }
 
     # 이름을 바꾼 트리거는 새로 생기고 옛것이 남는다. 남겨 두면 "조용하다"로 판정하는
     # 옛 규칙이 계속 오탐을 낸다. 이름으로 지운다.
@@ -95,6 +121,25 @@
             감시 서버는 최근 창에 이벤트를 만들었는데 봇은 한 건도 받지 못했다.
             액션·미디어 타입·웹훅 주소 중 하나가 끊긴 것이다. 알림이 없는 조용한
             상태와는 다르다 — 조용하면 양쪽 다 0 이라 이 조건은 성립하지 않는다.
+
+    - name: 트리거 — 감시 서버별 수신 경로
+      community.zabbix.zabbix_trigger:
+        name: "알림 수신 경로 끊김 ({{ item }})"
+        host_name: "{{ hb_host }}"
+        description: >-
+          {{ item }} 감시 서버는 최근 창에 이벤트를 만들었는데 봇은 그 서버에서
+          한 건도 받지 못했다. 다른 감시 서버는 정상일 수 있으므로 이 서버의
+          액션·미디어 타입·웹훅 주소를 본다.
+        params:
+          expression: >-
+            last(/{{ hb_host }}/gateway.alive)=1 and
+            nodata(/{{ hb_host }}/gateway.zbx_events[{{ item }}],{{ hb_fresh_window }})=0 and
+            last(/{{ hb_host }}/gateway.zbx_events[{{ item }}])>{{ hb_gap_min_events }} and
+            last(/{{ hb_host }}/gateway.recent_alerts[{{ item }}])=0
+          severity: average
+          manual_close: true
+        state: present
+      loop: "{{ hb_sources }}"
 
 # ── 알림 경로 — 게이트웨이를 거치지 않는 독립 경로 ──────────────────────────
 # 게이트웨이가 죽었다는 알림을 게이트웨이로 보내면 그 알림도 같이 죽는다. 랩에서

@@ -76,6 +76,11 @@ def source_conf(name: str) -> dict:
     return {}
 
 
+def source_names() -> list:
+    """명부에 적힌 감시 서버 이름들. 안 적었으면 빈 목록(=단일 서버 환경)."""
+    return [str(s["name"]) for s in _SOURCES]
+
+
 def source_realm(name: str) -> str:
     """감시 서버 절에 적힌 영역. 없으면 빈 문자열."""
     return str(source_conf(name).get("realm") or "")

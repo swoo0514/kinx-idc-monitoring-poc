@@ -25,6 +25,8 @@ import time
 
 import httpx
 
+from . import registry
+
 log = logging.getLogger("gateway.heartbeat")
 
 HEADER = b"ZBXD\x01"
@@ -97,14 +99,22 @@ def _recv_exact(sock, n: int) -> bytes:
     return buf
 
 
-def zabbix_recent_events(window_s: int, now: float = None):
-    """최근 창에서 Zabbix 가 만든 문제 이벤트 수. 읽기 전용 조회이고 실패하면 None.
+def zabbix_recent_events(window_s: int, now: float = None, source: str = ""):
+    """최근 창에서 그 Zabbix 가 만든 문제 이벤트 수. 읽기 전용 조회이고 실패하면 None.
 
     countOutput 을 쓰므로 몇만 건이어도 응답이 한 줄이다(공식 문서 확인).
     수집기와 달리 여기서는 동기 호출이다 — 전송 스레드 안에서 돌기 때문이다.
+
+    감시 서버가 둘 이상이면 **서버마다 따로 세야 한다.** 한 곳만 세면 그 서버는
+    멀쩡한데 다른 서버의 알림 경로가 끊긴 상태를 못 잡는다.
     """
-    url = os.environ.get("ZABBIX_URL", "").rstrip("/")
-    token = os.environ.get("ZABBIX_TOKEN", "")
+    conf = registry.source_conf(source) if source else {}
+    if conf.get("url"):
+        url = str(conf["url"]).rstrip("/")
+        token = os.environ.get(conf.get("token_env") or "", "")
+    else:
+        url = os.environ.get("ZABBIX_URL", "").rstrip("/")
+        token = os.environ.get("ZABBIX_TOKEN", "")
     if not (url and token):
         return None
     now = int(time.time() if now is None else now)
@@ -119,7 +129,8 @@ def zabbix_recent_events(window_s: int, now: float = None):
         r.raise_for_status()
         return int(r.json()["result"])
     except Exception as e:
-        log.warning("발행 측 이벤트 수 조회 실패: %s", e)
+        log.warning("발행 측 이벤트 수 조회 실패%s: %s",
+                    " (%s)" % source if source else "", e)
         return None
 
 
@@ -142,24 +153,29 @@ class Beat:
         self._stop = threading.Event()
         self._thread = None
 
-    def mark_alert(self):
+    def mark_alert(self, source: str = ""):
         now = time.time()
         with self._lock:
             self.counters["alerts"] += 1
             self.last_alert_at = now
-            self._recv.append(now)
-            self._recv[:] = [t for t in self._recv if now - t <= RECENT_WINDOW_S]
+            # 어느 감시 서버에서 왔는지 같이 남긴다 — 서버별로 비교해야 한쪽만
+            # 끊긴 것을 잡는다.
+            self._recv.append((now, source))
+            self._recv[:] = [r for r in self._recv if now - r[0] <= RECENT_WINDOW_S]
 
     def mark(self, name: str):
         with self._lock:
             if name in self.counters:
                 self.counters[name] += 1
 
-    def recent_alerts(self, now: float = None) -> int:
+    def recent_alerts(self, now: float = None, source: str = None) -> int:
+        """최근 창에 받은 알림 수. source 를 주면 그 감시 서버 것만 센다."""
         now = time.time() if now is None else now
         with self._lock:
-            self._recv[:] = [t for t in self._recv if now - t <= RECENT_WINDOW_S]
-            return len(self._recv)
+            self._recv[:] = [r for r in self._recv if now - r[0] <= RECENT_WINDOW_S]
+            if source is None:
+                return len(self._recv)
+            return len([r for r in self._recv if r[1] == source])
 
     def values(self, now: float = None) -> dict:
         now = time.time() if now is None else now
@@ -188,9 +204,18 @@ class Beat:
             return out   # 기동 직후라 비교할 만한 구간이 없다 — 값 자체를 안 보낸다
         # 못 읽으면 아예 안 보낸다 — 0 을 보내면 "발행 측도 조용했다"로 읽혀
         # 경로 고장을 정상으로 만든다.
-        produced = zabbix_recent_events(window, now)
-        if produced is not None:
-            out["gateway.zbx_events"] = produced
+        for name in registry.source_names():
+            # 아이템 키에 서버 이름을 붙인다. 감시 서버가 늘어도 트래퍼 호스트는
+            # 하나로 두고 항목만 늘리면 된다 — Zabbix 쪽 구성 부담이 작다.
+            got = self.recent_alerts(now, source=name)
+            out["gateway.recent_alerts[%s]" % name] = got
+            produced = zabbix_recent_events(window, now, source=name)
+            if produced is not None:
+                out["gateway.zbx_events[%s]" % name] = produced
+        if not registry.source_names():
+            produced = zabbix_recent_events(window, now)
+            if produced is not None:
+                out["gateway.zbx_events"] = produced
         return out
 
     def start(self):

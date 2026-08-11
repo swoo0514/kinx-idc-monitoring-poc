@@ -180,7 +180,7 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
               tags=None, groups=None):
     """경로별 후속 처리를 백그라운드로 넘긴다 — 웹훅은 즉시 200(발송측 타임아웃 회피)."""
     route = decision["route"]
-    _beat.mark_alert()
+    _beat.mark_alert(source)
     cls = incident.classify(alert_name, tags=tags, groups=groups)
     log.info("event=%s source=%s host=%s sev=%s class=%s route=%s playbook=%s",
              event_id, source, host, sev, cls, route, decision["playbook"])

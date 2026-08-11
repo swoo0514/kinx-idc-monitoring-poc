@@ -772,7 +772,7 @@ def _remediation_checks() -> int:
     finally:
         if saved is not None:
             os.environ["KEEP_URL"] = saved
-    return 20
+    return 30
 
 
 def _fastpath_checks() -> int:
@@ -1398,6 +1398,33 @@ def _registry_checks() -> int:
 
         # 감시 서버 절의 영역이 호스트에 상속된다 — 호스트마다 안 적어도 된다
         assert registry.realm("zabbix-msp", "무명호스트", {}) == "msp"
+        assert registry.source_names() == ["zabbix-internal", "zabbix-msp"]
+
+        # 생존 신호도 서버마다 따로 센다. 한 곳만 세면 그 서버는 멀쩡한데 다른 서버의
+        # 알림 경로가 끊긴 상태를 못 잡는다 — 판정이 절반만 도는 셈이다.
+        from . import heartbeat as _hb
+        b = _hb.Beat(interval_s=999)
+        for src in ("zabbix-internal", "zabbix-msp", "zabbix-internal"):
+            b.mark_alert(src)
+        now = b.started_at + _hb.MIN_COMPARE_WINDOW_S + 60
+        assert b.recent_alerts(now) == 3
+        assert b.recent_alerts(now, source="zabbix-internal") == 2
+        assert b.recent_alerts(now, source="zabbix-msp") == 1
+        os.environ["ZABBIX_URL"] = "http://global:8080"
+        os.environ["ZABBIX_TOKEN"] = "global-tok"
+        try:
+            # 명부에 적힌 서버인데 그 토큰이 비어 있으면 조회하지 않는다. 전역 토큰으로
+            # 대신 찌르면 남의 서버 수치를 그 서버 것으로 기록하게 된다.
+            assert _hb.zabbix_recent_events(600, source="zabbix-msp") is None
+            v = b.values(now=now)
+        finally:
+            for k in ("ZABBIX_URL", "ZABBIX_TOKEN"):
+                os.environ.pop(k, None)
+        assert v["gateway.recent_alerts[zabbix-internal]"] == 2, v
+        assert v["gateway.recent_alerts[zabbix-msp]"] == 1, v
+        assert v["gateway.alerts"] == 3, v
+        # 서버를 적었으면 뭉뚱그린 발행 측 수는 안 보낸다 — 서버별로 봐야 갈린다
+        assert "gateway.zbx_events" not in v, v
 
         # 영역: 명부 > 환경변수 > 소스 그대로
         assert registry.realm("zabbix-msp", "db01", {}) == "msp"
