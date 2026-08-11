@@ -280,12 +280,31 @@ def main():
 
     if fails:
         raise SystemExit(f"{fails} case(s) failed")
-    total = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
-             + masking_checks + degraded_checks + incident_checks + source_checks
-             + remediation_checks + holmes_checks + fastpath_checks + open_link_checks + site_kw_checks + class_tag_checks
-             + class_map_checks + pending_checks + analyze_checks + beat_checks + flush_checks + registry_checks
-             + concurrency_checks)
-    print(f"ALL OK ({total} checks)")
+    declared = (len(CASES_SEVERITY) + len(CASES_ROUTER) + 2 + prejudge_checks + 1
+                + masking_checks + degraded_checks + incident_checks + source_checks
+                + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
+                + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks
+                + concurrency_checks)
+    print(f"ALL OK ({_assert_count()} asserts / 선언 {declared})")
+
+
+def _assert_count() -> int:
+    """이 파일에 적힌 assert 문 수. 소스에서 세므로 손으로 못 어긋난다.
+
+    각 검사 함수가 돌려주는 숫자는 사람이 적은 값이라 실제와 어긋날 수 있다. 실제로
+    2026-08-11 에 숫자를 고치다가 같은 값이 먼저 나오는 다른 함수를 바꿨고, 합계가
+    우연히 맞아 드러나지 않았다. 그러면 검사를 지워도 총계가 안 변해 티가 안 난다.
+
+    반복문 안의 assert 는 여러 번 도니까 이 수가 실행 횟수는 아니다. 목적은 그게
+    아니라 **검사를 지우면 숫자가 줄어드는 것**이다. 두 값을 같이 찍어서 어긋나면
+    사람이 보게 한다.
+    """
+    import ast
+    import io as _io
+    with _io.open(__file__, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    return sum(1 for n in ast.walk(tree) if isinstance(n, ast.Assert))
 
 
 class _FakeHttpx:
@@ -344,7 +363,11 @@ def _source_status_checks() -> int:
 
     from . import collector, incident, llm, masking, slack
 
-    saved = {k: os.environ.pop(k, None) for k in ("LOKI_URL", "WAZUH_INDEXER_URL")}
+    # 축 면제·명부도 같이 지운다. 우선순위가 명부 → 축별 변수 → 옛 변수 순이라
+    # 위쪽이 살아 있으면 아래 검사가 통째로 무너진다.
+    saved = {k: os.environ.pop(k, None) for k in
+             ("LOKI_URL", "WAZUH_INDEXER_URL", "LOGS_EXEMPT_HOSTS",
+              "SECURITY_EXEMPT_HOSTS", "LOG_AXIS_EXEMPT_HOSTS", "HOST_REGISTRY_FILE")}
     try:
         # 미배선(URL 없음) = disabled, 호스트 라벨 미해석 = unavailable (성공이 아니다)
         assert asyncio.run(collector._loki_logs("h", 0)) == ([], collector.SOURCE_DISABLED)
@@ -537,7 +560,30 @@ def _class_map_checks() -> int:
         assert m.classify("Cert expires in 30 days", tags=tags) == "network"
         # 파일에 없으면 키워드 폴백
         assert m.classify("Interface eth0(): Link down") == "network"
-        return 6
+
+        # ── 배선 검사 — 함수가 맞게 도는 것과 그 함수가 불리는 것은 다른 문제다 ──
+        # 위 검사들은 classify 를 직접 부른다. 실제로는 웹훅이 rule_id 를 안 넘겨서
+        # 파일의 wazuh 절이 통째로 죽어 있었는데, 파일 로드 로그는 정상이라 설정한
+        # 사람은 적용됐다고 믿었다. 그래서 웹훅이 넘기는지를 따로 본다.
+        from . import app as app_mod
+
+        importlib.reload(app_mod)
+
+        class _FakeBg:
+            def __init__(self):
+                self.tasks = []
+
+            def add_task(self, fn, *a, **kw):
+                self.tasks.append((fn, a, kw))
+
+        bg = _FakeBg()
+        app_mod._dispatch(bg, "wazuh", "e1", "", "h1", "아무 이름", "SEV2",
+                          {"route": "triage", "playbook": ""}, rule_id="533")
+        alerts = [a[0] for _fn, a, _kw in bg.tasks if a]
+        assert alerts, "triage 경로가 아무것도 안 넘겼다"
+        assert alerts[0].incident_class == "config_change", \
+            f"웹훅이 rule_id 를 분류로 안 넘긴다 — 파일의 wazuh 절이 죽는다: {alerts[0].incident_class}"
+        return 8
     finally:
         os.unlink(path)
         if saved is None:
@@ -581,6 +627,11 @@ def _site_keyword_checks() -> int:
     from . import incident as inc_mod
 
     saved = os.environ.get("SITE_CLASS_KEYWORDS")
+    # 배포 서버에는 이 값이 들어 있다. 지우지 않으면 그 서버에서만 실패하고, 설정
+    # 문제인지 코드 문제인지 구분할 수 없다. 몇 번 겪으면 "저 서버는 원래 빨간불"이
+    # 되고, 그때부터 진짜 회귀가 같은 빨간불에 섞여 안 보인다.
+    os.environ.pop("SITE_CLASS_KEYWORDS", None)
+    inc_mod = importlib.reload(inc_mod)
     try:
         # 주입 전 — 사이트 관용구는 분류되지 않는 것이 정상
         assert inc_mod.classify("ixapi.example.net not connect") == "other"
@@ -1217,7 +1268,7 @@ def _heartbeat_checks() -> int:
             got["body"] = json.loads(body.decode("utf-8"))
             res = json.dumps({"response": "success",
                               "info": "processed: 7; failed: 0; total: 7"}).encode()
-            conn.sendall(b"ZBXD" + struct.pack("<II", len(res), 0) + res)
+            conn.sendall(b"ZBXD\x01" + struct.pack("<II", len(res), 0) + res)
 
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
@@ -1255,7 +1306,7 @@ def _heartbeat_checks() -> int:
         res = heartbeat.send(v)
         t.join(timeout=5)
         assert res["ok"] is True, res
-        assert got["head"][:5] == b"ZBXD", got.get("head")
+        assert got["head"][:5] == b"ZBXD\x01", got.get("head")
         assert got["body"]["request"] == "sender data", got["body"]
         keys = {d["key"] for d in got["body"]["data"]}
         assert "gateway.alive" in keys and "gateway.since_last_alert" in keys, keys
@@ -1269,6 +1320,44 @@ def _heartbeat_checks() -> int:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = val
+
+    # Zabbix 가 response=success 를 주면서 failed 를 세는 경우. 아이템이 없거나 호스트가
+    # 미등록이면 이렇게 온다. 이걸 성공으로 읽으면 값이 하나도 안 쌓이는 동안 로그는
+    # 계속 성공이고, 아이템이 없으니 nodata 트리거도 없다 — 이 기능이 막으려던 상태다.
+    assert heartbeat._accepted("processed: 7; failed: 0; total: 7") is True
+    assert heartbeat._accepted("processed: 0; failed: 7; total: 7") is False
+    assert heartbeat._accepted("형식이 바뀐 문자열") is True, "못 읽으면 오탐 대신 통과"
+    assert heartbeat._accepted("") is True
+
+    srv2 = socket.socket()
+    srv2.bind(("127.0.0.1", 0))
+    srv2.listen(1)
+    port2 = srv2.getsockname()[1]
+
+    def fake_reject(sock):
+        conn, _ = sock.accept()
+        with conn:
+            head = conn.recv(13)
+            (n,) = struct.unpack("<I", head[5:9])
+            body = b""
+            while len(body) < n:
+                body += conn.recv(n - len(body))
+            res = json.dumps({"response": "success",
+                              "info": "processed: 0; failed: 7; total: 7"}).encode()
+            conn.sendall(b"ZBXD\x01" + struct.pack("<II", len(res), 0) + res)
+
+    t2 = threading.Thread(target=fake_reject, args=(srv2,), daemon=True)
+    t2.start()
+    os.environ["HEARTBEAT_ZABBIX_SERVER"] = "127.0.0.1"
+    os.environ["HEARTBEAT_ZABBIX_PORT"] = str(port2)
+    os.environ["HEARTBEAT_HOST"] = "gw-01"
+    try:
+        rej = heartbeat.send({"gateway.alive": 1})
+        t2.join(timeout=5)
+        assert rej["ok"] is False, f"전건 거부인데 성공으로 읽었다: {rej}"
+        assert "failed: 7" in rej["info"], rej
+    finally:
+        srv2.close()
 
     # 닿지 않는 곳으로 보내도 예외를 던지지 않는다 — 봇 흐름이 멈추면 안 된다
     os.environ["HEARTBEAT_ZABBIX_SERVER"] = "127.0.0.1"
@@ -1480,19 +1569,45 @@ def _llm_concurrency_checks() -> int:
         assert "집계 수치는 유효" in r2["text"], "리포트는 수치가 살아 있어야"
 
         # 출구를 우회하는 코드가 어디에도 없어야 한다. llm.py 만 검사하면 다른 파일에
-        # 새 길이 나도 못 잡는다 — 오늘 월간 리포트에서 겪은 것이 바로 그 경우다.
+        # 새 길이 나도 못 잡는다 — 월간 리포트에서 겪은 것이 바로 그 경우다.
+        #
+        # 그리고 철자 몇 개만 막으면 안 된다. 처음엔 `.complete(` 와 어댑터 반복문만
+        # 봤는데, 심층조사는 `httpx.post(.../api/chat)` 으로 나가므로 그 그물에 안
+        # 걸렸다. 지금은 LLM 으로 나가는 표현을 모아서 보고, **아직 못 옮긴 것은
+        # 예외 목록에 이유와 함께 적게** 한다. 목록에 없는 새 경로가 생기면 실패한다.
         import glob
         import re
+        # 파일 -> 왜 아직 출구 밖인가. 옮기면 여기서 지운다.
+        KNOWN_OUTSIDE = {
+            "holmes.py": "심층조사는 별도 프로세스 API 호출 — 미해소(가이드 §21)",
+        }
+        # 어댑터를 부르는 것은 출구만 한다.
+        CALLS_ADAPTER = [(r"\.complete\s*\(", "어댑터 직접 호출"),
+                         (r"^\s+for adapter in ", "어댑터 반복문")]
+        # 공급자에 직접 말을 거는 것은 어댑터가 사는 곳(llm.py)만 한다.
+        # Slack 은 chat.postMessage 라 `/api/chat` 로 잡으면 오검출된다. Ollama·Holmes 의
+        # `/api/chat` 만 잡도록 뒤에 점이나 글자가 오면 제외한다.
+        TALKS_PROVIDER = [(r"/api/chat(?![.\w])", "채팅 API"),
+                          (r"/v1/messages", "Anthropic 메시지 API"),
+                          (r"\banthropic\.", "Anthropic SDK")]
         here = os.path.dirname(__file__)
-        for f in glob.glob(os.path.join(here, "*.py")):
+        for f in sorted(glob.glob(os.path.join(here, "*.py"))):
             base = os.path.basename(f)
-            if base in ("egress.py", "selftest.py"):
+            if base == "selftest.py":
                 continue
             src = io.open(f, encoding="utf-8").read()
-            assert not re.search(r"\.complete\s*\(", src), \
-                f"{base} 가 어댑터를 직접 부른다 — 출구를 우회하는 경로다"
-            assert not re.search(r"^\s+for adapter in ", src, re.M), \
-                f"{base} 에 어댑터 반복문이 남아 있다 — 출구를 우회하는 경로다"
+            hits = []
+            if base != "egress.py":
+                hits += [w for p, w in CALLS_ADAPTER if re.search(p, src, re.M)]
+            if base not in ("egress.py", "llm.py"):
+                hits += [w for p, w in TALKS_PROVIDER if re.search(p, src, re.M)]
+            if base in KNOWN_OUTSIDE:
+                assert hits, (f"{base} 가 예외 목록에 있는데 나가는 코드가 없다 — "
+                              "옮겼으면 목록에서 지운다")
+                continue
+            assert not hits, (f"{base} 가 출구를 우회한다({', '.join(hits)}). "
+                              "egress.call 로 보내거나, 못 옮기면 KNOWN_OUTSIDE 에 "
+                              "이유를 적는다")
     finally:
         (llm.ClaudeAdapter, llm.OllamaAdapter, egress._sem, egress.MAX_CONCURRENCY,
          egress.QUEUE_WAIT_S, egress.MAX_PER_HOUR, restore) = saved

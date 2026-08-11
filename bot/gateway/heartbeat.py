@@ -18,6 +18,7 @@ zabbix_sender 실행 파일을 요구하지 않으므로 설치 환경을 가리
 import json
 import logging
 import os
+import re
 import socket
 import struct
 import threading
@@ -79,14 +80,25 @@ def send(values: dict, now: float = None) -> dict:
             (length,) = struct.unpack("<I", head[5:9])
             body = _recv_exact(s, length)
         res = json.loads(body.decode("utf-8"))
-        ok = res.get("response") == "success"
+        info = res.get("info", "")
+        # Zabbix trapper 는 아이템이 없거나 호스트가 미등록이어도 response=success 를
+        # 준다. 실패 건수는 info 문자열에만 있다("processed: 0; failed: 7; total: 7").
+        # response 만 보면 값이 하나도 안 쌓이는 동안 로그는 계속 성공이고, 아이템이
+        # 없으니 nodata 트리거도 없다 — 이 기능이 막으려던 상태가 그대로 남는다.
+        ok = res.get("response") == "success" and _accepted(info)
         if not ok:
             log.warning("heartbeat 거부됨: %s", res)
-        return {"ok": ok, "info": res.get("info", "")}
+        return {"ok": ok, "info": info}
     except Exception as e:
         # 여기서 실패하면 Zabbix 쪽에서 nodata 로 잡힌다. 그게 이 기능의 설계다.
         log.warning("heartbeat 전송 실패 %s:%s: %s", server, port, e)
         return {"ok": False, "reason": str(e)}
+
+
+def _accepted(info: str) -> bool:
+    """info 문자열의 failed 가 0인가. 못 읽으면 참으로 본다(형식 변화로 오탐 금지)."""
+    m = re.search(r"failed:\s*(\d+)", str(info or ""))
+    return int(m.group(1)) == 0 if m else True
 
 
 def _recv_exact(sock, n: int) -> bytes:

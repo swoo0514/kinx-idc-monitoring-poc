@@ -185,16 +185,19 @@ def webhook_wazuh(ev: WazuhEvent, bg: BackgroundTasks, x_gateway_token: str = He
     sev = severity.normalize(severity.SOURCE_WAZUH, ev.rule_level)
     decision = tag_router.decide(sev, [], 1)
     _dispatch(bg, severity.SOURCE_WAZUH, ev.alert_id, "", ev.agent_name,
-              ev.rule_description, sev, decision, groups=ev.rule_groups)
+              ev.rule_description, sev, decision, groups=ev.rule_groups,
+              rule_id=ev.rule_id)
     return {"status": "accepted", "sev": sev, **decision, "event_id": ev.alert_id}
 
 
 def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
-              tags=None, groups=None):
+              tags=None, groups=None, rule_id=""):
     """경로별 후속 처리를 백그라운드로 넘긴다 — 웹훅은 즉시 200(발송측 타임아웃 회피)."""
     route = decision["route"]
     _beat.mark_alert(source)
-    cls = incident.classify(alert_name, tags=tags, groups=groups)
+    # rule_id 를 빠뜨리면 분류 선언 파일의 wazuh 절이 통째로 죽는다. 파일은 정상
+    # 로드되고 로그도 찍히므로, 설정한 사람은 적용됐다고 믿는다.
+    cls = incident.classify(alert_name, tags=tags, groups=groups, rule_id=rule_id)
     log.info("event=%s source=%s host=%s sev=%s class=%s route=%s playbook=%s",
              event_id, source, host, sev, cls, route, decision["playbook"])
     if route == "triage":

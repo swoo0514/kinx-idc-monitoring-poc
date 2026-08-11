@@ -151,9 +151,14 @@ def _load_open_link_rules():
     """
     path = os.environ.get("OPEN_LINK_RULES_FILE", "")
     if not path:
-        log.info("열린 문제 연계: 측정 파일 없음 — 예시값 사용(%s). 운영 적용 전 재측정 필요",
-                 _EXAMPLE_MEASURED)
-        return dict(_EXAMPLE_OPEN_LINK_RULES), _EXAMPLE_MEASURED
+        # 예전에는 여기서 예시값을 돌려줬다. 그런데 시스템 프롬프트는 이 수치를
+        # "과거 이력에서 실제로 측정된 값"이라고 모델에게 알려 준다. 그래서 봇이
+        # 근거 없는 90% 를 근거처럼 인용해 고객 대응 채널에 냈다. 측정 파일이 없으면
+        # 연계 자체를 끈다 — 없는 근거보다 없는 문장이 낫다.
+        # 예시값은 파일 형식을 보여 주는 용도로만 남긴다(OPEN_LINK_RULES_FILE 참고).
+        log.warning("열린 문제 연계: 측정 파일 없음(OPEN_LINK_RULES_FILE) — 연계를 끈다. "
+                    "근거 없는 비율을 실측값처럼 회신하지 않기 위해서다")
+        return {}, ""
     try:
         with open(path, encoding="utf-8") as f:
             doc = json.load(f)

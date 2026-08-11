@@ -120,6 +120,9 @@ async def _zabbix_alert_context(zbx: ZabbixClient, client: httpx.AsyncClient,
         host = got[0] if got else {}
     if not host.get("host") and hosts:
         host = {**host, "host": hosts[0].get("host", "")}
+    # 상한에 걸렸는지는 **거른 뒤 개수가 아니라 받은 개수**로 판정해야 한다. 현재
+    # 이벤트를 빼면 199 가 되어, 받는 쪽이 200 과 비교하면 영원히 안 걸린다.
+    past_truncated = len(past) >= PAST_EVENT_LIMIT
     past_clocks = [int(e["clock"]) for e in past if e.get("eventid") != str(event_id)]
     # countOutput 은 숫자를 문자열로 돌려준다. 현재 이벤트가 창 안에 있으므로 1 을 뺀다.
     total = _as_count(past_count)
@@ -130,7 +133,8 @@ async def _zabbix_alert_context(zbx: ZabbixClient, client: httpx.AsyncClient,
         "trigger": trigger[0] if trigger else {},
         "host": host,
         "metrics": metrics,
-        "prejudge": prejudge.judge(past_clocks, now=now, total_count=total),
+        "prejudge": prejudge.judge(past_clocks, now=now, total_count=total,
+                                   listed_truncated=past_truncated),
     }
 
 

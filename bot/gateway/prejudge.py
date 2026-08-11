@@ -47,7 +47,8 @@ CHRONIC_MIN_COUNT = (_env_int("PREJUDGE_CHRONIC_MIN", 0)
 
 
 def judge(past_clocks: list, now: float = None, window_s: int = None,
-          chronic_min: int = None, total_count: int = None) -> dict:
+          chronic_min: int = None, total_count: int = None,
+          listed_truncated: bool = None) -> dict:
     """past_clocks: 현재 이벤트 제외한 동일 트리거 과거 발생 unix time 목록.
 
     total_count 는 창 안 전체 발생 수다. 목록은 조회 상한이 있어 잘리므로 개수를 따로
@@ -63,7 +64,11 @@ def judge(past_clocks: list, now: float = None, window_s: int = None,
     # 개수를 못 받았으면 목록 길이로 떨어진다. 그 경우 상한에 걸렸을 수 있으므로
     # 아래에서 그 사실을 함께 남긴다 — 잘린 값을 실제 값처럼 쓰면 안 된다.
     count = listed if total_count is None else max(total_count, listed)
-    truncated = total_count is None and listed >= _list_limit()
+    # 절단 여부는 조회한 쪽이 알려 주는 것이 정확하다. 여기서 개수로 추측하면,
+    # 조회 측이 현재 이벤트를 목록에서 빼는 순간 한 칸씩 어긋나 영원히 안 걸린다.
+    if listed_truncated is None:
+        listed_truncated = listed >= _list_limit()
+    truncated = total_count is None and bool(listed_truncated)
 
     if count == 0:
         verdict = "신규"
