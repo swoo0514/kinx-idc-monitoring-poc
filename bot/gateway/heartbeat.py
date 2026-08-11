@@ -35,6 +35,9 @@ TIMEOUT_S = 5
 # 수와 우리가 받은 수를 비교한다** — Zabbix 에는 이벤트가 쌓였는데 봇에 하나도 안 왔으면
 # 그건 조용한 것이 아니라 경로가 끊긴 것이다. 근거는 GATEWAY_GUIDE §20-3.
 RECENT_WINDOW_S = int(os.environ.get("HEARTBEAT_RECENT_WINDOW_S", "3600"))
+# 이보다 짧은 구간으로는 비교하지 않는다. 기동 직후 몇 초 사이의 한두 건으로
+# 경로 고장을 판정하면 재기동할 때마다 뜬다.
+MIN_COMPARE_WINDOW_S = int(os.environ.get("HEARTBEAT_MIN_COMPARE_S", "600"))
 
 
 def _cfg():
@@ -174,11 +177,18 @@ class Beat:
             "gateway.incidents": c["incidents"],
             "gateway.analyzed": c["analyzed"],
             "gateway.skipped": c["skipped"],
-            "gateway.recent_alerts": self.recent_alerts(now),
+            "gateway.recent_alerts": self.recent_alerts(now),   # 아래에서 같은 구간으로 맞춘다
         }
-        # 발행 측이 같은 창에 몇 건을 만들었는지. 못 읽으면 아예 안 보낸다 — 0 을 보내면
-        # "발행 측도 조용했다"로 읽혀 경로 고장을 정상으로 만든다.
-        produced = zabbix_recent_events(RECENT_WINDOW_S, now)
+        # 발행 측이 **같은 구간에** 몇 건을 만들었는지. 창을 기동 이후로 자르는 것이
+        # 중요하다 — 재기동하면 우리 수신 기록은 비는데 발행 측은 지난 한 시간을 그대로
+        # 세므로, 자르지 않으면 재기동 직후 한 시간 동안 "저쪽엔 있는데 이쪽은 0" 이
+        # 되어 오탐이 난다. 두 값이 같은 구간을 봐야 비교가 성립한다.
+        window = min(RECENT_WINDOW_S, int(now - self.started_at))
+        if window < MIN_COMPARE_WINDOW_S:
+            return out   # 기동 직후라 비교할 만한 구간이 없다 — 값 자체를 안 보낸다
+        # 못 읽으면 아예 안 보낸다 — 0 을 보내면 "발행 측도 조용했다"로 읽혀
+        # 경로 고장을 정상으로 만든다.
+        produced = zabbix_recent_events(window, now)
         if produced is not None:
             out["gateway.zbx_events"] = produced
         return out

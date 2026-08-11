@@ -16,6 +16,10 @@
     # 발행 측이 이만큼보다 많이 만들었는데 우리가 0 이면 경로 고장으로 본다.
     # 1~2건은 액션 조건에 안 걸린 것일 수 있어 여유를 둔다.
     hb_gap_min_events: "3"
+    # 발행 측 수는 봇이 기동한 뒤 비교할 구간이 쌓여야 보내진다. 그 전에는 값이 안 오고
+    # Zabbix 에는 직전 값이 남아 있으므로, 최근에 받은 값일 때만 판정한다. 이 조건이
+    # 없으면 재기동 직후 옛 값과 빈 수신 기록이 만나 오탐이 난다.
+    hb_fresh_window: "10m"
   tasks:
     - name: 게이트웨이 전용 호스트 (에이전트 없이 트래퍼만 받는다)
       community.zabbix.zabbix_host:
@@ -83,6 +87,7 @@
         - name: "알림 수신 경로 끊김"
           expression: >-
             last(/{{ hb_host }}/gateway.alive)=1 and
+            nodata(/{{ hb_host }}/gateway.zbx_events,{{ hb_fresh_window }})=0 and
             last(/{{ hb_host }}/gateway.zbx_events)>{{ hb_gap_min_events }} and
             last(/{{ hb_host }}/gateway.recent_alerts)=0
           severity: average
