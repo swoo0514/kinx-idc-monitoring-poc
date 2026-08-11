@@ -92,6 +92,15 @@
     sw_bot_token: "{{ lookup('env', 'SELFWATCH_SLACK_BOT_TOKEN') }}"
     sw_channel: "{{ lookup('env', 'SELFWATCH_SLACK_CHANNEL') }}"
     sw_api: "http://{{ hostvars[inventory_hostname].ansible_host }}:{{ ansible_httpapi_port | default(8080) }}/api_jsonrpc.php"
+    sw_action_name: "감시 도구 자체 알림 (게이트웨이 미경유)"
+    # 발생·해소에 같은 동작을 쓴다. default_msg=1 이면 미디어 타입의 기본 문구를 쓴다.
+    sw_op:
+      operationtype: 0
+      opmessage:
+        default_msg: 1
+        mediatypeid: "{{ sw_ids.results[1].json.result[0].mediatypeid }}"
+      opmessage_usr:
+        - userid: "{{ sw_ids.results[0].json.result[0].userid }}"
   tasks:
     - name: 크리덴셜 확인 — 비어 있으면 알림이 조용히 안 간다
       ansible.builtin.assert:
@@ -185,24 +194,99 @@
       failed_when: sw_upd.json.error is defined
       changed_when: true
 
+    # 액션도 API 를 직접 부른다. 모듈로 만들었을 때 changed 를 돌려주고도 실제로는
+    # 생성되지 않았다. 호스트 조건의 값은 호스트 **이름이 아니라 식별자**여야 한다
+    # (공식 문서 확인). 조용히 안 만들어지는 것이 이 작업에서 제일 나쁜 결과라
+    # 만든 뒤에 다시 조회해서 확인한다.
+    - name: 대상 호스트 식별자 조회
+      ansible.builtin.uri:
+        url: "{{ sw_api }}"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: host.get
+          params:
+            output: ["hostid"]
+            filter: { host: "{{ hb_host }}" }
+      register: sw_hostid
+
+    - name: 기존 액션 조회 (있으면 갱신, 없으면 생성)
+      ansible.builtin.uri:
+        url: "{{ sw_api }}"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: action.get
+          params:
+            output: ["actionid"]
+            filter: { name: "{{ sw_action_name }}" }
+      register: sw_action_cur
+
     - name: 액션 — 이 호스트의 알림만, 이 미디어로만
-      community.zabbix.zabbix_action:
-        name: "감시 도구 자체 알림 (게이트웨이 미경유)"
-        event_source: trigger
-        status: enabled
-        # 조건을 안 걸면 전체 알림이 이 경로로도 나가 채널이 무의미해진다.
-        conditions:
-          - type: host
-            operator: "="
-            value: "{{ hb_host }}"
-        operations:
-          - type: send_message
-            media_type: "{{ sw_media_name }}"
-            send_to_users:
-              - "{{ sw_user }}"
-        recovery_operations:
-          - type: send_message
-            media_type: "{{ sw_media_name }}"
-            send_to_users:
-              - "{{ sw_user }}"
-        state: present
+      ansible.builtin.uri:
+        url: "{{ sw_api }}"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: "{{ 'action.update' if sw_action_cur.json.result | length > 0 else 'action.create' }}"
+          params: >-
+            {{
+              ({'actionid': sw_action_cur.json.result[0].actionid}
+               if sw_action_cur.json.result | length > 0 else
+               {'name': sw_action_name, 'eventsource': 0})
+              | combine({
+                  'status': 0,
+                  'esc_period': '1h',
+                  'filter': {
+                    'evaltype': 0,
+                    'conditions': [
+                      {'conditiontype': 1, 'operator': 0,
+                       'value': sw_hostid.json.result[0].hostid}
+                    ]
+                  },
+                  'operations': [ sw_op ],
+                  'recovery_operations': [ sw_op ]
+                })
+            }}
+      register: sw_action_res
+      failed_when: sw_action_res.json.error is defined
+      changed_when: true
+
+    - name: 액션이 실제로 만들어졌는지 다시 확인
+      ansible.builtin.uri:
+        url: "{{ sw_api }}"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          id: 1
+          method: action.get
+          params:
+            output: ["actionid", "name", "status"]
+            filter: { name: "{{ sw_action_name }}" }
+      register: sw_verify
+      failed_when: >-
+        sw_verify.json.result | length == 0
+        or sw_verify.json.result[0].status != "0"
+
+    - name: 결과
+      ansible.builtin.debug:
+        msg: "액션 {{ sw_verify.json.result[0].actionid }} 활성 — {{ sw_action_name }}"
