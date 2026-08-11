@@ -274,6 +274,7 @@ def main():
     pending_checks = _pending_checks()
     idem_checks = _idempotency_checks()
     overflow_checks = _overflow_checks()
+    timer_checks = _timer_close_checks()
     tenant_checks = _tenant_scope_checks()
     collect_fail_checks = _collect_failure_checks()
     wrong_srv_checks = _wrong_server_checks()
@@ -291,7 +292,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + tenant_checks + collect_fail_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + timer_checks + tenant_checks + collect_fail_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1543,6 +1544,42 @@ def _tenant_scope_checks() -> int:
     assert "wildcard" not in text,         f"보안 조회가 부분 일치다 — 다른 고객 호스트 경보가 섞인다: {text}"
     assert '"db01"' in text, text
     return 3
+
+
+def _timer_close_checks() -> int:
+    """창이 닫힐 때 마감 처리가 끝까지 도는가.
+
+    마감은 타이머 태스크 안에서 돈다. 그 안에서 자기 타이머를 취소하면, 마감 처리가
+    처음 기다리는 지점에서 취소되어 조용히 죽는다. 알림은 대기 파일에 남고 카드도
+    안 올라가는데 오류 한 줄 없다.
+
+    기존 검사는 `on_close` 가 아무것도 안 기다려서 이 상황을 못 만들었다. 실제
+    경로는 수집·분석·게시를 전부 기다리므로 반드시 기다리는 것으로 검사한다.
+    """
+    import asyncio
+    import time as _t
+
+    from . import incident as inc_mod
+
+    done = []
+
+    async def _slow_close(inc):
+        await asyncio.sleep(0.02)      # 실제 경로는 여기서 수집·분석을 기다린다
+        done.append(inc)
+
+    mgr = inc_mod.IncidentManager(on_close=_slow_close, debounce_s=0.05,
+                                  max_window_s=0.5)
+
+    async def _run():
+        await mgr.submit(inc_mod.Alert(
+            source="zabbix-internal", event_id="e1", trigger_id="t1", host="h1",
+            alert_name="n", sev="SEV2", incident_class="disk_space",
+            recv=_t.monotonic()))
+        await asyncio.sleep(0.4)
+
+    asyncio.run(_run())
+    assert done, "창이 닫혔는데 마감 처리가 끝까지 안 갔다 — 타이머가 자기를 취소한다"
+    return 1
 
 
 def _overflow_checks() -> int:

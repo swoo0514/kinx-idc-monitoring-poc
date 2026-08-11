@@ -597,7 +597,12 @@ class IncidentManager:
         inc = self._open.pop(key, None)
         timer = self._timers.pop(key, None)
         self._locks.pop(key, None)
-        if timer and not timer.done():
+        # 타이머를 취소하되 **자기 자신은 건드리지 않는다.** 마감은 그 타이머 태스크
+        # 안에서 도는데, 거기서 자기를 취소하면 아래 on_close 가 처음 기다리는 지점에서
+        # 취소되어 조용히 죽는다. 알림은 대기 파일에 남고 카드도 안 올라가는데 오류가
+        # 한 줄도 안 남는다. 취소가 필요한 경우는 마감을 밖에서 앞당길 때뿐이다
+        # (종료 마감, 상한 초과로 사건을 미리 닫을 때).
+        if timer and timer is not asyncio.current_task() and not timer.done():
             timer.cancel()
         if inc is None:
             return
