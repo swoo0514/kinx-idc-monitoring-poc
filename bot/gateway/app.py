@@ -106,7 +106,8 @@ async def _replay_pending():
             source=r.get("source", ""), event_id=r.get("event_id", ""),
             trigger_id=r.get("trigger_id", ""), host=r.get("host", ""),
             alert_name=r.get("alert_name", ""), sev=r.get("sev", "SEV2"),
-            incident_class=r.get("class", "other"), recv=time.monotonic()))
+            incident_class=r.get("class", "other"), recv=time.monotonic(),
+            clock=_as_clock(r.get("clock"))))
 
 
 IDEMPOTENCY_TTL_S = 3600
@@ -184,7 +185,7 @@ def webhook_zabbix(ev: ZabbixEvent, bg: BackgroundTasks, x_gateway_token: str = 
     sev = severity.normalize(ev.source, ns)
     decision = tag_router.decide(sev, ev.tags, ev.event_value)
     _dispatch(bg, ev.source, ev.event_id, ev.trigger_id, ev.host, ev.event_name, sev,
-              decision, ev.tags)
+              decision, ev.tags, clock=ev.clock)
     return {"status": "accepted", "sev": sev, **decision, "event_id": ev.event_id}
 
 
@@ -203,8 +204,17 @@ def webhook_wazuh(ev: WazuhEvent, bg: BackgroundTasks, x_gateway_token: str = He
     return {"status": "accepted", "sev": sev, **decision, "event_id": ev.alert_id}
 
 
+def _as_clock(v) -> float:
+    """발행 측이 준 시각을 초로. 못 읽으면 0 — 모른다고 두지 지어내지 않는다."""
+    try:
+        c = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return c if c > 0 else 0.0
+
+
 def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
-              tags=None, groups=None, rule_id=""):
+              tags=None, groups=None, rule_id="", clock=""):
     """경로별 후속 처리를 백그라운드로 넘긴다 — 웹훅은 즉시 200(발송측 타임아웃 회피)."""
     route = decision["route"]
     _beat.mark_alert(source)
@@ -217,11 +227,14 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
         alert = incident.Alert(
             source=source, event_id=event_id, trigger_id=trigger_id, host=host,
             alert_name=alert_name, sev=sev,
-            incident_class=cls, recv=time.monotonic())
+            incident_class=cls, recv=time.monotonic(), clock=_as_clock(clock))
         # 이 경로만 기다린다. 기다리는 동안 죽으면 알림이 사라지므로 파일에 먼저 적고,
         # 적지 못하면 200 을 주지 않는다 — Zabbix 가 재시도하게 둔다.
         rec = {"source": source, "event_id": event_id, "trigger_id": trigger_id,
-               "host": host, "alert_name": alert_name, "sev": sev, "class": cls}
+               "host": host, "alert_name": alert_name, "sev": sev, "class": cls,
+               # 사건이 난 시각. 이게 없으면 재기동 후 다시 넣을 때 지금 시각으로
+               # 잡혀 로그를 엉뚱한 구간에서 찾는다.
+               "clock": _as_clock(clock)}
         if not pending.append(rec):
             raise HTTPException(status_code=503, detail="pending write failed")
         bg.add_task(_incidents.submit, alert)

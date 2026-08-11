@@ -356,6 +356,10 @@ class Alert:
     sev: str
     incident_class: str
     recv: float  # time.monotonic() — 버퍼 타이밍용(수집 시간창은 wall clock 별도)
+    # 발행 측이 알려 준 사건 발생 시각(unix 초). 0 이면 모른다는 뜻이다.
+    # recv 는 단조 시계라 재기동하면 기준이 바뀐다. 그걸로 로그 창을 잡으면 두 시간 전
+    # 사건인데 지금 기준 15분을 보게 되고, 빈 결과가 "기록 없음"으로 단언된다.
+    clock: float = 0.0
 
 
 @dataclass

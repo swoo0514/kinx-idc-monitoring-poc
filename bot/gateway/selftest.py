@@ -277,6 +277,7 @@ def main():
     tenant_checks = _tenant_scope_checks()
     collect_fail_checks = _collect_failure_checks()
     wrong_srv_checks = _wrong_server_checks()
+    evt_time_checks = _event_time_checks()
     analyze_checks = _analyze_ref_checks()
     beat_checks = _heartbeat_checks()
     registry_checks = _registry_checks()
@@ -289,7 +290,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + tenant_checks + collect_fail_checks + wrong_srv_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + tenant_checks + collect_fail_checks + wrong_srv_checks + evt_time_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1267,6 +1268,75 @@ def _idempotency_checks() -> int:
     assert not errors2, f"청소 중 예외: {errors2[:2]}"
     app_mod._seen.clear()
     return 4
+
+
+def _event_time_checks() -> int:
+    """로그·보안 조회 창을 **사건이 난 시각** 기준으로 잡는가.
+
+    알림에는 단조 시계 기준 `recv` 만 있고 벽시계 시각이 없었다. 재기동 후 대기
+    알림을 다시 넣으면 그 시각이 새로 찍히므로, 두 시간 전 사건인데 로그를 지금
+    기준 15분만 본다. 실제 장애 로그는 창 밖이라 빈 결과가 오고, 이름은 알려져
+    있으니 상태는 ok 다 — 모델은 "로그에 기록 없음"을 사실로 단언한다.
+    """
+    import os
+    import time as _t
+
+    from . import collector, incident as inc_mod
+
+    def _alert(clock):
+        return inc_mod.Alert(source="zabbix-internal", event_id="e1", trigger_id="t1",
+                             host="h1", alert_name="n", sev="SEV3",
+                             incident_class="disk_space", recv=_t.monotonic(),
+                             clock=clock)
+
+    now = 1_700_000_000
+    old_inc = inc_mod.Incident(key=("internal", "h1", "disk_space"), host="h1",
+                               alerts=[_alert(now - 7200)],
+                               opened_at=0.0, last_at=0.0)
+    ref = collector.reference_time(old_inc, now)
+    assert abs(ref - (now - 7200)) < 5,         f"두 시간 전 사건인데 조회 기준이 지금이다 — 실제 로그 구간을 안 본다: {ref}"
+
+    # 시각을 모르는 알림(옛 대기 파일 등)은 지금 기준으로 — 없는 값을 지어내지 않는다
+    no_clock = inc_mod.Incident(key=("internal", "h1", "disk_space"), host="h1",
+                                alerts=[_alert(0)], opened_at=0.0, last_at=0.0)
+    assert collector.reference_time(no_clock, now) == now
+
+    # 미래 시각은 안 믿는다 — 발행 측 시계가 어긋나면 창이 통째로 빗나간다
+    future = inc_mod.Incident(key=("internal", "h1", "disk_space"), host="h1",
+                              alerts=[_alert(now + 99999)], opened_at=0.0, last_at=0.0)
+    assert collector.reference_time(future, now) == now
+
+    # 배선 — 웹훅이 받은 시각이 알림과 대기 기록까지 이어져야 한다. 한 군데만 끊겨도
+    # 재기동 뒤에는 값이 없어 지금 기준으로 떨어진다.
+    import importlib
+    import shutil
+    import tempfile
+
+    from . import app as app_mod, pending
+
+    importlib.reload(app_mod)
+    d = tempfile.mkdtemp(prefix="clock-test-")
+    saved_path = pending.PATH
+    pending.PATH = os.path.join(d, "pending.jsonl")
+    try:
+        class _FakeBg:
+            def __init__(self):
+                self.tasks = []
+
+            def add_task(self, fn, *a, **kw):
+                self.tasks.append((fn, a, kw))
+
+        bg = _FakeBg()
+        app_mod._dispatch(bg, "zabbix-internal", "e9", "t9", "h1", "n", "SEV3",
+                          {"route": "triage", "playbook": ""}, clock=str(now - 3600))
+        alerts = [a[0] for _fn, a, _kw in bg.tasks if a]
+        assert alerts and alerts[0].clock == now - 3600,             f"웹훅이 받은 시각이 알림까지 안 갔다: {alerts[0].clock if alerts else None}"
+        recs = pending.load()
+        assert recs and recs[0].get("clock") == now - 3600,             f"대기 기록에 시각이 없다 — 재기동하면 지금 기준으로 떨어진다: {recs}"
+    finally:
+        pending.PATH = saved_path
+        shutil.rmtree(d, ignore_errors=True)
+    return 5
 
 
 def _wrong_server_checks() -> int:

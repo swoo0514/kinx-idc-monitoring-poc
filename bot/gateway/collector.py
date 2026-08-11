@@ -185,6 +185,23 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
     }
 
 
+def reference_time(incident, now: int) -> int:
+    """로그·보안 조회 창의 기준 시각.
+
+    사건이 난 시각을 알면 그 시각을 쓴다. 재기동 후 대기 알림을 다시 넣으면 받은
+    시각은 새로 찍히지만 사건이 난 시각은 그대로이므로, 이 값이 있어야 실제 로그
+    구간을 본다.
+
+    모르면(0) 지금을 쓴다 — 없는 값을 지어내지 않는다. 미래 시각도 안 믿는다.
+    발행 측 시계가 앞서 있으면 창이 통째로 빗나가는데, 그게 조용히 일어난다.
+    """
+    known = [a.clock for a in getattr(incident, "alerts", []) if getattr(a, "clock", 0)]
+    known = [c for c in known if c <= now + 60]
+    if not known:
+        return now
+    return int(min(known))
+
+
 async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
     """병합 인시던트 컨텍스트 — 알림별 Zabbix 조각 + 호스트 단위 로그·보안 1회.
 
@@ -223,9 +240,14 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         async with httpx.AsyncClient() as c2:
             return await _open_problems(zbx, c2, hid, incident.classes(), exclude, now)
 
+    # 로그·보안은 **사건이 난 시각** 기준으로 본다. 지금 기준으로 잡으면 재기동 후
+    # 다시 넣은 알림에서 실제 장애 구간이 창 밖으로 밀린다.
+    ref = reference_time(incident, now)
+    if ref != now:
+        log.info("조회 기준을 사건 시각으로 맞춘다 host=%s (%d초 전)", zbx_host, now - ref)
     (logs, logs_status), (security, sec_status), (opens, opens_status) = await asyncio.gather(
-        _loki_logs(loki_label, now, zbx_host, source),
-        _wazuh_alerts(wz_label, now, zbx_host, source),
+        _loki_logs(loki_label, ref, zbx_host, source),
+        _wazuh_alerts(wz_label, ref, zbx_host, source),
         _open_probe(),
     )
 
