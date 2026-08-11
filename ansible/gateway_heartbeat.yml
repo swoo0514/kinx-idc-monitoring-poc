@@ -62,6 +62,8 @@
         - { name: "LLM 대기 포기 수(누적)", key: "gateway.llm_queue_timeouts" }
         - { name: "LLM 시간당 상한 차단 수(누적)", key: "gateway.llm_hour_blocked" }
         - { name: "LLM 최근 1시간 호출 수", key: "gateway.llm_calls_1h" }
+        - { name: "LLM 호출 - 트리아지(1시간)", key: "gateway.llm_calls_triage_1h" }
+        - { name: "LLM 호출 - 월간리포트(1시간)", key: "gateway.llm_calls_monthly_1h" }
         - { name: "발동 사유 조회실패(1시간)", key: "gateway.fire_degraded_1h" }
         - { name: "발동 사유 신규(1시간)", key: "gateway.fire_new_1h" }
 

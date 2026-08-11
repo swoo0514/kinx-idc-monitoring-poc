@@ -1322,10 +1322,12 @@ def _llm_concurrency_checks() -> int:
     상한이 안 걸려도 평소에는 아무 증상이 없다. 여러 호스트가 한꺼번에 무너져
     창이 동시에 닫힐 때만 드러나고, 그때는 429 와 비용으로 나타난다.
     """
+    import io
+    import os
     import threading
     import time
 
-    from . import llm
+    from . import egress, llm
 
     ctx = {"prejudge": {"verdict": "신규", "statement": "처음"}, "sources": {}}
 
@@ -1348,12 +1350,12 @@ def _llm_concurrency_checks() -> int:
         def complete(self, _sys, _user):
             raise AssertionError("불러선 안 된다")
 
-    saved = (llm.ClaudeAdapter, llm.OllamaAdapter, llm._sem, llm.MAX_CONCURRENCY,
-             llm.QUEUE_WAIT_S, llm.MAX_PER_HOUR, dict(llm._stats))
+    saved = (llm.ClaudeAdapter, llm.OllamaAdapter, egress._sem, egress.MAX_CONCURRENCY,
+             egress.QUEUE_WAIT_S, egress.MAX_PER_HOUR, dict(egress._stats))
     llm.ClaudeAdapter, llm.OllamaAdapter = _Slow, _Absent
-    llm.MAX_CONCURRENCY = 2
-    llm._sem = threading.BoundedSemaphore(2)
-    llm._stats.update({"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0})
+    egress.MAX_CONCURRENCY = 2
+    egress._sem = threading.BoundedSemaphore(2)
+    egress._stats.update({"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0})
     try:
         out = []
         ts = [threading.Thread(target=lambda: out.append(llm.triage_reply(ctx, "SEV3")))
@@ -1364,46 +1366,67 @@ def _llm_concurrency_checks() -> int:
             t.join(timeout=20)
         assert len(out) == 8, len(out)
         assert all(not r["degraded"] for r in out), "상한을 걸어도 전부 성공해야"
-        st = llm.stats()
+        st = egress.stats()
         assert st["peak_inflight"] <= 2, f"동시 호출이 상한을 넘었다: {st}"
         assert st["peak_inflight"] >= 2, f"직렬로만 돌았다 — 상한 자체가 무의미: {st}"
         assert st["inflight"] == 0, st
         assert st["queue_timeouts"] == 0, st
 
         # 자리를 못 잡으면 던지지 않고 열화로 내려간다 — 알림이 사라지면 안 된다
-        llm.QUEUE_WAIT_S = 0.01
-        llm._sem = threading.BoundedSemaphore(1)
-        llm._sem.acquire()          # 자리를 미리 다 차지한다
+        egress.QUEUE_WAIT_S = 0.01
+        egress._sem = threading.BoundedSemaphore(1)
+        egress._sem.acquire()          # 자리를 미리 다 차지한다
         r = llm.triage_reply(ctx, "SEV3")
         assert r["degraded"] is True and r["provider"] == "none", r
         assert "대기를 포기" in r["text"], r["text"]
         assert "처음" in r["text"], "열화여도 코드 판정은 실어야"
-        assert llm.stats()["queue_timeouts"] == 1, llm.stats()
+        assert egress.stats()["queue_timeouts"] == 1, egress.stats()
 
         # 시간당 총량 — 동시 수를 눌러도 폭풍이 길게 이어지면 총량은 계속 는다.
         # 게이트가 아니라 여기서 세므로, 게이트 규칙이 몇 개든 구멍이 안 생긴다.
-        llm._sem = threading.BoundedSemaphore(2)
-        llm.QUEUE_WAIT_S = 5
-        llm.MAX_PER_HOUR = 3
-        llm._calls.clear()
-        llm._stats["hour_blocked"] = 0
+        egress._sem = threading.BoundedSemaphore(2)
+        egress.QUEUE_WAIT_S = 5
+        egress.MAX_PER_HOUR = 3
+        egress._calls.clear()
+        egress._stats["hour_blocked"] = 0
         assert [llm.triage_reply(ctx, "SEV3")["degraded"] for _ in range(3)] == [False] * 3
         blocked = llm.triage_reply(ctx, "SEV3")
         assert blocked["degraded"] is True, "상한을 넘겼는데 호출됐다"
         assert "1시간 호출이 상한" in blocked["text"], blocked["text"]
-        assert llm.stats()["hour_blocked"] == 1, llm.stats()
+        assert egress.stats()["hour_blocked"] == 1, egress.stats()
         # 위중한 사건은 상한을 안 받는다 — 폭풍 때 정작 위중한 것이 막히면 사고가 커진다
         assert llm.triage_reply(ctx, "SEV1")["degraded"] is False, "SEV1 이 상한에 막혔다"
         # 1시간이 지나면 창이 비므로 다시 부른다
-        llm._calls[:] = [t - 3601 for t in llm._calls]
+        egress._calls[:] = [t - 3601 for t in egress._calls]
         assert llm.triage_reply(ctx, "SEV3")["degraded"] is False, "1시간 뒤엔 회복해야"
+
+        # 월간 리포트도 같은 출구를 지나야 한다. 예전에는 이 경로가 어댑터를 직접
+        # 불러서 상한 밖에 있었고, 코드를 읽기 전까지 그 사실이 드러나지 않았다.
+        # 나가는 길이 하나라는 것은 주장이 아니라 검사로 붙들어야 한다.
+        egress._calls.clear()
+        egress._by_kind.clear()
+        r = llm.monthly_reply({"report.sev1": 1}, [{"host": "h1", "name": "n"}])
+        assert r["degraded"] is False, r
+        assert egress.kind_counts() == {"monthly": 1}, egress.kind_counts()
+        # 총량이 차면 월간도 막힌다 — 위중 면제는 트리아지의 SEV1 에만 있다
+        egress.MAX_PER_HOUR = 1
+        r2 = llm.monthly_reply({"report.sev1": 1}, [])
+        assert r2["degraded"] is True and "상한" in r2["text"], r2["text"]
+        assert "집계 수치는 유효" in r2["text"], "리포트는 수치가 살아 있어야"
+
+        # 어댑터를 직접 부르는 코드가 남아 있으면 출구가 하나가 아니다
+        import re
+        src = io.open(os.path.join(os.path.dirname(__file__), "llm.py"),
+                      encoding="utf-8").read()
+        assert not re.search(r"^\s+for adapter in ", src, re.M), \
+            "llm.py 에 어댑터 반복문이 남아 있다 — 출구를 우회하는 경로다"
     finally:
-        (llm.ClaudeAdapter, llm.OllamaAdapter, llm._sem, llm.MAX_CONCURRENCY,
-         llm.QUEUE_WAIT_S, llm.MAX_PER_HOUR, restore) = saved
-        llm._calls.clear()
-        llm._stats.clear()
-        llm._stats.update(restore)
-    return 17
+        (llm.ClaudeAdapter, llm.OllamaAdapter, egress._sem, egress.MAX_CONCURRENCY,
+         egress.QUEUE_WAIT_S, egress.MAX_PER_HOUR, restore) = saved
+        egress._calls.clear()
+        egress._stats.clear()
+        egress._stats.update(restore)
+    return 24
 
 
 def _registry_checks() -> int:

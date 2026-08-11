@@ -198,12 +198,17 @@ class Beat:
         # LLM 혼잡. 상한에 밀려 열화로 내려간 건수가 늘면 분석 품질이 조용히 떨어진
         # 것이므로 밖에서 보여야 한다. 값을 못 읽어도 생존 신호는 계속 보낸다.
         try:
-            from . import incident, llm
-            st = llm.stats()
+            from . import egress, incident
+            st = egress.stats()
             out["gateway.llm_peak_inflight"] = st["peak_inflight"]
             out["gateway.llm_queue_timeouts"] = st["queue_timeouts"]
             out["gateway.llm_hour_blocked"] = st["hour_blocked"]
-            out["gateway.llm_calls_1h"] = llm.calls_last_hour(now)
+            out["gateway.llm_calls_1h"] = egress.calls_last_hour(now)
+            # 용도별로 나눠 본다. 총량이 찼을 때 트리아지가 쓴 것인지 리포트가 쓴
+            # 것인지 모르면 상한을 올릴지 리포트를 옮길지 정할 수 없다.
+            kc = egress.kind_counts(now)
+            out["gateway.llm_calls_triage_1h"] = kc.get("triage", 0)
+            out["gateway.llm_calls_monthly_1h"] = kc.get("monthly", 0)
             # 무엇 때문에 분석이 돌았는지. 조회 실패 쪽이 치솟으면 봇이 아니라
             # 관측 소스를 고쳐야 한다는 신호다. 예전에는 이 신호가 조용한 차단으로
             # 나타나 밖에서 보이지 않았다.

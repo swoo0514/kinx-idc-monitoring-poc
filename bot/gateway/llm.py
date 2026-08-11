@@ -8,9 +8,9 @@
 import json
 import logging
 import os
-import threading
 import time
 
+from . import egress
 from .masking import Masker, build_llm_context
 
 log = logging.getLogger("gateway.llm")
@@ -166,95 +166,30 @@ def monthly_reply(stats: dict, incidents: list) -> dict:
     payload = build_monthly_context(stats, incidents, masker)
     user = ("다음은 한 고객사의 한 달치 사건 집계다. 월간 리포트의 분석 절을 작성하라.\n\n"
             + json.dumps(payload, ensure_ascii=False, indent=1))
-    t0 = time.monotonic()
-    for adapter in (ClaudeAdapter(), OllamaAdapter()):
-        if not adapter.available():
-            continue
-        try:
-            text = adapter.complete(MONTHLY_SYSTEM, user)
-            return {"text": masker.unmask(text), "provider": adapter.name,
-                    "elapsed_s": round(time.monotonic() - t0, 2), "degraded": False}
-        except Exception as e:
-            log.warning("monthly adapter %s failed: %s", adapter.name, e)
+    res = egress.call(_adapters(), MONTHLY_SYSTEM, user, kind="monthly")
+    if not res["degraded"]:
+        return {**res, "text": masker.unmask(res["text"])}
     # 열화 — 리포트는 실시간이 아니므로 빈 문장 대신 "생성 실패"를 그대로 남긴다.
-    return {"text": "(월간 분석 생성 실패 — LLM 응답 없음. 집계 수치는 유효하다.)",
-            "provider": "none", "elapsed_s": round(time.monotonic() - t0, 2), "degraded": True}
+    # 무엇 때문에 못 만들었는지까지 남긴다. 리포트는 고객에게 나가므로 "실패"만
+    # 적혀 있으면 다시 돌려야 할지 기다려야 할지 판단할 수 없다.
+    return {**res, "text": f"(월간 분석 생성 실패 — {_reason_text(res['reason'])}. "
+                           "집계 수치는 유효하다.)"}
 
 
-# 동시에 나가는 호출 수 상한. 발동 게이트에 시간당 예산이 있지만 경로 5종 중
-# 3종(SEV1·병합·교차 신호)은 그것도 안 거치고, 예산은 건수 제한이라 동시 호출 수를
-# 제어하지 않는다. 여러 호스트가 한꺼번에 무너지면 대기 창도 비슷한 시각에 닫혀
-# 호출이 몰린다. 값 산정 근거는 GATEWAY_GUIDE §21.
-MAX_CONCURRENCY = int(os.environ.get("LLM_MAX_CONCURRENCY", "3"))
-# 자리를 기다리는 상한. 무한정 기다리면 스레드가 대기로 가득 차 Slack 게시 같은
-# 다른 일까지 멈춘다. 넘기면 기다리지 않고 열화 모드로 내려간다.
-QUEUE_WAIT_S = float(os.environ.get("LLM_QUEUE_WAIT_S", "60"))
-# 시간당 총량. 동시 수를 눌러도 폭풍이 길게 이어지면 총량은 계속 는다.
-#
-# 이 상한을 게이트가 아니라 여기에 두는 이유가 있다. 게이트에 두면 규칙 가지마다
-# 한도를 걸어야 하고, 규칙을 추가할 때 빠뜨리면 조용히 구멍이 난다(예전 구조가
-# 그랬다). 호출이 실제로 나가는 지점은 하나뿐이므로 여기서 세면 규칙이 몇 개든
-# 구멍이 안 생긴다. 값 산정 근거는 GATEWAY_GUIDE §21.
-MAX_PER_HOUR = int(os.environ.get("LLM_MAX_PER_HOUR", "200"))
-
-_sem = threading.BoundedSemaphore(MAX_CONCURRENCY)
-_calls: list = []          # 최근 1시간 호출 시각
-_stats = {"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0, "hour_blocked": 0}
-_stats_lock = threading.Lock()
+def _adapters():
+    """폴백 순서. 두 경로가 같은 체인을 쓰도록 한 곳에 둔다."""
+    return (ClaudeAdapter(), OllamaAdapter())
 
 
-def stats() -> dict:
-    """혼잡 상태. 밀린 사실을 세지 않으면 분석 품질만 조용히 내려간다."""
-    with _stats_lock:
-        return dict(_stats)
-
-
-def calls_last_hour(now: float = None) -> int:
-    now = time.time() if now is None else now
-    with _stats_lock:
-        _calls[:] = [t for t in _calls if now - t <= 3600]
-        return len(_calls)
-
-
-def _take_hour(exempt: bool, now: float = None) -> bool:
-    """시간당 총량에서 한 칸 쓴다. 남았으면 True.
-
-    exempt 는 위중한 사건이다. 총량과 무관하게 통과시킨다 — 폭풍 때 정작 위중한
-    것이 막히면 상한이 사고를 키운다. 대신 쓴 것은 똑같이 센다.
-    """
-    now = time.time() if now is None else now
-    with _stats_lock:
-        _calls[:] = [t for t in _calls if now - t <= 3600]
-        if not exempt and len(_calls) >= MAX_PER_HOUR:
-            _stats["hour_blocked"] += 1
-            return False
-        _calls.append(now)
-        return True
-
-
-def _enter():
-    with _stats_lock:
-        _stats["inflight"] += 1
-        _stats["peak_inflight"] = max(_stats["peak_inflight"], _stats["inflight"])
-
-
-def _leave():
-    with _stats_lock:
-        _stats["inflight"] -= 1
-
-
-def _ask(user: str, masker: Masker, t0: float):
-    """어댑터 체인 호출. 성공하면 회신 dict, 전부 실패하면 None."""
-    for adapter in (ClaudeAdapter(), OllamaAdapter()):
-        if not adapter.available():
-            continue
-        try:
-            text = adapter.complete(TRIAGE_SYSTEM, user)
-            return {"text": masker.unmask(text), "provider": adapter.name,
-                    "elapsed_s": round(time.monotonic() - t0, 2), "degraded": False}
-        except Exception as e:  # 타임아웃·429·529 포함 — 전부 다음 어댑터로 폴백
-            log.warning("llm adapter %s failed: %s", adapter.name, e)
-    return None
+def _reason_text(reason: str) -> str:
+    """열화 사유를 사람 문장으로. 왜 없는지가 안 적히면 이유를 물어봐야 한다."""
+    if reason == egress.BLOCKED_HOUR:
+        return (f"최근 1시간 호출이 상한 {egress.MAX_PER_HOUR}건에 닿아 부르지 않았다."
+                " 폭주 제동이며, 위중(SEV1) 사건은 이 상한을 받지 않는다")
+    if reason == egress.BLOCKED_QUEUE:
+        return (f"동시 호출 {egress.MAX_CONCURRENCY}건이 {egress.QUEUE_WAIT_S:.0f}초 넘게"
+                " 차 있어 대기를 포기했다")
+    return "LLM 응답 없음"
 
 
 def triage_reply(context: dict, sev: str) -> dict:
@@ -262,30 +197,13 @@ def triage_reply(context: dict, sev: str) -> dict:
     masker = Masker()
     masked = build_llm_context(context, sev, masker)
     user = build_user_prompt(masked)
-    t0 = time.monotonic()
 
-    note = ""
-    if not _take_hour(sev == "SEV1"):
-        note = (f" — 최근 1시간 호출이 상한 {MAX_PER_HOUR}건에 닿아 이번 건은 부르지 않았다."
-                " 폭주 제동이며, 위중(SEV1) 사건은 이 상한을 받지 않는다")
-        log.warning("llm 시간당 상한 도달 — %d건/1h. 열화 모드로 회신한다", MAX_PER_HOUR)
-    elif _sem.acquire(timeout=QUEUE_WAIT_S):
-        _enter()
-        try:
-            got = _ask(user, masker, t0)
-        finally:
-            _leave()
-            _sem.release()
-        if got:
-            return got
-    else:
-        with _stats_lock:
-            _stats["queue_timeouts"] += 1
-        note = (f" — 동시 호출 {MAX_CONCURRENCY}건이 {QUEUE_WAIT_S:.0f}초 넘게 차 있어"
-                " 대기를 포기했다")
-        log.warning("llm 대기 초과 — 동시 상한 %d, 대기 %.0fs. 열화 모드로 회신한다",
-                    MAX_CONCURRENCY, QUEUE_WAIT_S)
+    res = egress.call(_adapters(), TRIAGE_SYSTEM, user,
+                      exempt=(sev == "SEV1"), kind="triage")
+    if not res["degraded"]:
+        return {**res, "text": masker.unmask(res["text"])}
 
+    note = f" — {_reason_text(res['reason'])}" if res["reason"] != egress.BLOCKED_NONE else ""
     inc = context.get("incident")
     if inc:
         text = (f"(LLM 분석 불가 — 코드 판정만 회신{note})\n"
@@ -294,8 +212,7 @@ def triage_reply(context: dict, sev: str) -> dict:
         pj = context.get("prejudge") or {}
         text = (f"(LLM 분석 불가 — 코드 판정만 회신{note})\n"
                 f"판정: {pj.get('verdict', '?')} — {pj.get('statement', '')}")
-    return {"text": text, "provider": "none",
-            "elapsed_s": round(time.monotonic() - t0, 2), "degraded": True}
+    return {**res, "text": text}
 
 
 if __name__ == "__main__":
