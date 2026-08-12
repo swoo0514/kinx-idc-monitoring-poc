@@ -114,6 +114,17 @@ DASH = {
     "editable": True,
     "graphTooltip": 0,
     "templating": {"list": []},
+    # 대시보드 기본 주석 질의는 그 대시보드에 붙은 주석만 가져온다. 봇이 남기는 것은
+    # 대시보드를 지정하지 않은 조직 주석이라, 태그로 가져오는 질의를 따로 넣어야 뜬다.
+    # 넣지 않으면 발행은 200 인데 화면에는 아무것도 없다.
+    "annotations": {"list": [
+        {"builtIn": 1, "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+         "enable": True, "hide": True, "iconColor": "rgba(0, 211, 255, 1)",
+         "name": "Annotations & Alerts", "type": "dashboard"},
+        {"datasource": {"type": "grafana", "uid": "-- Grafana --"}, "enable": True,
+         "hide": False, "iconColor": "purple", "name": "봇 판정",
+         "target": {"limit": 100, "matchAny": False, "tags": ["kinx-bot"],
+                    "type": "tags"}}]},
     "panels": P,
 }
 
