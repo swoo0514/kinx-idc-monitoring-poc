@@ -16,14 +16,20 @@
 #      알림 자체를 만들지 않는다(공식: 액션 동작은 수신자의 미디어를 통해 발송된다)
 #   3) 같은 이름의 액션이 없을 때만 만든다
 #
-# 실행:
-#   ansible-playbook zabbix_gateway_action.yml -e @lab_vars.yml
-# 필요한 변수: zabbix_api_url, zabbix_api_token(쓰기 권한)
+# 실행 (주소는 bot/.env, 토큰은 화면에 안 찍히게 직접 입력):
+#   set -a && . ../bot/.env && set +a
+#   read -s -p "token: " ZABBIX_API_TOKEN && export ZABBIX_API_TOKEN && echo
+#   ansible-playbook zabbix_gateway_action.yml
+# 미디어타입 이름이 다르면 GATEWAY_MEDIATYPE_NAME 으로 넘긴다(랩은 'Gateway webhook').
 - name: Wire a Zabbix trigger action to the gateway media type
   hosts: localhost
   gather_facts: false
   vars:
-    mediatype_name: "KINX Gateway"
+    # 주소·토큰은 환경 변수에서 받는다(quality_metrics.yml 과 같은 방식). -e 로 넘기면
+    # 토큰이 프로세스 인자에 남아 ps 로 보인다.
+    zabbix_api_url: "{{ lookup('env', 'ZABBIX_URL') }}"
+    zabbix_api_token: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+    mediatype_name: "{{ lookup('env', 'GATEWAY_MEDIATYPE_NAME') | default('KINX Gateway', true) }}"
     action_name: "KINX Gateway 알림 전달"
     action_user: "Admin"
     # 심각도 비트마스크. 기본 63 = 전체 — 무엇을 버릴지는 게이트웨이의 라우팅이 정한다.
@@ -39,7 +45,9 @@
           - zabbix_api_url is defined and zabbix_api_url | length > 0
           - zabbix_api_token is defined and zabbix_api_token | length > 0
         fail_msg: >-
-          zabbix_api_url · zabbix_api_token 이 필요하다 (-e @lab_vars.yml).
+          ZABBIX_URL 과 ZABBIX_API_TOKEN 이 환경에 있어야 한다.
+          주소는 bot/.env 에 있으므로 `set -a && . ../bot/.env && set +a` 로 불러오고,
+          토큰은 `read -s -p "token: " ZABBIX_API_TOKEN && export ZABBIX_API_TOKEN` 로 넣는다.
           토큰은 쓰기 권한이 있어야 한다 — 게이트웨이의 조회 전용 토큰으로는 막힌다.
 
     - name: 미디어타입 조회
