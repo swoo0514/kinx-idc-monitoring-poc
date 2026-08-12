@@ -1,0 +1,35 @@
+# 심층조사 도구 툴셋. 주소·토큰은 전부 환경변수 참조 — 리포에 랩 값을 넣지 않는다.
+# 기동 절차는 bot/GATEWAY_GUIDE.md §23-10.
+toolsets:
+  zabbix:
+    type: http
+    enabled: true
+    description: "Zabbix monitoring (lab)"
+    config:
+      endpoints:
+        - hosts: ["{{ env.ZABBIX_HOSTPORT }}"]
+          paths: ["/api_jsonrpc.php"]
+          methods: ["POST"]
+          auth:
+            type: bearer
+            token: "{{ env.ZABBIX_TOKEN }}"
+    llm_instructions: |
+      Use the zabbix_request tool to query Zabbix via its JSON-RPC 2.0 API.
+      Send POST requests to {{ env.ZABBIX_URL }}/api_jsonrpc.php with body:
+        {"jsonrpc":"2.0","method":"<method>","params":{...},"id":1}
+      This is Zabbix 7.0: do NOT put an "auth" field in the body; the Bearer token header handles auth.
+      Always set a "limit" param. Use Unix timestamps for time fields.
+      Useful methods: problem.get, trigger.get, item.get, history.get, event.get, host.get.
+  grafana/loki:
+    enabled: true
+    config:
+      api_url: "{{ env.LOKI_URL }}"
+  opensearch/logs:
+    enabled: true
+    config:
+      opensearch_url: "{{ env.WAZUH_INDEXER_URL }}"
+      index_pattern: "wazuh-alerts-*"
+      opensearch_auth_header: "Basic {{ env.WAZUH_BASIC_AUTH }}"
+      verify_certs: false
+      ssl_assert_hostname: false
+      ssl_show_warn: false

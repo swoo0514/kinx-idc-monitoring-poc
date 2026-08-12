@@ -832,3 +832,26 @@ export ANTHROPIC_API_KEY="<게이트웨이 토큰>"
 | `LLM_PROXY_TIMEOUT_S` | 120 | 상류 응답 대기 |
 
 **상한을 분리한 사유:** 조사 1회가 모델을 약 30회 호출합니다(벤치마크 실측). 기본 상한 200 을 공유할 경우 조사 6~7회로 예산이 소진되어 실시간 트리아지가 차단됩니다. **동시 호출 제한은 공유합니다** — 스레드 점유와 429 를 방지하는 장치이므로 분리 시 의미가 없습니다.
+
+### 23-10. 심층조사 도구 기동
+
+도구는 `lab/holmes/docker-compose.yml` 로 기동합니다. 종전에는 VM 에서 `docker run` 으로 직접 실행하여 기동 명령과 툴셋 설정이 리포지토리에 존재하지 않았습니다(2026-08-12 확인). 해당 VM 이 소실되면 재현이 불가능한 상태였습니다.
+
+```bash
+cd lab/holmes
+export ANTHROPIC_API_BASE="http://127.0.0.1:8800"   # 게이트웨이 수신 지점
+export GATEWAY_TOKEN="..."                          # 도구 → 게이트웨이 인증
+export ZABBIX_URL="http://127.0.0.1:8080"
+export ZABBIX_HOSTPORT="127.0.0.1:8080"
+export LOKI_URL="http://127.0.0.1:3100"
+export WAZUH_INDEXER_URL="https://..."
+export WAZUH_BASIC_AUTH="..."                       # base64(user:pass)
+export ZABBIX_TOKEN="..."                           # 조회 전용
+docker compose up -d
+```
+
+**진짜 상류 키를 부여하지 않습니다.** `ANTHROPIC_API_KEY` 자리에 게이트웨이 토큰이 들어갑니다. 도구가 기준 주소를 되돌려도 상류 인증이 성립하지 않으므로 우회가 차단됩니다(§23-7).
+
+`config.yaml` 은 읽기 전용으로 마운트하며 주소·자격 증명은 전부 환경 변수 참조입니다. 도구가 생성하는 상태 파일(`config_hashes`·`toolsets_status.json`)은 컨테이너 내부에만 존재하며 재생성 가능합니다.
+
+**툴셋 변경 후에는 캐시를 새로 읽혀야 합니다** — 커스텀 툴셋이 캐시 로드 시 누락되어 직전까지 동작하던 조사가 실패한 사례가 있습니다(벤치마크 기록).

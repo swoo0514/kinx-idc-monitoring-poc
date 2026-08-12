@@ -1,0 +1,22 @@
+# 심층조사 도구(HolmesGPT) 서버 모드. 기동·검증은 bot/GATEWAY_GUIDE.md §23-10.
+services:
+  holmes:
+    image: us-central1-docker.pkg.dev/genuine-flight-317411/devel/holmes:${HOLMES_IMAGE_TAG:-latest}
+    container_name: holmes-server
+    restart: unless-stopped
+    network_mode: host
+    working_dir: /app
+    entrypoint: ["python"]
+    command: ["-u", "server.py"]
+    environment:
+      HOLMES_PORT: "${HOLMES_PORT:-5050}"
+      MODEL: "${HOLMES_MODEL:-anthropic/claude-sonnet-4-6}"
+      # 상류로 직접 나가지 않고 게이트웨이 수신 지점을 거친다 (§23-9).
+      # 여기 진짜 상류 키를 넣지 않는다 — 넣으면 우회가 가능해진다.
+      ANTHROPIC_API_BASE: "${ANTHROPIC_API_BASE:?게이트웨이 주소를 지정한다}"
+      ANTHROPIC_API_KEY: "${GATEWAY_TOKEN:?게이트웨이 토큰을 지정한다}"
+      ZABBIX_TOKEN: "${ZABBIX_TOKEN:?}"
+      WAZUH_BASIC_AUTH: "${WAZUH_BASIC_AUTH:-}"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./config.yaml:/root/.holmes/config.yaml:ro
