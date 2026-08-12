@@ -21,6 +21,7 @@ from . import pending
 from . import proxy as llm_proxy
 from . import registry
 from . import router as tag_router
+from . import store
 from . import severity
 from . import slack
 from . import triage
@@ -81,6 +82,8 @@ async def _start_heartbeat():
     else:
         log.info("호스트 명부 %s — 호스트 %d건 / 감시 서버 %s",
                  st["path"], st["entries"], registry.source_names() or "미기재(단일)")
+    if store.init():
+        store.prune()
     _beat.start()
     # 이름 표는 조회가 몇 초 걸리므로 별도 스레드에서 만든다. 만들어지기 전에도
     # 캐시가 있으면 그걸로 돌고, 없으면 오늘까지의 동작(맥락 기반 등록)으로 돈다.
@@ -139,6 +142,11 @@ def _duplicate(key: tuple) -> bool:
     낡은 항목을 지우는 순회도 같은 잠금 안에 둔다. 순회 중에 다른 스레드가 넣으면
     사전 크기가 바뀌어 예외가 나고, 그 알림은 500 으로 거절된다.
     """
+    # 저장소가 열려 있으면 그쪽이 정본이다 — 재기동해도 창이 남는다 (§24-3).
+    # 못 쓰면 메모리로 떨어진다. 그때도 알림은 흘러야 한다.
+    if store.status()["open"]:
+        return not store.seen_once("|".join(str(x) for x in key),
+                                   ttl_s=IDEMPOTENCY_TTL_S)
     now = time.monotonic()
     with _seen_lock:
         for k in [k for k, ts in _seen.items() if now - ts > IDEMPOTENCY_TTL_S]:

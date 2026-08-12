@@ -279,6 +279,7 @@ def main():
     tenant_checks = _tenant_scope_checks()
     nametable_checks = _nametable_checks()
     proxy_checks = _proxy_mask_checks()
+    store_checks = _store_checks()
     collect_fail_checks = _collect_failure_checks()
     wrong_srv_checks = _wrong_server_checks()
     evt_time_checks = _event_time_checks()
@@ -295,7 +296,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + timer_checks + holmes_eg_checks + tenant_checks + collect_fail_checks + nametable_checks + proxy_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + timer_checks + holmes_eg_checks + tenant_checks + collect_fail_checks + nametable_checks + proxy_checks + store_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1555,6 +1556,103 @@ def _nametable_checks() -> int:
         nametable._terms = saved2
 
     return 15
+
+
+def _store_checks() -> int:
+    """판정 이력 저장소 — 남기고, 세고, 재기동을 견디는가 (§24)."""
+    import os
+    import shutil
+    import tempfile
+
+    from . import store
+
+    d = tempfile.mkdtemp(prefix="store-test-")
+    saved = store.PATH
+    try:
+        store.PATH = os.path.join(d, "hist.db")
+        store.init()
+
+        # ① 판정 한 건을 남기고 되읽는다
+        store.record_judgment({
+            "fingerprint": "fp1", "host": "h1", "realm": "internal",
+            "source": "zabbix-internal", "classes": "disk_space", "alert_count": 2,
+            "sev": "SEV2", "verdict": "만성", "gate_fired": 1,
+            "gate_reason": "2건 병합", "sources": "logs:ok,security:ok",
+            "provider": "claude", "degraded": 0, "total_s": 21.4,
+        }, now=1000.0)
+        rows = store.judgments(since=0, now=2000.0)
+        assert len(rows) == 1, rows
+        assert rows[0]["fingerprint"] == "fp1" and rows[0]["verdict"] == "만성", rows[0]
+
+        # ② 중복 판정 — 같은 키는 한 번만 통과하고 창이 지나면 다시 통과
+        assert store.seen_once("k1", ttl_s=3600, now=1000.0) is True
+        assert store.seen_once("k1", ttl_s=3600, now=1100.0) is False
+        assert store.seen_once("k1", ttl_s=3600, now=1000.0 + 3601) is True
+
+        # ③ 호출 창 — 시간이 지나면 빠진다
+        for i in range(5):
+            store.record_call("triage", now=1000.0 + i)
+        assert store.calls_since(3600, now=1010.0) == 5
+        assert store.calls_since(3600, now=1000.0 + 3700) == 0
+        assert store.calls_since(3600, now=1010.0, kind="triage") == 5
+        assert store.calls_since(3600, now=1010.0, kind="monthly") == 0
+
+        # ④ 재기동을 견딘다 — 이게 이 저장소의 존재 이유다
+        store.close()
+        store.init()
+        assert store.calls_since(3600, now=1010.0) == 5, "재기동에 호출 창이 사라졌다"
+        assert store.seen_once("k1", ttl_s=3600, now=1100.0) is False,             "재기동에 중복 판정 창이 사라졌다"
+        assert len(store.judgments(since=0, now=2000.0)) == 1
+
+        # ⑤ 저장소를 못 쓰면 조용히 멈추지 않는다
+        store.close()
+        # 없는 디렉토리는 코드가 만들어 주므로 실패가 아니다. 디렉토리 자체를 지정한다.
+        store.PATH = d
+        assert store.init() is False, "쓸 수 없는 경로인데 성공으로 봤다"
+        assert store.record_judgment({"fingerprint": "fp2"}) is False
+        assert store.seen_once("k2", ttl_s=10) is True, "저장소가 죽어도 알림은 흘러야"
+
+        # ⑥ 배선 — 사건을 마감하면 이력이 남는가. 함수가 아니라 경로를 본다.
+        import asyncio
+        import time as _t
+
+        from . import incident as inc_mod, triage
+
+        store.PATH = os.path.join(d, "wire.db")
+        store.close()
+        store.init()
+        inc = inc_mod.Incident(
+            key=("internal", "h9", "disk_space"), host="h9",
+            alerts=[inc_mod.Alert(source="zabbix-internal", event_id="e9",
+                                  trigger_id="", host="h9", alert_name="n",
+                                  sev="SEV3", incident_class="disk_space",
+                                  recv=_t.monotonic())],
+            opened_at=_t.monotonic(), last_at=_t.monotonic())
+
+        class _DeadZbx:
+            source = "zabbix-internal"
+
+            async def call(self, *a, **kw):
+                raise RuntimeError("down")
+
+        saved_keep = os.environ.pop("KEEP_URL", None)
+        saved_slack = os.environ.pop("SLACK_BOT_TOKEN", None)
+        try:
+            asyncio.run(triage.run_incident(inc))
+        finally:
+            if saved_keep is not None:
+                os.environ["KEEP_URL"] = saved_keep
+            if saved_slack is not None:
+                os.environ["SLACK_BOT_TOKEN"] = saved_slack
+        rows = store.judgments(since=0)
+        assert rows, "사건을 마감했는데 이력이 안 남았다"
+        assert rows[0]["fingerprint"] == inc.fingerprint(), rows[0]
+        assert rows[0]["gate_reason"], rows[0]
+        return 18
+    finally:
+        store.close()
+        store.PATH = saved
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def _proxy_mask_checks() -> int:

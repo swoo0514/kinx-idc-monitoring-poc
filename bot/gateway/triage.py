@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 
-from . import collector, holmes, incident as incident_mod, keep, llm, slack
+from . import collector, holmes, incident as incident_mod, keep, llm, slack, store
 
 log = logging.getLogger("gateway.triage")
 
@@ -100,6 +100,26 @@ def analyze_ref(inc) -> str:
                     for a in inc.alerts)
 
 
+def _record(inc, context, sev, fired, reason, reply, timings) -> None:
+    """판정을 이력에 남긴다 (§24). 실패해도 흐름을 막지 않는다."""
+    try:
+        store.record_judgment({
+            "fingerprint": inc.fingerprint(), "host": inc.host,
+            "realm": inc.key[0] if inc.key else "",
+            "source": inc.alerts[0].source if inc.alerts else "",
+            "classes": ",".join(sorted(inc.classes())),
+            "alert_count": len(inc.alerts), "sev": sev,
+            "verdict": incident_mod.dominant_verdict(context) or "",
+            "gate_fired": 1 if fired else 0, "gate_reason": reason,
+            "sources": _sources_note(context),
+            "provider": (reply or {}).get("provider", ""),
+            "degraded": 1 if (reply or {}).get("degraded") else 0,
+            "total_s": timings.get("total_s"),
+        })
+    except Exception as e:
+        log.warning("판정 이력 기록 실패: %s", e)
+
+
 async def run_incident(inc, force: bool = False) -> dict:
     """병합 인시던트 트리아지 — 창 마감 후 IncidentManager.on_close 가 호출. 30초 예산 기준점.
 
@@ -136,6 +156,7 @@ async def run_incident(inc, force: bool = False) -> dict:
     if not fire:
         await asyncio.to_thread(_push_gated, inc, context, reason)
         timings["total_s"] = round(time.monotonic() - t0, 2)
+        _record(inc, context, sev, False, reason, None, timings)
         log.info("gate skip fp=%s alerts=%d reason=%s timings=%s",
                  inc.fingerprint(), len(inc.alerts), reason, timings)
         return {"fingerprint": inc.fingerprint(), "alert_count": len(inc.alerts),
@@ -183,6 +204,7 @@ async def run_incident(inc, force: bool = False) -> dict:
             sev, fp, anchor or posted.get("ts")))
 
     timings["total_s"] = round(time.monotonic() - t0, 2)
+    _record(inc, context, sev, True, reason, reply, timings)
     log.info("incident triage done fp=%s alerts=%d provider=%s degraded=%s timings=%s",
              inc.fingerprint(), n, reply["provider"], reply["degraded"], timings)
     return {"fingerprint": inc.fingerprint(), "alert_count": n,

@@ -22,6 +22,8 @@ import os
 import threading
 import time
 
+from . import store
+
 log = logging.getLogger("gateway.egress")
 
 # 동시에 나가는 호출 수. 여러 호스트가 한꺼번에 무너지면 대기 창도 비슷한 시각에
@@ -81,6 +83,13 @@ def _hour_ok(exempt: bool, now: float = None, cap: int = None) -> bool:
     것이 막히면 상한이 사고를 키운다. 대신 쓴 것은 똑같이 센다.
     """
     now = time.time() if now is None else now
+    if store.status()["open"]:
+        used = store.calls_since(3600, now)
+        if not exempt and used >= (MAX_PER_HOUR if cap is None else cap):
+            with _lock:
+                _stats["hour_blocked"] += 1
+            return False
+        return True
     with _lock:
         _calls[:] = [t for t in _calls if now - t <= 3600]
         if not exempt and len(_calls) >= (MAX_PER_HOUR if cap is None else cap):
@@ -101,6 +110,7 @@ def _record(kind: str, now: float = None) -> None:
     (MAX_CONCURRENCY)만큼이라 총량 대비 무시할 수 있다.
     """
     now = time.time() if now is None else now
+    store.record_call(kind or "?", now)
     with _lock:
         _calls[:] = [t for t in _calls if now - t <= 3600]
         _calls.append(now)
