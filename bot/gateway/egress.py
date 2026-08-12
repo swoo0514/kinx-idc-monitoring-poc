@@ -136,7 +136,7 @@ def _leave():
 
 
 class Blocked(Exception):
-    """제한에 걸려 나가지 못했다. reason 은 BLOCKED_* 중 하나 (§21)."""
+    """제한에 걸려 나가지 못했다. reason 은 BLOCKED_* 중 하나."""
 
     def __init__(self, reason: str):
         super().__init__(reason)
@@ -145,11 +145,7 @@ class Blocked(Exception):
 
 @contextlib.contextmanager
 def guard(kind: str = "", exempt: bool = False, max_per_hour: int = None):
-    """동시 수·시간당 총량을 걸고 실제 발신 직전에 센다 (§21).
-
-    `call` 이 쓰던 것을 그대로 뺐다. 프록시는 멀티턴 요청을 그대로 중계하므로
-    `(system, user) -> str` 계약에 안 맞는다. 제한만 따로 쓴다.
-    """
+    """동시 수·시간당 총량을 걸고 실제 발신 직전에 센다 (§21-2)."""
     if not _hour_ok(exempt, cap=max_per_hour):
         log.warning("시간당 상한 도달 — %d건/1h (용도 %s)",
                     max_per_hour or MAX_PER_HOUR, kind or "?")

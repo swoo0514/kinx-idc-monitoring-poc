@@ -179,11 +179,7 @@ def healthz():
 @app.post("/v1/messages")
 async def llm_messages(req: Request, x_api_key: str = Header(default=""),
                        x_gateway_token: str = Header(default="")):
-    """외부 도구용 마스킹 수신 지점 (GATEWAY_GUIDE §23).
-
-    비동기인 이유는 상류 응답을 수십 초 기다리기 때문이다. 동기로 두면 그동안 워커
-    스레드를 잡아 Slack 게시·Keep 기록까지 멈춘다.
-    """
+    """외부 도구용 마스킹 수신 지점 (§23). 비동기인 이유는 §23-2."""
     if not (_token_ok(x_gateway_token) or _token_ok(x_api_key)):
         raise HTTPException(status_code=401, detail="invalid token")
     try:
