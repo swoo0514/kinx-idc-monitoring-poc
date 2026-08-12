@@ -27,7 +27,17 @@
   vars:
     # 주소·토큰은 환경 변수에서 받는다(quality_metrics.yml 과 같은 방식). -e 로 넘기면
     # 토큰이 프로세스 인자에 남아 ps 로 보인다.
-    zabbix_api_url: "{{ lookup('env', 'ZABBIX_URL') }}"
+    #
+    # ZABBIX_URL 은 기본 주소만 담는다(게이트웨이 코드가 /api_jsonrpc.php 를 붙인다).
+    # 여기서도 붙인다. 안 붙이면 Zabbix 가 로그인 화면을 200 으로 돌려주고, 그게 성공처럼
+    # 보인다 — 2026-08-12 에 실제로 그렇게 멈췄다.
+    zabbix_base_url: "{{ lookup('env', 'ZABBIX_URL') | regex_replace('/$', '') }}"
+    zabbix_api_url: >-
+      {{ zabbix_base_url if zabbix_base_url.endswith('api_jsonrpc.php')
+         else (zabbix_base_url ~ '/api_jsonrpc.php' if zabbix_base_url else '') }}
+    api_headers:
+      Content-Type: application/json-rpc
+      Authorization: "Bearer {{ zabbix_api_token }}"
     zabbix_api_token: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
     mediatype_name: "{{ lookup('env', 'GATEWAY_MEDIATYPE_NAME') | default('KINX Gateway', true) }}"
     action_name: "KINX Gateway 알림 전달"
@@ -51,12 +61,10 @@
           토큰은 쓰기 권한이 있어야 한다 — 게이트웨이의 조회 전용 토큰으로는 막힌다.
 
     - name: 미디어타입 조회
-      ansible.builtin.uri: &api
+      ansible.builtin.uri:
         url: "{{ zabbix_api_url }}"
         method: POST
-        headers:
-          Content-Type: application/json-rpc
-          Authorization: "Bearer {{ zabbix_api_token }}"
+        headers: "{{ api_headers }}"
         body_format: json
         body:
           jsonrpc: "2.0"
@@ -68,6 +76,14 @@
       register: mt
       no_log: true
 
+    - name: 응답이 JSON 인지 확인 (200 이라고 성공이 아니다)
+      ansible.builtin.fail:
+        msg: >-
+          Zabbix 가 JSON 을 안 돌려줬다 (Content-Type {{ mt.content_type | default('?') }}).
+          주소가 API 엔드포인트가 아닐 수 있다 — 지금 {{ zabbix_api_url }} 로 보냈다.
+          엔드포인트가 아니면 Zabbix 는 로그인 화면을 200 으로 돌려주므로 오류처럼 보이지 않는다.
+      when: mt.json is not defined
+
     - name: 미디어타입이 없으면 멈춘다
       ansible.builtin.fail:
         msg: >-
@@ -77,7 +93,10 @@
 
     - name: 수신 사용자 조회 (미디어 포함)
       ansible.builtin.uri:
-        <<: *api
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        headers: "{{ api_headers }}"
+        body_format: json
         body:
           jsonrpc: "2.0"
           method: user.get
@@ -96,7 +115,10 @@
 
     - name: 사용자 미디어 붙이기 (없을 때만 — 기존 미디어는 그대로 둔다)
       ansible.builtin.uri:
-        <<: *api
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        headers: "{{ api_headers }}"
+        body_format: json
         body:
           jsonrpc: "2.0"
           method: user.update
@@ -121,7 +143,10 @@
 
     - name: 기존 액션 조회
       ansible.builtin.uri:
-        <<: *api
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        headers: "{{ api_headers }}"
+        body_format: json
         body:
           jsonrpc: "2.0"
           method: action.get
@@ -134,7 +159,10 @@
 
     - name: 액션 생성 (없을 때만 — 있으면 조건을 건드리지 않는다)
       ansible.builtin.uri:
-        <<: *api
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        headers: "{{ api_headers }}"
+        body_format: json
         body:
           jsonrpc: "2.0"
           method: action.create
