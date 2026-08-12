@@ -1,0 +1,27 @@
+# Keep 워크플로 — 봇의 판정이 틀렸다고 표시한다 (프로비저닝 as-code).
+#
+# 짝인 judgment-confirm 과 함께 봐야 한다. 근거와 축 설계는 그 파일에 적었다.
+# 여기서 모인 라벨이 정확도 산출의 분자가 되고, 정정된 결론은 다음 회차의 과거 결론에서
+# 본문이 빠진다(모델이 틀린 문장을 베끼지 않게).
+workflow:
+  id: judgment-correct
+  name: Mark this judgment wrong
+  description: Record that the bot's judgment on this incident was wrong
+  triggers:
+    - type: manual
+  steps:
+    - name: correct
+      provider:
+        type: ssh
+        config: "{{ providers.core-ansible }}"
+        with:
+          # 게이트를 명령 안에 두는 이유는 judgment_confirm.yml 참조.
+          command: >-
+            test -n '{{ alert.judgment_id }}' &&
+            cd /home/rocky/kinx-idc-monitoring-poc/bot &&
+            set -a && . .env && set +a &&
+            ~/bot-venv/bin/python mark_judgment.py
+            --id '{{ alert.judgment_id }}'
+            --fingerprint '{{ alert.fingerprint }}'
+            --ok no
+            --who keep

@@ -1,0 +1,82 @@
+---
+# 판정 품질 지표 — 봇이 자기 판단을 채점한 값을 받을 Zabbix trapper 아이템.
+# 근거·지표 정의는 bot/GATEWAY_GUIDE.md §25-5, 값 주입은 `python -m gateway.quality --send`.
+#
+# 왜 Zabbix 를 거치는가: Grafana 에 붙은 데이터소스가 Zabbix·Loki·Wazuh 뿐이라
+# 봇의 SQLite 를 화면이 직접 읽을 수 없다. 월간 리포트와 같은 경로를 쓴다.
+#
+# 이 값들은 청중이 우리다. 고객 대시보드에 섞지 않으려고 호스트를 따로 둔다.
+- name: 사전 확인 — Zabbix API 대상이 인벤토리에 있는가
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: 인벤토리에 [zabbix] 그룹이 있는지 확인
+      ansible.builtin.assert:
+        that: "'zabbix' in groups and groups['zabbix'] | length > 0"
+        fail_msg: >-
+          인벤토리에 [zabbix] 그룹이 없어 아무 작업도 하지 않고 중단합니다.
+          이 플레이북의 대상은 SSH 가 아니라 Zabbix API 이므로 리포의 inventory.ini 를 씁니다.
+
+- name: Create bot quality metric host (Zabbix trapper)
+  hosts: zabbix
+  gather_facts: false
+  vars:
+    ansible_zabbix_auth_key: "{{ lookup('env', 'ZABBIX_API_TOKEN') }}"
+    quality_host: "{{ lookup('env', 'QUALITY_TARGET_HOST') | default('quality-bot', true) }}"
+    # 키는 bot/gateway/quality.py 의 trapper_values() 와 문자 단위로 같아야 한다.
+    # 어긋나면 전송은 성공(sender 가 실패로 안 본다)인데 화면만 조용히 빈다.
+    quality_items:
+      # 라벨이 없어도 늘 나오는 값. 정확도 주장이 아니라 관측이다.
+      - {key: "quality.judgments", name: "판정 수", vtype: "numeric_unsigned"}
+      - {key: "quality.labeled", name: "사람 라벨 수", vtype: "numeric_unsigned"}
+      - {key: "quality.gate_fire_rate", name: "게이트 발동률(%)", vtype: "numeric_float"}
+      - {key: "quality.degraded_rate", name: "열화율(%)", vtype: "numeric_float"}
+      - {key: "quality.latency_p50", name: "응답시간 p50(초)", vtype: "numeric_float"}
+      - {key: "quality.latency_p90", name: "응답시간 p90(초)", vtype: "numeric_float"}
+      # 오류 수가 아니라 병합 후보 수다. 라벨 없이 병합을 재는 유일한 축이다.
+      - {key: "quality.split_incidents", name: "동시 발생 분할 건수", vtype: "numeric_unsigned"}
+      # 주석이 안 올라가는 상태를 며칠 뒤에 아는 것을 막는 유일한 탐지기다.
+      - {key: "quality.annotation_rate", name: "판정 주석 발행률(%)", vtype: "numeric_float"}
+      # 아래는 사람 라벨이 있어야 성립한다. 표본이 모자라면 -1(미산출)이 온다 —
+      # 0 을 보내면 "정확도 0%" 로 읽히고, 안 보내면 지난 값이 화면에 남는다.
+      - {key: "quality.acc_overall", name: "판정 정확도(%, -1=미산출)", vtype: "numeric_float"}
+      - {key: "quality.acc_gate", name: "게이트 정확도(%, -1=미산출)", vtype: "numeric_float"}
+      - {key: "quality.acc_merge", name: "병합 정확도(%, -1=미산출)", vtype: "numeric_float"}
+      - {key: "quality.acc_cause", name: "원인 정확도(%, -1=미산출)", vtype: "numeric_float"}
+  tasks:
+    - name: 품질 호스트그룹 생성
+      community.zabbix.zabbix_group:
+        state: present
+        host_groups:
+          - "Reports"
+
+    - name: 품질 지표 호스트 등록
+      community.zabbix.zabbix_host:
+        host_name: "{{ quality_host }}"
+        # 표시명이 기술명으로 시작해야 한다 — Grafana Zabbix 플러그인의 호스트 필터는
+        # 표시명으로만 매칭한다(2026-07-31 실측).
+        visible_name: "{{ quality_host }} 판정 품질"
+        host_groups:
+          - "Reports"
+        status: enabled
+        state: present
+        interfaces: []
+
+    - name: 품질 지표 아이템 생성
+      community.zabbix.zabbix_item:
+        name: "{{ item.name }}"
+        host_name: "{{ quality_host }}"
+        state: present
+        params:
+          type: zabbix_trapper
+          key: "{{ item.key }}"
+          value_type: "{{ item.vtype }}"
+      loop: "{{ quality_items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: 결과 요약
+      ansible.builtin.debug:
+        msg: >-
+          {{ quality_host }} 에 아이템 {{ quality_items | length }}개.
+          값 주입은 core 에서 `python -m gateway.quality --days 30 --send`.

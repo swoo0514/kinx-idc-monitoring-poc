@@ -1,0 +1,35 @@
+# Keep 워크플로 — 봇의 판정이 맞았다고 표시한다 (프로비저닝 as-code).
+#
+# 왜 두 개인가 — 정정 버튼만 두면 불만만 쌓여 분모가 없다. 그러면 "오답 12건"은 셀 수 있어도
+# 정확도는 영원히 못 낸다. 게다가 라벨 자체가 오류 쪽으로 치우친다. 귀찮은데도 버튼을 누르는
+# 사람은 대개 틀렸다고 생각한 사람이기 때문이다.
+#
+# 축은 지금 하나(overall)만 쓴다. 게이트·병합·원인으로 나누면 버튼이 여섯 개가 되어 라벨이
+# 더 줄어든다. 저장 구조는 축을 이미 갖고 있으므로 나중에 쪼갤 때 이력을 안 버린다.
+#
+# 승인 계층을 새로 만들지 않는다 — 조치·리포트 발송·규칙 교체·재분석에 쓰던 것의 다섯 번째
+# 적용이다. 설계 근거는 bot/GATEWAY_GUIDE.md §25, 운영은 keep/KEEP_GUIDE.md.
+workflow:
+  id: judgment-confirm
+  name: Mark this judgment correct
+  description: Record that the bot's judgment on this incident was right
+  triggers:
+    - type: manual
+  steps:
+    - name: confirm
+      provider:
+        type: ssh
+        config: "{{ providers.core-ansible }}"
+        with:
+          # 안전 게이트를 워크플로 if 가 아니라 명령 안에 둔다. if 로 거르면 건너뛴 실행이
+          # 성공처럼 보여서, 판정 식별자가 없는 카드에서 눌러도 사람은 라벨이 남은 줄 안다.
+          # 여기서는 종료코드가 0이 아니므로 Keep 실행 이력에 실패로 남는다.
+          command: >-
+            test -n '{{ alert.judgment_id }}' &&
+            cd /home/rocky/kinx-idc-monitoring-poc/bot &&
+            set -a && . .env && set +a &&
+            ~/bot-venv/bin/python mark_judgment.py
+            --id '{{ alert.judgment_id }}'
+            --fingerprint '{{ alert.fingerprint }}'
+            --ok yes
+            --who keep

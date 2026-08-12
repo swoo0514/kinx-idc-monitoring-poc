@@ -1,0 +1,1213 @@
+{
+ "uid": "kinx-quality",
+ "title": "KINX 봇 판정 품질",
+ "tags": [
+  "kinx",
+  "quality",
+  "bot"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 0,
+ "refresh": "",
+ "time": {
+  "from": "now-90d",
+  "to": "now"
+ },
+ "editable": true,
+ "graphTooltip": 0,
+ "templating": {
+  "list": []
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "row",
+   "title": "1. 관측 — 라벨 없이 산출. 정확도 주장이 아니다",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "panels": []
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "판정 수",
+   "description": "강제 재분석은 빠진 값이다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 0,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "판정 수"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "판정 불가",
+         "color": "text",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "decimals": 0,
+     "unit": "",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "게이트 발동률",
+   "description": "분석까지 간 비율. 높고 낮음 자체가 좋고 나쁨은 아니다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 4,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "게이트 발동률(%)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "판정 불가",
+         "color": "text",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "decimals": 1,
+     "unit": "percent",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "열화율",
+   "description": "LLM 없이 코드 판정만으로 회신한 비율.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 9,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "열화율(%)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "판정 불가",
+         "color": "text",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "decimals": 1,
+     "unit": "percent",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green"
+       },
+       {
+        "color": "orange",
+        "value": 5
+       },
+       {
+        "color": "red",
+        "value": 20
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "동시 발생 분할",
+   "description": "같은 호스트에서 창 안에 갈라져 열린 사건. 오류 수가 아니라 병합 후보다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 14,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "동시 발생 분할 건수"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "판정 불가",
+         "color": "text",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "decimals": 0,
+     "unit": "",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       },
+       {
+        "color": "blue",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 6,
+   "type": "stat",
+   "title": "주석 발행률",
+   "description": "관측 타임라인에 판정이 실제로 올라간 비율. 떨어지면 Grafana 토큰·주소를 본다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 19,
+    "y": 1
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "판정 주석 발행률(%)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "판정 불가",
+         "color": "text",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "decimals": 1,
+     "unit": "percent",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "응답시간",
+   "description": "값이 없는 판정(분석 중 재기동 등)은 빠져 있다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 24,
+    "x": 0,
+    "y": 6
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "응답시간 p50(초)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "응답시간 p90(초)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "fillOpacity": 8,
+      "lineWidth": 2
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   }
+  },
+  {
+   "id": 8,
+   "type": "row",
+   "title": "2. 정확도 — 사람 라벨이 있어야 성립한다",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 13
+   },
+   "panels": []
+  },
+  {
+   "id": 9,
+   "type": "stat",
+   "title": "사람 라벨 수",
+   "description": "Keep 카드의 판정 확인·정정 버튼으로 쌓인다. 이 수가 적으면 아래 값은 판정 불가로 나온다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 0,
+    "y": 14
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "사람 라벨 수"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "판정 불가",
+         "color": "text",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "decimals": 0,
+     "unit": "",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       },
+       {
+        "color": "blue",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 10,
+   "type": "stat",
+   "title": "판정 정확도",
+   "description": "표본이 모자라면 '판정 불가'로 뜬다. 백분율이 안 보이는 것이 정상이다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 4,
+    "y": 14
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "판정 정확도(%, -1=미산출)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "판정 불가",
+         "color": "text",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "decimals": 1,
+     "unit": "percent",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red"
+       },
+       {
+        "color": "orange",
+        "value": 60
+       },
+       {
+        "color": "green",
+        "value": 85
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 11,
+   "type": "stat",
+   "title": "게이트 정확도",
+   "description": "표본이 모자라면 '판정 불가'로 뜬다. 백분율이 안 보이는 것이 정상이다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 9,
+    "y": 14
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "게이트 정확도(%, -1=미산출)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "판정 불가",
+         "color": "text",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "decimals": 1,
+     "unit": "percent",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red"
+       },
+       {
+        "color": "orange",
+        "value": 60
+       },
+       {
+        "color": "green",
+        "value": 85
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 12,
+   "type": "stat",
+   "title": "병합 정확도",
+   "description": "표본이 모자라면 '판정 불가'로 뜬다. 백분율이 안 보이는 것이 정상이다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 14,
+    "y": 14
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "병합 정확도(%, -1=미산출)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "판정 불가",
+         "color": "text",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "decimals": 1,
+     "unit": "percent",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red"
+       },
+       {
+        "color": "orange",
+        "value": 60
+       },
+       {
+        "color": "green",
+        "value": 85
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  },
+  {
+   "id": 13,
+   "type": "stat",
+   "title": "원인 정확도",
+   "description": "표본이 모자라면 '판정 불가'로 뜬다. 백분율이 안 보이는 것이 정상이다.",
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 19,
+    "y": 14
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "queryType": "0",
+     "group": {
+      "filter": "Reports"
+     },
+     "host": {
+      "filter": "/^quality-/"
+     },
+     "application": {
+      "filter": ""
+     },
+     "item": {
+      "filter": "원인 정확도(%, -1=미산출)"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "functions": [],
+     "textFilter": "",
+     "resultFormat": "time_series",
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "false",
+      "useZabbixValueMapping": false
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "판정 불가",
+         "color": "text",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "decimals": 1,
+     "unit": "percent",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red"
+       },
+       {
+        "color": "orange",
+        "value": 60
+       },
+       {
+        "color": "green",
+        "value": 85
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "textMode": "value_and_name",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   }
+  }
+ ]
+}
