@@ -113,6 +113,23 @@
         msg: "'{{ action_user }}' 사용자를 찾지 못했다 (-e action_user='<계정>')."
       when: (usr.json.error is defined) or (usr.json.result | length == 0)
 
+    # 조회로 받은 미디어에는 쓰기 불가 항목이 섞여 있다(mediaid·provisioned·
+    # userdirectory_mediaid). 그대로 되돌려 보내면 "unexpected parameter" 로 거절당한다.
+    # user.update 의 medias 는 목록을 통째로 교체하므로, 기존 것을 쓰기 가능한 항목만
+    # 남겨 다시 만든 뒤 새 미디어를 덧붙인다.
+    - name: 기존 미디어를 쓰기 가능한 항목만 남겨 다시 만든다
+      ansible.builtin.set_fact:
+        kept_medias: >-
+          {{ (kept_medias | default([])) + [{
+               'mediatypeid': item.mediatypeid,
+               'sendto': item.sendto,
+               'active': item.active,
+               'severity': item.severity,
+               'period': item.period }] }}
+      loop: "{{ usr.json.result[0].medias | default([]) }}"
+      loop_control:
+        label: "mediatypeid={{ item.mediatypeid }}"
+
     - name: 사용자 미디어 붙이기 (없을 때만 — 기존 미디어는 그대로 둔다)
       ansible.builtin.uri:
         url: "{{ zabbix_api_url }}"
@@ -125,7 +142,7 @@
           params:
             userid: "{{ usr.json.result[0].userid }}"
             medias: >-
-              {{ (usr.json.result[0].medias | default([]))
+              {{ (kept_medias | default([]))
                  + [{'mediatypeid': mt.json.result[0].mediatypeid,
                      'sendto': 'gateway',
                      'active': 0,
@@ -139,7 +156,12 @@
          | selectattr('mediatypeid', 'equalto', mt.json.result[0].mediatypeid)
          | list | length) == 0
       no_log: true
-      changed_when: media_add.json.result is defined
+      changed_when: (media_add.json.result is defined) and (media_add.json.error is not defined)
+
+    - name: 미디어 붙이기 실패면 여기서 멈춘다 (액션만 만들어 두면 알림이 안 나간다)
+      ansible.builtin.fail:
+        msg: "사용자 미디어 추가 실패 — {{ media_add.json.error }}"
+      when: (media_add is not skipped) and (media_add.json.error is defined)
 
     - name: 기존 액션 조회
       ansible.builtin.uri:
@@ -186,17 +208,41 @@
       register: act_create
       when: act.json.result | length == 0
       no_log: true
-      changed_when: act_create.json.result is defined
+      # error 가 와도 result 만 보면 changed 로 찍힌다. 실제로 그렇게 "생성됨"으로
+      # 보고하고 아무것도 안 만들어진 적이 있다(2026-08-12).
+      changed_when: (act_create.json.result is defined) and (act_create.json.error is not defined)
 
-    - name: 결과 확인 (API 는 200 으로도 error 를 준다)
+    - name: 액션 생성 실패면 사유를 말한다
       ansible.builtin.fail:
-        msg: "액션 배선 실패 — {{ (media_add.json.error | default(act_create.json.error, true)) }}"
-      when: (media_add.json.error is defined) or (act_create.json.error is defined)
+        msg: "액션 생성 실패 — {{ act_create.json.error }}"
+      when: (act_create is not skipped) and (act_create.json.error is defined)
+
+    # 만들었다고 보고하지 말고 다시 읽어서 확인한다 — 실행이 곧 검증이다.
+    - name: 액션이 실제로 있는지 다시 확인
+      ansible.builtin.uri:
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        headers: "{{ api_headers }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: action.get
+          params:
+            output: ["actionid", "name", "status"]
+            filter: { name: "{{ action_name }}" }
+          id: 6
+      register: act_final
+      no_log: true
+
+    - name: 확인 실패면 멈춘다
+      ansible.builtin.fail:
+        msg: "액션 '{{ action_name }}' 이 조회되지 않는다 — 만들어지지 않았다."
+      when: (act_final.json.result | default([]) | length) == 0
 
     - name: 배선 결과
       ansible.builtin.debug:
         msg: >-
-          {{ "액션 '" + action_name + "' 생성 완료."
-             if (act.json.result | length == 0)
-             else "액션 '" + action_name + "' 이미 있음 — 조건을 건드리지 않았다." }}
+          액션 '{{ action_name }}'(id {{ act_final.json.result[0].actionid }},
+          status {{ act_final.json.result[0].status }}) 확인.
+          {{ '이번에 생성했다.' if (act.json.result | length == 0) else '이미 있어 손대지 않았다.' }}
           발화 뒤 게이트웨이 로그에 event= 줄이 찍히는지 확인한다.
