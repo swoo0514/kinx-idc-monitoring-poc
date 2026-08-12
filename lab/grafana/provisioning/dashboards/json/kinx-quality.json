@@ -41,7 +41,7 @@
     "enable": true,
     "hide": false,
     "iconColor": "purple",
-    "name": "봇 판정",
+    "name": "봇 판정 · 응답시간",
     "target": {
      "limit": 100,
      "matchAny": false,

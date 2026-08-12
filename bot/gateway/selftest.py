@@ -2325,27 +2325,32 @@ def _dashboard_annotation_checks() -> int:
     sys.path.insert(0, os.path.join(root, "tools"))
     import set_judgment_annotation as sja
 
+    from . import incident as inc_mod
+
     n = 0
-    for uid, patterns in sja.SPEC.items():
+    for uid, spec in sja.SPEC.items():
         path = os.path.join(root, "lab", "grafana", "provisioning", "dashboards",
                             "json", uid + ".json")
         dash = json.load(io.open(path, encoding="utf-8"))
-        q = [a for a in (dash.get("annotations") or {}).get("list") or []
-             if a.get("name") == sja.QUERY_NAME]
-        assert len(q) == 1, "%s 에 판정 주석 질의가 %d개다" % (uid, len(q))
-        q = q[0]
-        assert q["target"]["tags"] == [sja.TAG], q["target"]
-        # 범위를 안 좁히면 통계 숫자 패널 옆까지 세로선이 선다
-        ids = (q.get("filter") or {}).get("ids")
-        assert ids, "%s: 표시 패널을 안 좁혔다 — set_judgment_annotation.py 를 돌린다" % uid
-        assert ids == sja.resolve(dash, patterns), (
-            "%s: 패널 번호가 제목과 어긋난다(%s). set_judgment_annotation.py 를 다시 돌린다"
-            % (uid, ids))
+        qs = [a for a in (dash.get("annotations") or {}).get("list") or []
+              if (a.get("name") or "").startswith(sja.QUERY_NAME)]
+        assert qs, "%s: 판정 주석 질의가 없다 — set_judgment_annotation.py 를 돌린다" % uid
+        assert qs == sja.queries(dash, spec), (
+            "%s: 주석 질의가 선언과 어긋난다. set_judgment_annotation.py 를 다시 돌린다" % uid)
         by_id = {p.get("id"): p for p in dash.get("panels", [])}
-        for pid in ids:
-            assert pid in by_id, "%s: 없는 패널 번호 %s" % (uid, pid)
-            assert by_id[pid].get("type") in ("timeseries", "graph"), (
-                "%s: 주석이 안 그려지는 패널을 골랐다 — %s" % (uid, by_id[pid].get("type")))
+        for q in qs:
+            ids = (q.get("filter") or {}).get("ids")
+            # 범위를 안 좁히면 통계 숫자 패널 옆까지 세로선이 선다
+            assert ids, "%s: 표시 패널을 안 좁혔다" % uid
+            for pid in ids:
+                assert pid in by_id, "%s: 없는 패널 번호 %s" % (uid, pid)
+                assert by_id[pid].get("type") in ("timeseries", "graph"), (
+                    "%s: 주석이 안 그려지는 패널을 골랐다 — %s" % (uid, by_id[pid].get("type")))
+            # 태그 조건은 AND 다. 봇이 안 다는 유형을 적으면 그 질의는 영원히 빈다.
+            for tag in q["target"]["tags"][1:]:
+                assert tag in inc_mod._KNOWN_CLASSES, (
+                    "%s: 봇이 달지 않는 유형이다 — %s" % (uid, tag))
+            assert q["target"]["tags"][0] == sja.TAG, q["target"]
         n += 5
     return n
 

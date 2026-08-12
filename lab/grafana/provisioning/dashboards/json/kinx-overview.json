@@ -21,20 +21,94 @@
     "enable": true,
     "hide": false,
     "iconColor": "purple",
-    "name": "봇 판정",
+    "name": "봇 판정 · CPU 사용률",
     "target": {
      "limit": 100,
      "matchAny": false,
      "tags": [
-      "kinx-bot"
+      "kinx-bot",
+      "cpu_io_pressure"
      ],
      "type": "tags"
     },
     "filter": {
      "exclude": false,
      "ids": [
-      3,
-      10,
+      3
+     ]
+    }
+   },
+   {
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": false,
+    "iconColor": "purple",
+    "name": "봇 판정 · CPU 사용률",
+    "target": {
+     "limit": 100,
+     "matchAny": false,
+     "tags": [
+      "kinx-bot",
+      "memory_pressure"
+     ],
+     "type": "tags"
+    },
+    "filter": {
+     "exclude": false,
+     "ids": [
+      3
+     ]
+    }
+   },
+   {
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": false,
+    "iconColor": "purple",
+    "name": "봇 판정 · 복제 지연",
+    "target": {
+     "limit": 100,
+     "matchAny": false,
+     "tags": [
+      "kinx-bot",
+      "replication"
+     ],
+     "type": "tags"
+    },
+    "filter": {
+     "exclude": false,
+     "ids": [
+      10
+     ]
+    }
+   },
+   {
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": false,
+    "iconColor": "purple",
+    "name": "봇 판정 · 인증 활동",
+    "target": {
+     "limit": 100,
+     "matchAny": false,
+     "tags": [
+      "kinx-bot",
+      "auth_security"
+     ],
+     "type": "tags"
+    },
+    "filter": {
+     "exclude": false,
+     "ids": [
       12
      ]
     }

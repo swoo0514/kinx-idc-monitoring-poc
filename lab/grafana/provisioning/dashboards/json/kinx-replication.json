@@ -21,19 +21,69 @@
     "enable": true,
     "hide": false,
     "iconColor": "purple",
-    "name": "봇 판정",
+    "name": "봇 판정 · 복제 지연",
     "target": {
      "limit": 100,
      "matchAny": false,
      "tags": [
-      "kinx-bot"
+      "kinx-bot",
+      "replication"
      ],
      "type": "tags"
     },
     "filter": {
      "exclude": false,
      "ids": [
-      2,
+      2
+     ]
+    }
+   },
+   {
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": false,
+    "iconColor": "purple",
+    "name": "봇 판정 · 오류율",
+    "target": {
+     "limit": 100,
+     "matchAny": false,
+     "tags": [
+      "kinx-bot",
+      "service_down"
+     ],
+     "type": "tags"
+    },
+    "filter": {
+     "exclude": false,
+     "ids": [
+      3
+     ]
+    }
+   },
+   {
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": false,
+    "iconColor": "purple",
+    "name": "봇 판정 · 오류율",
+    "target": {
+     "limit": 100,
+     "matchAny": false,
+     "tags": [
+      "kinx-bot",
+      "cpu_io_pressure"
+     ],
+     "type": "tags"
+    },
+    "filter": {
+     "exclude": false,
+     "ids": [
       3
      ]
     }
