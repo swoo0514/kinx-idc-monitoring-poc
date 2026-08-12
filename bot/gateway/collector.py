@@ -181,6 +181,8 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
     )
     return {
         **base,
+        "loki_label": loki_label,
+        "wazuh_label": wz_label,
         "logs": logs,            # Loki (Alloy) — 백업/앱 로그 등
         "security": security,    # Wazuh Indexer — 침해·변경 경보
         # 빈 목록의 의미를 확정하는 상태. ok 일 때만 "없음 = 사실"이다.
@@ -304,6 +306,11 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
             "dominant_sev": incident.dominant_sev(),
         },
         "host": host_obj,
+        # 축마다 부르는 이름이 다를 수 있고, 로그 라인 본문에는 그 이름이 들어 있다.
+        # 마스킹이 등록하려면 컨텍스트에 실려야 한다(전송 화이트리스트에는 안 넣는다 —
+        # 등록용이지 보낼 값이 아니다).
+        "loki_label": loki_label,
+        "wazuh_label": wz_label,
         "alerts": alerts_ctx,
         "logs": logs,
         "security": security,

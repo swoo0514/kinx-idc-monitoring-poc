@@ -277,6 +277,7 @@ def main():
     timer_checks = _timer_close_checks()
     holmes_eg_checks = _holmes_egress_checks()
     tenant_checks = _tenant_scope_checks()
+    nametable_checks = _nametable_checks()
     collect_fail_checks = _collect_failure_checks()
     wrong_srv_checks = _wrong_server_checks()
     evt_time_checks = _event_time_checks()
@@ -293,7 +294,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + timer_checks + holmes_eg_checks + tenant_checks + collect_fail_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + timer_checks + holmes_eg_checks + tenant_checks + collect_fail_checks + nametable_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1483,6 +1484,63 @@ def _collect_failure_checks() -> int:
     # 전송 화이트리스트에도 있어야 LLM 이 그 상태를 읽는다
     assert "metrics" in masking._STATUS_KEYS, masking._STATUS_KEYS
     return 6
+
+
+def _nametable_checks() -> int:
+    """전역 이름 표 — 경계 일치·대소문자·긴 것 우선.
+
+    지금 마스킹은 그 사건의 호스트 정보에서 이름을 뽑아 등록한다. 그래서 사건 당사자가
+    아닌 호스트명은 안 가려진다. 로그 한 줄에 다른 서버 이름이 섞이면 원문 그대로 나간다.
+
+    표로 잡되 두 가지를 지켜야 한다. 등록되지 않은 더 긴 문자열 안에서는 바뀌면 안 되고
+    (db01 이 mydb01 안에서), 대소문자가 달라도 잡아야 한다(DB01). 선례는 Presidio 의
+    금지 목록 인식기로, 경계 lookaround 와 대소문자 무시를 쓴다.
+    """
+    import json
+
+    from . import masking
+
+    mk = masking.Masker()
+    for n in ("db01", "report-Customer-B", "customer-b", "node1"):
+        mk.register("host", n)
+
+    # ① 더 긴 낱말 안에서는 안 바뀐다
+    assert mk.mask("mydb01 로그") == "mydb01 로그", mk.mask("mydb01 로그")
+    assert mk.mask("db011 재기동") == "db011 재기동", mk.mask("db011 재기동")
+    assert mk.mask("node10 상태") == "node10 상태", mk.mask("node10 상태")
+    # ② 낱말로 서 있으면 바뀐다
+    assert "[host-" in mk.mask("db01 재기동"), mk.mask("db01 재기동")
+    assert "[host-" in mk.mask("호스트 db01."), mk.mask("호스트 db01.")
+    # ③ 대소문자가 달라도 잡는다
+    assert "[host-" in mk.mask("DB01 down"), mk.mask("DB01 down")
+    # ④ 긴 것이 먼저 — 짧은 이름이 긴 이름 안을 먹지 않는다
+    out = mk.mask("report-Customer-B 리포트")
+    assert out.count("[host-") == 1, out
+    # ⑤ 등록 원문 왕복은 그대로
+    assert mk.unmask(mk.mask("db01")) == "db01"
+    # ⑥ 대소문자가 다른 자리는 정규형으로 돌아온다 — 의도한 동작임을 못 박는다
+    assert mk.unmask(mk.mask("DB01")) == "db01"
+
+    # ── 표가 마지막 그물로 실제로 걸리는가 ──
+    from . import nametable
+    saved = (dict(nametable._terms), dict(nametable._by_source))
+    try:
+        nametable._terms = {"other-db-77": "host", "KINX WEB": "group"}
+        # 사건 당사자가 아닌 호스트명이 로그에 섞인 상황
+        ctx = {"incident": {"host": "h1"}, "host": {"host": "h1"},
+               "alerts": [{"name": "n", "source": "s", "sev": "SEV3",
+                           "class": "disk_space"}],
+               "logs": ["backup from other-db-77 failed"], "security": [],
+               "sources": {}}
+        m2 = masking.Masker()
+        blob = json.dumps(masking.build_llm_context(ctx, "SEV3", m2), ensure_ascii=False)
+        assert "other-db-77" not in blob,             f"사건 당사자가 아닌 호스트명이 그대로 나간다: {blob}"
+        # 표에 없는 낱말은 안 건드린다
+        assert "backup" in blob and "failed" in blob, blob
+    finally:
+        nametable._terms, nametable._by_source = saved
+
+    return 11
 
 
 def _tenant_scope_checks() -> int:

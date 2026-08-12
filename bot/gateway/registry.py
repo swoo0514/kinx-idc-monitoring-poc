@@ -23,12 +23,13 @@ PATH = os.environ.get("HOST_REGISTRY_FILE", "")
 
 _ENTRIES: list = []
 _SOURCES: list = []
+_ALLOW: list = []
 _LOAD_ERROR = ""
 
 
 def _load():
-    global _ENTRIES, _SOURCES, _LOAD_ERROR
-    _ENTRIES, _SOURCES, _LOAD_ERROR = [], [], ""
+    global _ENTRIES, _SOURCES, _ALLOW, _LOAD_ERROR
+    _ENTRIES, _SOURCES, _ALLOW, _LOAD_ERROR = [], [], [], ""
     if not PATH:
         return
     try:
@@ -43,6 +44,7 @@ def _load():
             doc = yaml.safe_load(f) or {}
         rows = doc.get("hosts") or []
         _ENTRIES = [r for r in rows if isinstance(r, dict) and r.get("name")]
+        _ALLOW = list(doc.get("allow") or [])
         srcs = doc.get("sources") or []
         _SOURCES = [r for r in srcs if isinstance(r, dict) and r.get("name")]
         log.info("호스트 명부 %s 에서 호스트 %d건 / 감시 서버 %d건 로드",
@@ -60,8 +62,8 @@ _load()
 
 def status() -> dict:
     """진단용. 명부를 실제로 읽었는지 사람이 확인할 수 있어야 한다."""
-    return {"path": PATH, "entries": len(_ENTRIES),
-            "sources": len(_SOURCES), "error": _LOAD_ERROR}
+    return {"path": PATH, "entries": len(_ENTRIES), "sources": len(_SOURCES),
+            "allow": len(_ALLOW), "error": _LOAD_ERROR}
 
 
 def source_conf(name: str) -> dict:
@@ -74,6 +76,20 @@ def source_conf(name: str) -> dict:
         if s.get("name") == name:
             return s
     return {}
+
+
+def entries() -> list:
+    """명부에 적힌 호스트 항목 전체. 전역 이름 표가 이 목록을 쓴다."""
+    return list(_ENTRIES)
+
+
+def allow_terms() -> list:
+    """마스킹에서 **빼야 할** 낱말. 호스트명과 겹치는 흔한 단어를 여기 적는다.
+
+    형식: 파일 최상위에 `allow: [ ... ]`. 오탐이 실제로 났을 때만 적는다 — 여기 적힌
+    이름은 원문 그대로 나가므로, 미리 넣어 두는 것이 아니라 확인 후 넣는다.
+    """
+    return [str(x) for x in _ALLOW if x]
 
 
 def source_names() -> list:
