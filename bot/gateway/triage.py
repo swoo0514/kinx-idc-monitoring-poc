@@ -113,8 +113,11 @@ async def _annotate(jid, inc, sev, headline: str, note: str, text: str,
     body = "[%s] %s · %s\n%s" % (sev, headline, note, (text or "").strip()[:400])
     if jid:
         body += "\n(판정 #%s)" % jid
-    aid = await asyncio.to_thread(grafana.annotate, body, event_ts,
-                                  ["kinx-bot", sev, inc.host])
+    # 사건 유형을 태그로 단다. 패널이 자기가 다루는 유형만 가져갈 수 있게 하는 유일한
+    # 통로다 — 어느 패널에 보일지는 대시보드가 읽힐 때 정해지므로, 봇이 사건마다 바꿀 수
+    # 있는 것은 태그뿐이다.
+    tags = ["kinx-bot", sev, inc.host] + sorted(inc.classes())
+    aid = await asyncio.to_thread(grafana.annotate, body, event_ts, tags)
     if aid and jid:
         await asyncio.to_thread(_finish, jid, {"annotation_id": aid})
 

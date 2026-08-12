@@ -2077,7 +2077,9 @@ def _annotation_checks() -> int:
         asyncio.run(triage._annotate(None, inc, "SEV1", "헤드", "단일", "본문",
                                      event_ts=1700000000.0))
         assert sent and sent[-1][1]["json"]["time"] == 1700000000000, sent[-1][1]["json"]
-        return 14
+        # 사건 유형이 태그에 실려야 패널이 자기가 다루는 것만 골라 갈 수 있다
+        assert "other" in sent[-1][1]["json"]["tags"], sent[-1][1]["json"]["tags"]
+        return 15
     finally:
         grafana.httpx = saved_httpx
         for k, v in saved_env.items():
