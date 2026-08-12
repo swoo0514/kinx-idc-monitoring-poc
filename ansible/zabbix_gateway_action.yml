@@ -1,0 +1,166 @@
+---
+# Zabbix 트리거 액션을 게이트웨이 미디어타입에 배선한다.
+#
+# 왜 만들었나: 미디어타입만 코드로 만들고 액션은 사람이 화면에서 만들게 두었더니,
+# 2026-08-12 랩에서 그 액션이 통째로 사라진 것을 확인했다. 미디어타입은 활성 상태로
+# 남아 있었고 오류도 없었으며, 트리거는 정상 발화했는데 게이트웨이에는 아무것도 오지
+# 않았다. 손으로 만든 배선은 이렇게 조용히 없어진다.
+#
+# 원래 결정("액션은 만들지 않는다 — 환경마다 조건이 다르므로 덮어쓸 위험이 크다")은
+# 그대로 지킨다. 방식만 바꾼다 — **없을 때만 만들고, 이미 있으면 손대지 않는다.**
+# 조건을 조정한 뒤 다시 돌려도 그 조정이 지워지지 않는다.
+#
+# 무엇을 하나:
+#   1) 미디어타입이 있는지 확인한다 (없으면 zabbix_gateway_mediatype.yml 을 먼저 돌린다)
+#   2) 수신 사용자에게 그 미디어가 없으면 붙인다 — Zabbix 는 사용자 미디어가 없으면
+#      알림 자체를 만들지 않는다(공식: 액션 동작은 수신자의 미디어를 통해 발송된다)
+#   3) 같은 이름의 액션이 없을 때만 만든다
+#
+# 실행:
+#   ansible-playbook zabbix_gateway_action.yml -e @lab_vars.yml
+# 필요한 변수: zabbix_api_url, zabbix_api_token(쓰기 권한)
+- name: Wire a Zabbix trigger action to the gateway media type
+  hosts: localhost
+  gather_facts: false
+  vars:
+    mediatype_name: "KINX Gateway"
+    action_name: "KINX Gateway 알림 전달"
+    action_user: "Admin"
+    # 심각도 비트마스크. 기본 63 = 전체 — 무엇을 버릴지는 게이트웨이의 라우팅이 정한다.
+    # 여기서 미리 걸러 내면 낮은 심각도의 반복 빈도 집계가 통째로 비어 버린다.
+    media_severity: 63
+    # 액션 조건. 비우면 모든 문제에 반응한다(랩 기본). 실환경은 호스트그룹으로 좁힌다.
+    # 예: [{conditiontype: 0, operator: 0, value: "<호스트그룹 id>"}]
+    action_conditions: []
+  tasks:
+    - name: 필요한 변수가 들어왔는지 확인
+      ansible.builtin.assert:
+        that:
+          - zabbix_api_url is defined and zabbix_api_url | length > 0
+          - zabbix_api_token is defined and zabbix_api_token | length > 0
+        fail_msg: >-
+          zabbix_api_url · zabbix_api_token 이 필요하다 (-e @lab_vars.yml).
+          토큰은 쓰기 권한이 있어야 한다 — 게이트웨이의 조회 전용 토큰으로는 막힌다.
+
+    - name: 미디어타입 조회
+      ansible.builtin.uri: &api
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        headers:
+          Content-Type: application/json-rpc
+          Authorization: "Bearer {{ zabbix_api_token }}"
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: mediatype.get
+          params:
+            output: ["mediatypeid", "name", "status"]
+            filter: { name: "{{ mediatype_name }}" }
+          id: 1
+      register: mt
+      no_log: true
+
+    - name: 미디어타입이 없으면 멈춘다
+      ansible.builtin.fail:
+        msg: >-
+          '{{ mediatype_name }}' 미디어타입이 없다. zabbix_gateway_mediatype.yml 을 먼저
+          돌리거나, 이름이 다르면 -e mediatype_name='<실제 이름>' 로 지정한다.
+      when: (mt.json.error is defined) or (mt.json.result | length == 0)
+
+    - name: 수신 사용자 조회 (미디어 포함)
+      ansible.builtin.uri:
+        <<: *api
+        body:
+          jsonrpc: "2.0"
+          method: user.get
+          params:
+            output: ["userid", "username"]
+            selectMedias: "extend"
+            filter: { username: "{{ action_user }}" }
+          id: 2
+      register: usr
+      no_log: true
+
+    - name: 사용자가 없으면 멈춘다
+      ansible.builtin.fail:
+        msg: "'{{ action_user }}' 사용자를 찾지 못했다 (-e action_user='<계정>')."
+      when: (usr.json.error is defined) or (usr.json.result | length == 0)
+
+    - name: 사용자 미디어 붙이기 (없을 때만 — 기존 미디어는 그대로 둔다)
+      ansible.builtin.uri:
+        <<: *api
+        body:
+          jsonrpc: "2.0"
+          method: user.update
+          params:
+            userid: "{{ usr.json.result[0].userid }}"
+            medias: >-
+              {{ (usr.json.result[0].medias | default([]))
+                 + [{'mediatypeid': mt.json.result[0].mediatypeid,
+                     'sendto': 'gateway',
+                     'active': 0,
+                     'severity': media_severity | int,
+                     'period': '1-7,00:00-24:00'}] }}
+          id: 3
+      register: media_add
+      # sendto 는 웹훅이 안 쓰지만 필수 항목이라 자리표시자를 넣는다(공식: mediatypeid·sendto 필수).
+      when: >-
+        (usr.json.result[0].medias | default([])
+         | selectattr('mediatypeid', 'equalto', mt.json.result[0].mediatypeid)
+         | list | length) == 0
+      no_log: true
+      changed_when: media_add.json.result is defined
+
+    - name: 기존 액션 조회
+      ansible.builtin.uri:
+        <<: *api
+        body:
+          jsonrpc: "2.0"
+          method: action.get
+          params:
+            output: ["actionid", "name", "status"]
+            filter: { name: "{{ action_name }}" }
+          id: 4
+      register: act
+      no_log: true
+
+    - name: 액션 생성 (없을 때만 — 있으면 조건을 건드리지 않는다)
+      ansible.builtin.uri:
+        <<: *api
+        body:
+          jsonrpc: "2.0"
+          method: action.create
+          params:
+            name: "{{ action_name }}"
+            eventsource: 0        # 0 = 트리거 이벤트
+            status: 0             # 0 = 활성
+            # 없으면 통과하지 못한 사례가 있어 명시한다(2026-07-27 자동등록 액션 실측).
+            esc_period: "1h"
+            filter:
+              evaltype: 0
+              conditions: "{{ action_conditions }}"
+            operations:
+              - operationtype: 0  # 0 = 메시지 발송
+                opmessage:
+                  mediatypeid: "{{ mt.json.result[0].mediatypeid }}"
+                  default_msg: 1
+                opmessage_usr:
+                  - userid: "{{ usr.json.result[0].userid }}"
+          id: 5
+      register: act_create
+      when: act.json.result | length == 0
+      no_log: true
+      changed_when: act_create.json.result is defined
+
+    - name: 결과 확인 (API 는 200 으로도 error 를 준다)
+      ansible.builtin.fail:
+        msg: "액션 배선 실패 — {{ (media_add.json.error | default(act_create.json.error, true)) }}"
+      when: (media_add.json.error is defined) or (act_create.json.error is defined)
+
+    - name: 배선 결과
+      ansible.builtin.debug:
+        msg: >-
+          {{ "액션 '" + action_name + "' 생성 완료."
+             if (act.json.result | length == 0)
+             else "액션 '" + action_name + "' 이미 있음 — 조건을 건드리지 않았다." }}
+          발화 뒤 게이트웨이 로그에 event= 줄이 찍히는지 확인한다.

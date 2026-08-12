@@ -282,7 +282,8 @@ def main():
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
-                    + _quality_checks() + _prior_checks())
+                    + _quality_checks() + _prior_checks()
+                    + _dashboard_annotation_checks())
     collect_fail_checks = _collect_failure_checks()
     wrong_srv_checks = _wrong_server_checks()
     evt_time_checks = _event_time_checks()
@@ -2309,6 +2310,42 @@ def _prior_checks() -> int:
         store.close()
         store.PATH = saved_path
         shutil.rmtree(d, ignore_errors=True)
+
+
+def _dashboard_annotation_checks() -> int:
+    """주석이 어느 패널에 서는가 — 번호가 어긋난 채 커밋되는 것을 잡는다 (§25-4)."""
+    import io
+    import json
+    import os
+    import sys
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path.insert(0, os.path.join(root, "tools"))
+    import set_judgment_annotation as sja
+
+    n = 0
+    for uid, patterns in sja.SPEC.items():
+        path = os.path.join(root, "lab", "grafana", "provisioning", "dashboards",
+                            "json", uid + ".json")
+        dash = json.load(io.open(path, encoding="utf-8"))
+        q = [a for a in (dash.get("annotations") or {}).get("list") or []
+             if a.get("name") == sja.QUERY_NAME]
+        assert len(q) == 1, "%s 에 판정 주석 질의가 %d개다" % (uid, len(q))
+        q = q[0]
+        assert q["target"]["tags"] == [sja.TAG], q["target"]
+        # 범위를 안 좁히면 통계 숫자 패널 옆까지 세로선이 선다
+        ids = (q.get("filter") or {}).get("ids")
+        assert ids, "%s: 표시 패널을 안 좁혔다 — set_judgment_annotation.py 를 돌린다" % uid
+        assert ids == sja.resolve(dash, patterns), (
+            "%s: 패널 번호가 제목과 어긋난다(%s). set_judgment_annotation.py 를 다시 돌린다"
+            % (uid, ids))
+        by_id = {p.get("id"): p for p in dash.get("panels", [])}
+        for pid in ids:
+            assert pid in by_id, "%s: 없는 패널 번호 %s" % (uid, pid)
+            assert by_id[pid].get("type") in ("timeseries", "graph"), (
+                "%s: 주석이 안 그려지는 패널을 골랐다 — %s" % (uid, by_id[pid].get("type")))
+        n += 5
+    return n
 
 
 def _proxy_mask_checks() -> int:

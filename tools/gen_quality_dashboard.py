@@ -114,20 +114,13 @@ DASH = {
     "editable": True,
     "graphTooltip": 0,
     "templating": {"list": []},
-    # 대시보드 기본 주석 질의는 그 대시보드에 붙은 주석만 가져온다. 봇이 남기는 것은
-    # 대시보드를 지정하지 않은 조직 주석이라, 태그로 가져오는 질의를 따로 넣어야 뜬다.
-    # 넣지 않으면 발행은 200 인데 화면에는 아무것도 없다.
+    # 판정 주석 질의는 이 파일이 아니라 tools/set_judgment_annotation.py 가 넣는다.
+    # 표시할 패널을 번호가 아니라 제목으로 고르기 위해서다. 이 생성기를 돌린 뒤 그 도구를
+    # 이어서 돌린다. 안 돌리면 주석이 전 패널에 서고, 셀프테스트가 그것을 잡는다.
     "annotations": {"list": [
         {"builtIn": 1, "datasource": {"type": "grafana", "uid": "-- Grafana --"},
          "enable": True, "hide": True, "iconColor": "rgba(0, 211, 255, 1)",
-         "name": "Annotations & Alerts", "type": "dashboard"},
-        {"datasource": {"type": "grafana", "uid": "-- Grafana --"}, "enable": True,
-         "hide": False, "iconColor": "purple", "name": "봇 판정",
-         "target": {"limit": 100, "matchAny": False, "tags": ["kinx-bot"],
-                    "type": "tags"},
-         # 기본값은 전 패널이라 통계 숫자 옆까지 세로선이 선다. 시각이 뜻을 갖는
-         # 패널에만 표시한다(여기서는 응답시간).
-         "filter": {"exclude": False, "ids": [7]}}]},
+         "name": "Annotations & Alerts", "type": "dashboard"}]},
     "panels": P,
 }
 
