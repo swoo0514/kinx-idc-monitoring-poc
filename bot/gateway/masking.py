@@ -17,8 +17,8 @@ class Masker:
         self._fwd = {}   # 원문 → 토큰
         self._rev = {}   # 토큰 → 원문
         self._counts = {}
-        self._re = None      # 등록 원문을 한 번에 잡는 정규식 (아래에서 만든다)
-        self._lower = {}     # 소문자 원문 → 토큰. 대소문자가 달라도 찾으려고 둔다
+        self._re = None
+        self._lower = {}
 
     def register(self, kind: str, original: str):
         if original and original not in self._fwd:
@@ -27,7 +27,7 @@ class Masker:
             tok = f"[{kind}-{n}]"
             self._fwd[original] = tok
             self._rev[tok] = original
-            self._re = None   # 목록이 바뀌었으니 다음 치환 때 다시 만든다
+            self._re = None
 
     def _matcher(self):
         """등록 원문을 낱말 경계로 잡는 정규식.
@@ -116,18 +116,7 @@ def _register_host(host: dict, masker: Masker):
 
 
 def _register_context(context: dict, masker: Masker) -> None:
-    """호스트 객체 밖에 있는 이름들을 등록하고, 마지막으로 전역 표를 건다.
-
-    세 가지가 빠져 있었다.
-    - 수집이 전건 실패하면 host 객체가 비는데 `incident.host` 는 그대로 전송된다.
-      그때 등록이 0건이라 마스킹이 사실상 항등 함수가 됐다. 장애가 클수록 그렇다.
-    - Loki 라벨·Wazuh 에이전트명은 Zabbix 호스트명과 다를 수 있는데, 로그 라인 본문에는
-      그 이름이 들어 있다.
-    - 사건 당사자가 아닌 호스트명(로그에 섞인 다른 서버)은 애초에 등록 대상이 아니었다.
-
-    앞의 둘은 여기서, 마지막은 전역 표가 맡는다. **표를 맨 뒤에 거는 이유**는 이 사건의
-    호스트가 낮은 번호를 받아야 카드를 읽는 사람이 헷갈리지 않기 때문이다.
-    """
+    """호스트 객체 밖의 이름을 등록하고 마지막으로 전역 표를 건다 (§22)."""
     inc = context.get("incident", {}) or {}
     masker.register("host", inc.get("host"))
     for k in ("loki_label", "wazuh_label"):
@@ -135,7 +124,7 @@ def _register_context(context: dict, masker: Masker) -> None:
     try:
         from . import nametable
         nametable.apply_to(masker)
-    except Exception as e:      # 표가 없어도 오늘까지의 동작으로 돈다
+    except Exception as e:
         log.warning("전역 이름 표를 적용하지 못했다: %s", e)
 
 

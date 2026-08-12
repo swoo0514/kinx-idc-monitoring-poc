@@ -1,20 +1,7 @@
-"""전역 이름 표 — 이 환경에 어떤 호스트 이름이 있는지 한 곳에 모은다.
+"""전역 이름 표 — 이 환경의 호스트 이름을 모아 마스킹의 마지막 그물로 쓴다.
 
-마스킹은 그 사건의 호스트 정보에서 이름을 뽑아 등록한다. 그래서 **사건 당사자가 아닌
-호스트명은 안 가려진다.** 로그 한 줄에 다른 서버 이름이 섞이면 원문 그대로 나간다.
-장애가 클수록 그런 줄이 많아지므로, 클 때 더 새는 구조다.
-
-표는 그 공백을 메우는 마지막 그물이다. 맥락 기반 등록이 먼저 돌고, 그다음 표가 남은
-이름을 잡는다.
-
-**사람이 적는 파일이 아니다.** 감시 서버·로그·보안에서 코드가 읽어 만들고 주기적으로
-갱신한다. 명부 파일은 캐시이자 예외 지정용이다(`allow:` 절). 랩에서 실환경으로 그대로
-옮겨도 호스트를 손으로 적을 일이 없어야 한다.
-
-⚠ 이름을 모으는 것과 가리는 것은 다르다. 여기서는 모으기만 하고, 어떻게 가릴지(경계 일치·
-대소문자 무시)는 masking.Masker 가 정한다.
-
-설정·검증 결과는 bot/GATEWAY_GUIDE.md §22.
+감시 서버·로그·보안에서 코드가 읽어 만들고 주기 갱신한다. 명부 파일은 캐시이자 예외
+지정용이다. 설계 근거·검증 결과는 bot/GATEWAY_GUIDE.md §22.
 """
 
 import json
@@ -35,8 +22,6 @@ CACHE_FILE = os.environ.get("NAMETABLE_CACHE_FILE",
                             os.path.expanduser("~/.kinx-gateway/nametable.json"))
 REFRESH_S = float(os.environ.get("NAMETABLE_REFRESH_S", "3600"))
 TIMEOUT_S = 10
-# 이름이 이 길이 이하이거나 영문 소문자 낱말이면 문장에 자연히 나올 수 있다. 빼지는 않고
-# 목록으로 알린다 — 빼면 그 이름이 원문으로 나가기 때문이다.
 RISKY_MAX_LEN = int(os.environ.get("NAMETABLE_RISKY_LEN", "3"))
 
 _lock = threading.Lock()
@@ -53,14 +38,14 @@ def status() -> dict:
 
 
 def terms() -> list:
-    """치환 대상 (원문, kind). 긴 것부터 — 짧은 이름이 긴 이름 안을 먹지 않게."""
+    """치환 대상 (원문, kind). 긴 것부터 (§22)."""
     with _lock:
         items = list(_terms.items())
     return sorted(items, key=lambda kv: len(kv[0]), reverse=True)
 
 
 def risky() -> list:
-    """오탐이 날 만한 항목과 사유. 빼지 않고 알리기만 한다."""
+    """오탐이 날 만한 항목과 사유 (§22)."""
     with _lock:
         names = list(_terms)
     out = []
@@ -78,11 +63,7 @@ def risky() -> list:
 
 
 def apply_to(masker) -> int:
-    """마스커에 표를 등록한다. 반환은 새로 등록된 수.
-
-    맥락 기반 등록 **뒤에** 부른다. 그래야 그 사건의 호스트가 낮은 번호를 받아 사람이
-    카드를 읽을 때 헷갈리지 않는다.
-    """
+    """마스커에 표를 등록한다. 맥락 기반 등록 뒤에 부른다 (§22)."""
     n = 0
     for name, kind in terms():
         if name not in masker._fwd:
@@ -115,7 +96,7 @@ def _zabbix_names(client, url: str, token: str) -> set:
 
 
 def _loki_names(client, url: str) -> set:
-    """라벨 값 목록. 로그에 찍히는 이름은 Zabbix 호스트명과 다를 수 있다."""
+    """라벨 값 목록."""
     label = os.environ.get("LOKI_HOST_LABEL", "host")
     now = int(time.time())
     r = client.get("%s/loki/api/v1/label/%s/values" % (url.rstrip("/"), label),
@@ -126,11 +107,7 @@ def _loki_names(client, url: str) -> set:
 
 
 def _wazuh_names(client, url: str, user: str, pw: str) -> set:
-    """에이전트 이름 목록.
-
-    이름 하나씩 존재를 확인하는 함수는 있었지만 목록을 얻는 코드는 없었다. 전수를 이름당
-    1요청으로 받으면 호스트 수만큼 요청이 나가므로 집계로 한 번에 받는다.
-    """
+    """에이전트 이름 목록. 집계 1회로 받는다 (호스트당 1요청을 피한다)."""
     body = {"size": 0, "aggs": {"agents": {"terms": {"field": "agent.name",
                                                      "size": 1000}}},
             "query": {"range": {"@timestamp": {"gte": "now-7d"}}}}
@@ -143,11 +120,7 @@ def _wazuh_names(client, url: str, user: str, pw: str) -> set:
 
 
 def build(now: float = None) -> dict:
-    """출처에서 이름을 모아 표를 새로 만든다. 예외를 던지지 않는다.
-
-    출처 하나가 죽어도 나머지로 표를 만든다. 전부 실패하면 직전 표를 유지한다 — 빈 표로
-    바꾸면 그 순간부터 조용히 안 가려진다.
-    """
+    """출처에서 이름을 모아 표를 새로 만든다. 예외를 던지지 않는다 (§22)."""
     now = time.time() if now is None else now
     found, per, errs = set(), {}, []
 
@@ -188,7 +161,7 @@ def build(now: float = None) -> dict:
         except Exception as e:
             errs.append("wazuh: %s" % e)
 
-    # 명부에 적힌 이름도 넣는다. 조회로 안 잡히는 축(조용한 에이전트 등)을 사람이 적어 둔 것이다.
+    # 조회로 안 잡히는 이름(조용한 에이전트 등)을 사람이 적어 둔 것
     reg = 0
     for e in registry.entries():
         for k in ("name", "loki", "wazuh"):
@@ -218,7 +191,7 @@ def build(now: float = None) -> dict:
 
 
 def _save_cache() -> None:
-    """다음 기동 때 조회 전에도 직전 표로 돌게 남긴다. 실패는 기록만 한다."""
+    """캐시 저장. 실패는 기록만 한다."""
     try:
         d = os.path.dirname(CACHE_FILE)
         if d:
@@ -257,7 +230,7 @@ def load_cache() -> int:
 
 
 class Refresher:
-    """주기 갱신. 생존 신호와 같은 형태 — 데몬 스레드, 정지는 Event."""
+    """주기 갱신 (생존 신호와 같은 형태)."""
 
     def __init__(self, interval_s: float = None):
         self.interval_s = REFRESH_S if interval_s is None else interval_s
@@ -279,7 +252,7 @@ class Refresher:
     def _loop(self):
         try:
             build()
-        except Exception as e:      # 여기서 죽으면 표가 영영 안 만들어진다
+        except Exception as e:
             log.error("이름 표 최초 생성 실패: %s", e)
         while not self._stop.wait(self.interval_s):
             try:
