@@ -196,7 +196,9 @@ def main() -> int:
     ap.add_argument("--send", action="store_true", help="Zabbix trapper 로 전송")
     ap.add_argument("--target", default=os.environ.get("QUALITY_TARGET_HOST",
                                                        "quality-bot"))
-    ap.add_argument("--zabbix-server", default=os.environ.get("ZBX_TRAPPER_HOST", ""))
+    # 기본값을 msp_report.py 와 맞춘다 — 랩에서 감시 서버가 같은 기계에 떠 있다.
+    ap.add_argument("--zabbix-server",
+                    default=os.environ.get("ZBX_TRAPPER_HOST", "127.0.0.1"))
     ap.add_argument("--zabbix-port", type=int,
                     default=int(os.environ.get("ZBX_TRAPPER_PORT", "10051")))
     a = ap.parse_args()

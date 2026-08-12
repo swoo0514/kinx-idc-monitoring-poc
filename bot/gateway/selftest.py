@@ -2056,7 +2056,27 @@ def _annotation_checks() -> int:
         # ④ 사건 시각을 모르면(0) 발행하지 않는다 — 1970년 주석을 만들지 않는다
         grafana.httpx = _FakeHttpx()
         assert grafana.annotate("x", 0) is None
-        return 12
+
+        # ⑤ 주석은 판정 행에 남은 사건 시각을 그대로 쓴다. 다시 계산하면 발행 측이 시각을
+        #    안 실어 보낸 알림에서 분석에 걸린 시간만큼 밀린다(2026-08-12 랩 실측 21초).
+        import asyncio
+        import time as _t
+
+        from . import incident as inc_mod, triage
+
+        sent.clear()
+        grafana.httpx = _FakeHttpx()
+        inc = inc_mod.Incident(
+            key=("internal", "h1", "other"), host="h1",
+            alerts=[inc_mod.Alert(source="zabbix-internal", event_id="e1",
+                                  trigger_id="", host="h1", alert_name="n",
+                                  sev="SEV1", incident_class="other",
+                                  recv=_t.monotonic())],   # clock 없음 = 발행 측 미제공
+            opened_at=_t.monotonic(), last_at=_t.monotonic())
+        asyncio.run(triage._annotate(None, inc, "SEV1", "헤드", "단일", "본문",
+                                     event_ts=1700000000.0))
+        assert sent and sent[-1][1]["json"]["time"] == 1700000000000, sent[-1][1]["json"]
+        return 14
     finally:
         grafana.httpx = saved_httpx
         for k, v in saved_env.items():

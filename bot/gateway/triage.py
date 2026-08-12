@@ -102,19 +102,24 @@ def analyze_ref(inc) -> str:
                     for a in inc.alerts)
 
 
-async def _annotate(jid, inc, sev, headline: str, note: str, text: str) -> None:
-    """판정을 관측 타임라인에 남긴다 (§25-4). 30초 예산 밖이라 배경으로 돈다."""
+async def _annotate(jid, inc, sev, headline: str, note: str, text: str,
+                    event_ts: float) -> None:
+    """판정을 관측 타임라인에 남긴다 (§25-4). 30초 예산 밖이라 배경으로 돈다.
+
+    사건 시각은 판정 행에 남긴 값을 그대로 받는다. 여기서 다시 계산하면, 발행 측이
+    시각을 안 실어 보낸 알림에서 분석에 걸린 만큼 뒤로 밀린다(랩 실측 21초). 그러면
+    주석이 지표가 튄 자리 옆에 있지 않아 이 기능의 쓸모가 없어진다.
+    """
     body = "[%s] %s · %s\n%s" % (sev, headline, note, (text or "").strip()[:400])
     if jid:
         body += "\n(판정 #%s)" % jid
-    aid = await asyncio.to_thread(
-        grafana.annotate, body, collector.reference_time(inc, int(time.time())),
-        ["kinx-bot", sev, inc.host])
+    aid = await asyncio.to_thread(grafana.annotate, body, event_ts,
+                                  ["kinx-bot", sev, inc.host])
     if aid and jid:
         await asyncio.to_thread(_finish, jid, {"annotation_id": aid})
 
 
-def _record(inc, context, sev, fired, reason, origin):
+def _record(inc, context, sev, fired, reason, origin, event_ts):
     """판정을 이력에 남기고 식별자를 돌려준다 (§24). 실패해도 흐름을 막지 않는다."""
     try:
         return store.record_judgment({
@@ -127,7 +132,7 @@ def _record(inc, context, sev, fired, reason, origin):
             "verdict": incident_mod.dominant_verdict(context) or "",
             "gate_fired": 1 if fired else 0, "gate_reason": reason,
             "sources": _sources_note(context), "origin": origin,
-            "event_ts": collector.reference_time(inc, int(time.time())),
+            "event_ts": event_ts,
         })
     except Exception as e:
         log.warning("판정 이력 기록 실패: %s", e)
@@ -176,8 +181,10 @@ async def run_incident(inc, force: bool = False) -> dict:
     fire, reason = (True, "사람 요청") if force else incident_mod.should_triage(inc, context)
     # 카드보다 먼저 남긴다 — 카드에 실을 식별자가 여기서 나오고, 분석 중 프로세스가
     # 죽어도 판정은 남는다. 저장은 블로킹이라 다른 사건 타이머를 막지 않게 감싼다.
+    # 사건 시각은 여기서 한 번만 정한다. 판정 행과 주석이 같은 값을 써야 한다.
+    event_ts = collector.reference_time(inc, int(time.time()))
     jid = await asyncio.to_thread(_record, inc, context, sev, fire, reason,
-                                  "forced" if force else "auto")
+                                  "forced" if force else "auto", event_ts)
     if not fire:
         await asyncio.to_thread(_push_gated, inc, context, reason, jid)
         timings["total_s"] = round(time.monotonic() - t0, 2)
@@ -244,7 +251,7 @@ async def run_incident(inc, force: bool = False) -> dict:
     # 게이트에서 걸러진 사건은 안 찍는다 — 그쪽이 다수라 타임라인이 우리가 진단한
     # 노이즈와 같은 모양이 된다.
     _spawn_bg(_annotate(jid, inc, sev, headline, f"{merge_note} · {chronic}",
-                        reply.get("text", "")))
+                        reply.get("text", ""), event_ts))
     log.info("incident triage done fp=%s alerts=%d provider=%s degraded=%s timings=%s",
              inc.fingerprint(), n, reply["provider"], reply["degraded"], timings)
     return {"fingerprint": inc.fingerprint(), "alert_count": n,
