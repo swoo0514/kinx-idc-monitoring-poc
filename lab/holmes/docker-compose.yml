@@ -15,7 +15,12 @@ services:
       # 여기 진짜 상류 키를 넣지 않는다 — 넣으면 우회가 가능해진다.
       ANTHROPIC_API_BASE: "${ANTHROPIC_API_BASE:?게이트웨이 주소를 지정한다}"
       ANTHROPIC_API_KEY: "${GATEWAY_TOKEN:?게이트웨이 토큰을 지정한다}"
+      # config.yaml 이 참조하는 주소들. 여기 빠지면 도구가 그 툴셋만 조용히 못 쓴다.
+      ZABBIX_URL: "${ZABBIX_URL:?}"
+      ZABBIX_HOSTPORT: "${ZABBIX_HOSTPORT:?}"
       ZABBIX_TOKEN: "${ZABBIX_TOKEN:?}"
+      LOKI_URL: "${LOKI_URL:-}"
+      WAZUH_INDEXER_URL: "${WAZUH_INDEXER_URL:-}"
       WAZUH_BASIC_AUTH: "${WAZUH_BASIC_AUTH:-}"
       PYTHONUNBUFFERED: "1"
     volumes:
