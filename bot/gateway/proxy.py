@@ -46,6 +46,11 @@ def mask_json(obj, masker):
     return _walk(obj, masker.mask)
 
 
+def substituted(before, after) -> int:
+    """실제로 몇 개의 이름이 바뀌었는가 (§23-5)."""
+    return len(TOKEN_RE.findall(json.dumps(after, ensure_ascii=False)))
+
+
 def unmask_json(obj, masker):
     return _walk(obj, masker.unmask)
 
@@ -99,6 +104,12 @@ async def handle(body: dict, tenant_scoped: bool = False) -> tuple:
 
     mk = build_masker()
     masked = mask_json(body, mk)
+    n = substituted(body, masked)
+    if not n:
+        log.warning("가린 이름이 0개다 — 표(%d개)에 없는 이름만 오간 것인지 확인한다",
+                    len(nametable.terms()))
+    else:
+        log.info("이름 %d자리 가림 (표 %d개)", n, len(nametable.terms()))
     headers = {"x-api-key": key, "anthropic-version": API_VERSION,
                "content-type": "application/json"}
     try:
