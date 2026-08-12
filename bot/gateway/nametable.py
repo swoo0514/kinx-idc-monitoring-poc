@@ -132,6 +132,8 @@ def build(now: float = None) -> dict:
         token = (os.environ.get(conf.get("token_env") or "", "") if conf.get("url")
                  else os.environ.get("ZABBIX_TOKEN", ""))
         if not (url and token):
+            errs.append("zabbix %s: 주소·토큰 미설정(ZABBIX_URL·ZABBIX_TOKEN)"
+                        % (name or "default"))
             continue
         try:
             with httpx.Client() as c:
@@ -141,6 +143,8 @@ def build(now: float = None) -> dict:
         except Exception as e:
             errs.append("zabbix %s: %s" % (name or "default", e))
 
+    if not os.environ.get("LOKI_URL"):
+        errs.append("loki: LOKI_URL 미설정")
     if os.environ.get("LOKI_URL"):
         try:
             with httpx.Client() as c:
@@ -150,6 +154,8 @@ def build(now: float = None) -> dict:
         except Exception as e:
             errs.append("loki: %s" % e)
 
+    if not os.environ.get("WAZUH_INDEXER_URL"):
+        errs.append("wazuh: WAZUH_INDEXER_URL 미설정")
     if os.environ.get("WAZUH_INDEXER_URL"):
         try:
             with httpx.Client(verify=False) as c:
@@ -180,6 +186,9 @@ def build(now: float = None) -> dict:
         with _lock:
             _error = "; ".join(errs)
         return status()
+    if not table:
+        log.error("이름 표가 비었다 — %s. 마스킹은 맥락 기반 등록으로만 돈다",
+                  "; ".join(errs) or "출처를 하나도 못 읽었다")
     with _lock:
         _terms, _by_source, _error, _built_at = table, per, "; ".join(errs), now
     if errs:
@@ -191,7 +200,9 @@ def build(now: float = None) -> dict:
 
 
 def _save_cache() -> None:
-    """캐시 저장. 실패는 기록만 한다."""
+    """캐시 저장. 경로가 비면 저장하지 않는다(진단 실행). 실패는 기록만 한다."""
+    if not CACHE_FILE:
+        return
     try:
         d = os.path.dirname(CACHE_FILE)
         if d:
@@ -211,6 +222,8 @@ def _save_cache() -> None:
 def load_cache() -> int:
     """기동 시 직전 표를 읽는다. 없거나 깨졌으면 0."""
     global _terms, _by_source, _built_at
+    if not CACHE_FILE:
+        return 0
     try:
         with open(CACHE_FILE, encoding="utf-8") as f:
             doc = json.load(f)

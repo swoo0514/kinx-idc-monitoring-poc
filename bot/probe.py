@@ -387,11 +387,21 @@ def nametable_report():
     """
     from gateway import masking, nametable
 
+    # 진단은 디스크에 표를 남기지 않는다 — 실환경 호스트명이 파일로 남으면 안 된다.
+    nametable.CACHE_FILE = ""
     st = nametable.build()
     names = [n for n, _ in nametable.terms()]
     print("== 이름 표 ==")
     print("출처별:", st["by_source"])
     print("총 %d개 / 오류: %s" % (st["terms"], st["error"] or "없음"))
+    if not st["terms"]:
+        print()
+        print("표가 비었다. 아래를 설정하고 다시 돌린다 — 하나도 없으면 조회 자체가 안 된다.")
+        print("  ZABBIX_URL·ZABBIX_TOKEN  (필수, 읽기 전용 토큰)")
+        print("  LOKI_URL·WAZUH_INDEXER_*  (선택 — 없으면 그 출처만 빠진다)")
+        print("현재 설정 상태:")
+        show_env()
+        return
 
     rk = nametable.risky()
     print()
