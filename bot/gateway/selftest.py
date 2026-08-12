@@ -284,7 +284,7 @@ def main():
                     + _route_record_checks() + _annotation_checks()
                     + _quality_checks() + _prior_checks()
                     + _dashboard_annotation_checks())
-    collect_fail_checks = _collect_failure_checks()
+    collect_fail_checks = _collect_failure_checks() + _truncation_checks()
     wrong_srv_checks = _wrong_server_checks()
     evt_time_checks = _event_time_checks()
     open_limit_checks = _open_limit_checks()
@@ -392,10 +392,10 @@ def _source_status_checks() -> int:
               "SECURITY_EXEMPT_HOSTS", "LOG_AXIS_EXEMPT_HOSTS", "HOST_REGISTRY_FILE")}
     try:
         # 미배선(URL 없음) = disabled, 호스트 라벨 미해석 = unavailable (성공이 아니다)
-        assert asyncio.run(collector._loki_logs("h", 0)) == ([], collector.SOURCE_DISABLED)
+        assert asyncio.run(collector._loki_logs("h", 0))[:2] == ([], collector.SOURCE_DISABLED)
         assert asyncio.run(collector._wazuh_alerts("h", 0)) == ([], collector.SOURCE_DISABLED)
         os.environ["LOKI_URL"] = "http://127.0.0.1:1"
-        assert asyncio.run(collector._loki_logs("", 0)) == ([], collector.SOURCE_UNAVAILABLE)
+        assert asyncio.run(collector._loki_logs("", 0))[:2] == ([], collector.SOURCE_UNAVAILABLE)
 
         # 로그 축이 없는 것이 정상인 호스트는 조회하지 않는다 — 인증서·리포트용 가상 호스트를
         # 이름 불일치로 보면 알림마다 분석이 돌고 상한을 먼저 소진한다.
@@ -404,7 +404,7 @@ def _source_status_checks() -> int:
             assert collector.axis_exempt("cert-example.com", "logs") is True
             assert collector.axis_exempt("cert-example.com", "security") is True
             assert collector.axis_exempt("node1", "logs") is False
-            assert asyncio.run(collector._loki_logs("x", 0, "cert-example.com")) \
+            assert asyncio.run(collector._loki_logs("x", 0, "cert-example.com"))[:2] \
                 == ([], collector.SOURCE_DISABLED)
             assert asyncio.run(collector._wazuh_alerts("x", 0, "report-Customer-B")) \
                 == ([], collector.SOURCE_DISABLED)
@@ -442,14 +442,14 @@ def _source_status_checks() -> int:
         real = collector.httpx
         try:
             collector.httpx = _FakeHttpx(known=["known-host"], wazuh_total=0)
-            assert asyncio.run(collector._loki_logs("known-host", 0)) == ([], collector.SOURCE_OK)
-            assert asyncio.run(collector._loki_logs("other", 0)) == ([], collector.SOURCE_UNMATCHED)
+            assert asyncio.run(collector._loki_logs("known-host", 0))[:2] == ([], collector.SOURCE_OK)
+            assert asyncio.run(collector._loki_logs("other", 0))[:2] == ([], collector.SOURCE_UNMATCHED)
             assert asyncio.run(collector._wazuh_alerts("a", 0)) == ([], collector.SOURCE_UNMATCHED)
             collector.httpx = _FakeHttpx(known=[], wazuh_total=3)
             assert asyncio.run(collector._wazuh_alerts("a", 0)) == ([], collector.SOURCE_OK)
             # 확인 질의가 실패하면 판정할 수 없으므로 ok 로 내리지 않는다
             collector.httpx = _FakeHttpx(known=["known-host"], wazuh_total=0, fail_check=True)
-            assert asyncio.run(collector._loki_logs("known-host", 0)) == ([], collector.SOURCE_UNAVAILABLE)
+            assert asyncio.run(collector._loki_logs("known-host", 0))[:2] == ([], collector.SOURCE_UNAVAILABLE)
             assert asyncio.run(collector._wazuh_alerts("a", 0)) == ([], collector.SOURCE_UNAVAILABLE)
         finally:
             collector.httpx = real
@@ -2429,6 +2429,90 @@ def _contract_checks() -> int:
     assert llm.NOTIFY_ONLY_RULE not in llm.build_user_prompt(ok)
     assert "custa-db01" not in json.dumps(out, ensure_ascii=False)
     return 13
+
+
+def _truncation_checks() -> int:
+    """자른 것을 자랐다고 말하는가 (§1-1-8).
+
+    로그는 40줄에서 잘리고 줄도 글자 수로 잘리는데 상태는 늘 ok 다. 모델은 그 40줄에
+    없는 것을 없는 것으로 읽는다. 사건이 클수록 잘리는 비율이 높으니 하필 분석이 가장
+    필요할 때 가장 크게 틀린다.
+    """
+    import asyncio
+    import json
+    import os
+
+    from . import collector, llm, masking
+
+    class _Resp:
+        def __init__(self, lines):
+            self._lines = lines
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": {"result": [{"values": [["1", ln] for ln in self._lines]}]}}
+
+    class _Fake:
+        def __init__(self, lines):
+            self.lines = lines
+
+        def AsyncClient(self, **_kw):
+            outer = self
+
+            class _C:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *a):
+                    return False
+
+                async def get(self, url, **kw):
+                    return _Resp(outer.lines)
+            return _C()
+
+    saved_httpx = collector.httpx
+    saved_url = os.environ.get("LOKI_URL")
+    os.environ["LOKI_URL"] = "http://loki.invalid"
+    try:
+        # ① 상한에 딱 찼으면 잘린 것으로 본다
+        collector.httpx = _Fake(["line %d" % i for i in range(collector.LOKI_LIMIT)])
+        lines, status, trunc, clipped = asyncio.run(
+            collector._loki_logs("h1", 1700000000))
+        assert status == collector.SOURCE_OK and trunc is True, (status, trunc)
+        assert clipped == 0, clipped
+
+        # ② 상한 미만이면 아니다
+        collector.httpx = _Fake(["a", "b"])
+        _l, _s, trunc, clipped = asyncio.run(collector._loki_logs("h1", 1700000000))
+        assert trunc is False and clipped == 0
+
+        # ③ 줄이 잘린 개수를 센다 — 스택 추적 꼬리가 사라지는 자리다
+        collector.httpx = _Fake(["x" * (collector.LOKI_LINE_MAX + 50), "짧은 줄"])
+        lines, _s, _t, clipped = asyncio.run(collector._loki_logs("h1", 1700000000))
+        assert clipped == 1 and len(lines[0]) == collector.LOKI_LINE_MAX, clipped
+
+        # ④ 전송 형태에 실린다. 수치라 마스킹 대상이 아니다.
+        ctx = {"incident": {"host": "h1", "classes": ["disk_space"], "alert_count": 1},
+               "host": {}, "alerts": [], "logs": ["a"], "security": [],
+               "sources": {"logs": "ok"}, "logs_truncated": True, "logs_clipped": 2}
+        out = masking.build_llm_context(ctx, "SEV2", masking.Masker())
+        assert out["logs_truncated"] is True and out["logs_clipped"] == 2, out
+
+        # ⑤ 잘렸을 때만 규칙이 붙는다. 안 잘렸는데 의심하게 만들면 그것도 오도다.
+        assert llm.TRUNCATION_RULE in llm.build_user_prompt(out)
+        whole = masking.build_llm_context(
+            dict(ctx, logs_truncated=False, logs_clipped=0), "SEV2", masking.Masker())
+        assert llm.TRUNCATION_RULE not in llm.build_user_prompt(whole)
+        assert "logs_truncated" in json.dumps(out, ensure_ascii=False)
+        return 12
+    finally:
+        collector.httpx = saved_httpx
+        if saved_url is None:
+            os.environ.pop("LOKI_URL", None)
+        else:
+            os.environ["LOKI_URL"] = saved_url
 
 
 def _proxy_mask_checks() -> int:

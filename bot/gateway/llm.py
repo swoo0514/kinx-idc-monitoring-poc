@@ -114,12 +114,22 @@ def build_user_prompt(masked_ctx: dict) -> str:
                 "인과를 추정해 초동 분석을 회신하라.\n\n")
     else:
         head = "다음 알림 컨텍스트로 초동 분석을 회신하라.\n\n"
+    if masked_ctx.get("logs_truncated") or masked_ctx.get("logs_clipped"):
+        head += TRUNCATION_RULE
     if (masked_ctx.get("incident") or {}).get("scope") == "notify_only":
         head += NOTIFY_ONLY_RULE
     if masked_ctx.get("prior"):
         head += PRIOR_INSTRUCTION
     return head + json.dumps(masked_ctx, ensure_ascii=False, indent=1)
 
+
+# 로그가 잘렸을 때만 붙는다. 안 잘렸는데 의심하게 만들면 그것도 오도다.
+TRUNCATION_RULE = (
+    "이 사건의 로그는 **일부만 실려 있다**. `logs_truncated` 가 true 면 관측 창에 더 많은"
+    " 줄이 있었고 가장 최근 것만 담긴 것이며, `logs_clipped` 는 길이 제한으로 뒷부분이"
+    " 잘린 줄 수다. 따라서 **실린 로그에 없다는 이유로 '흔적 없음'이라고 쓰지 마라.**"
+    " 로그 축을 근거로 삼을 때는 '실린 범위에서는' 이라고 밝히고, 확인 명령에 원본 로그를"
+    " 더 넓게 보는 명령을 넣어라.\n\n")
 
 # 위탁 계약이 임의 조치를 금지한 고객사에만 붙는다. 실행은 라우터가 막지만, 담당자가
 # 읽는 문장은 그것과 무관하게 만들어지고 있었다.

@@ -175,7 +175,7 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
     # 축마다 이름이 다를 수 있다(Loki 라벨과 Wazuh 에이전트명이 갈리는 환경이 있다).
     loki_label = _resolve_label(zbx_host, base["host"], source, "logs")
     wz_label = _resolve_label(zbx_host, base["host"], source, "security")
-    (logs, logs_status), (security, sec_status) = await asyncio.gather(
+    (logs, logs_status, logs_trunc, logs_clip), (security, sec_status) = await asyncio.gather(
         _loki_logs(loki_label, now, zbx_host, source),
         _wazuh_alerts(wz_label, now, zbx_host, source),
     )
@@ -187,6 +187,8 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
         "security": security,    # Wazuh Indexer — 침해·변경 경보
         # 빈 목록의 의미를 확정하는 상태. ok 일 때만 "없음 = 사실"이다.
         "sources": {"logs": logs_status, "security": sec_status},
+        "logs_truncated": logs_trunc,
+        "logs_clipped": logs_clip,
     }
 
 
@@ -260,7 +262,8 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
     ref = reference_time(incident, now, event_clocks)
     if ref != now:
         log.info("조회 기준을 사건 시각으로 맞춘다 host=%s (%d초 전)", zbx_host, now - ref)
-    (logs, logs_status), (security, sec_status), (opens, opens_status) = await asyncio.gather(
+    ((logs, logs_status, logs_trunc, logs_clip), (security, sec_status),
+     (opens, opens_status)) = await asyncio.gather(
         _loki_logs(loki_label, ref, zbx_host, source),
         _wazuh_alerts(wz_label, ref, zbx_host, source),
         _open_probe(),
@@ -324,6 +327,9 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         # 사건이 전부 "봐줬는데 볼 게 없었다"로 남는다.
         "sources": {"logs": logs_status, "security": sec_status,
                     "open_problems": opens_status, "metrics": metrics_status},
+        # 조회 상태와 별개다. ok 이면서 잘렸을 수 있다.
+        "logs_truncated": logs_trunc,
+        "logs_clipped": logs_clip,
     }
 
 
@@ -445,15 +451,20 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
 
 
 async def _loki_logs(host_label: str, now: int, zbx_host: str = "", source: str = "") -> tuple:
-    """Loki 최근 로그. 반환 (로그 목록, 조회 상태). 상태는 SOURCE_* 넷 중 하나."""
+    """Loki 최근 로그. 반환 (로그 목록, 조회 상태, 창 절단 여부, 줄 잘린 수).
+
+    절단은 조회 상태와 별개다. 40줄에서 자른 것도 조회는 성공이므로 상태는 ok 이지만,
+    그것만 보내면 모델이 그 40줄에 없는 것을 없는 것으로 읽는다. 사건이 클수록 잘리는
+    비율이 높으니 하필 분석이 가장 필요할 때 가장 크게 틀린다.
+    """
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url:
-        return [], SOURCE_DISABLED
+        return [], SOURCE_DISABLED, False, 0
     if zbx_host and axis_exempt(zbx_host, "logs", source):
-        return [], SOURCE_DISABLED
+        return [], SOURCE_DISABLED, False, 0
     if not host_label:   # 호스트 라벨을 못 정하면 조회 자체가 불가 — 성공이 아니다
         log.warning("loki skipped: host label 미해석 (HOST_LABEL_MAP·인터페이스 dns 확인)")
-        return [], SOURCE_UNAVAILABLE
+        return [], SOURCE_UNAVAILABLE, False, 0
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(f"{url}/loki/api/v1/query_range", params={
@@ -462,16 +473,20 @@ async def _loki_logs(host_label: str, now: int, zbx_host: str = "", source: str 
                 "end": str(now * 1_000_000_000),
                 "limit": LOKI_LIMIT, "direction": "backward"}, timeout=TIMEOUT_S)
             r.raise_for_status()
-            out = []
+            out, clipped = [], 0
             for stream in r.json().get("data", {}).get("result", []):
                 for _ts, line in stream.get("values", []):
+                    if len(line) > LOKI_LINE_MAX:
+                        clipped += 1
                     out.append(line[:LOKI_LINE_MAX])
             if out:
-                return out[:LOKI_LIMIT], SOURCE_OK
-            return [], await _loki_name_status(client, url, host_label, now)
+                # 상한을 채웠으면 그 창에 더 있었다고 본다. 정확히 40줄이었을 수도 있으나
+                # 없는 것을 없다고 단언하는 쪽보다 더 있었다고 보는 쪽이 안전하다.
+                return out[:LOKI_LIMIT], SOURCE_OK, len(out) >= LOKI_LIMIT, clipped
+            return [], await _loki_name_status(client, url, host_label, now), False, 0
     except Exception as e:
         log.warning("loki query failed host=%s: %s", host_label, e)
-        return [], SOURCE_UNAVAILABLE
+        return [], SOURCE_UNAVAILABLE, False, 0
 
 
 async def _loki_name_status(client, url: str, host_label: str, now: int) -> str:
