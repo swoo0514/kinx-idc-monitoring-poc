@@ -49,6 +49,12 @@
       "kinx-bot"
      ],
      "type": "tags"
+    },
+    "filter": {
+     "exclude": false,
+     "ids": [
+      7
+     ]
     }
    }
   ]

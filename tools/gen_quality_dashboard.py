@@ -124,7 +124,10 @@ DASH = {
         {"datasource": {"type": "grafana", "uid": "-- Grafana --"}, "enable": True,
          "hide": False, "iconColor": "purple", "name": "봇 판정",
          "target": {"limit": 100, "matchAny": False, "tags": ["kinx-bot"],
-                    "type": "tags"}}]},
+                    "type": "tags"},
+         # 기본값은 전 패널이라 통계 숫자 옆까지 세로선이 선다. 시각이 뜻을 갖는
+         # 패널에만 표시한다(여기서는 응답시간).
+         "filter": {"exclude": False, "ids": [7]}}]},
     "panels": P,
 }
 
