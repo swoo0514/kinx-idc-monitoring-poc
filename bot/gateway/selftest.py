@@ -278,6 +278,7 @@ def main():
     holmes_eg_checks = _holmes_egress_checks()
     tenant_checks = _tenant_scope_checks()
     nametable_checks = _nametable_checks()
+    proxy_checks = _proxy_mask_checks()
     collect_fail_checks = _collect_failure_checks()
     wrong_srv_checks = _wrong_server_checks()
     evt_time_checks = _event_time_checks()
@@ -294,7 +295,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + timer_checks + holmes_eg_checks + tenant_checks + collect_fail_checks + nametable_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + timer_checks + holmes_eg_checks + tenant_checks + collect_fail_checks + nametable_checks + proxy_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1556,6 +1557,69 @@ def _nametable_checks() -> int:
     return 15
 
 
+def _proxy_mask_checks() -> int:
+    """수신 지점의 왕복 변환 — 중첩 JSON 마스킹과 도구 인자 역치환 (§23)."""
+    import json
+
+    from . import masking, nametable, proxy
+
+    saved = dict(nametable._terms)
+    try:
+        nametable._terms = {"goal.kinx.net": "host", "db-prod-01": "host",
+                            "Test": "group"}
+        mk = masking.Masker()
+        nametable.apply_to(mk)
+
+        req = {
+            "model": "claude-opus-4-8",
+            "system": "goal.kinx.net 을 조사하라",
+            "messages": [
+                {"role": "user", "content": "db-prod-01 장애"},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1",
+                     "content": "goal.kinx.net 의 CPU 99%"},
+                ]},
+            ],
+            "tools": [{"name": "zabbix_query", "description": "호스트 상태 조회"}],
+        }
+        out = proxy.mask_json(req, mk)
+        blob = json.dumps(out, ensure_ascii=False)
+        assert "goal.kinx.net" not in blob, f"중첩 안 이름이 안 가려졌다: {blob}"
+        assert "db-prod-01" not in blob, blob
+        # 프로토콜 자리는 그대로여야 한다. 여기가 바뀌면 도구가 깨진다.
+        assert out["model"] == "claude-opus-4-8", out["model"]
+        assert out["tools"][0]["name"] == "zabbix_query", out["tools"][0]
+        assert out["messages"][1]["content"][0]["type"] == "tool_result"
+        assert out["messages"][1]["content"][0]["tool_use_id"] == "toolu_1"
+        # 서로 다른 호스트는 서로 다른 토큰이어야 관계 분석이 남는다
+        t1 = mk._fwd["goal.kinx.net"]
+        t2 = mk._fwd["db-prod-01"]
+        assert t1 != t2, (t1, t2)
+        # 같은 이름은 어디서 나오든 같은 토큰
+        assert out["system"].count(t1) == 1 and t1 in blob
+
+        # 응답 — 도구 호출 인자가 실명으로 돌아와야 도구가 조회할 수 있다
+        resp = {"id": "msg_1", "type": "message", "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "%s 를 확인하라" % t1},
+                    {"type": "tool_use", "id": "toolu_2", "name": "zabbix_query",
+                     "input": {"host": t1, "metric": "cpu.util"}},
+                ]}
+        back = proxy.unmask_json(resp, mk)
+        assert back["content"][1]["input"]["host"] == "goal.kinx.net", back["content"][1]
+        assert "goal.kinx.net" in back["content"][0]["text"]
+        assert back["content"][1]["name"] == "zabbix_query"
+
+        # 되돌리지 못한 토큰이 도구 인자에 남으면 조용히 깨진 조회가 나간다
+        # 표에 없는 토큰(모델이 지어냈거나 표가 바뀐 경우) — 형태는 같고 뜻이 없다
+        bad = {"content": [{"type": "tool_use", "input": {"host": "[host-deadbe]"}}]}
+        assert proxy.leftover_tokens(proxy.unmask_json(bad, mk)),             "역치환 못 한 토큰을 못 잡는다"
+        assert not proxy.leftover_tokens(back), back
+        return 12
+    finally:
+        nametable._terms = saved
+
+
 def _tenant_scope_checks() -> int:
     """보안 조회가 남의 호스트까지 긁어오지 않는가.
 
@@ -2271,7 +2335,9 @@ def _llm_concurrency_checks() -> int:
                 hits += [w for p, w in CALLS_ADAPTER if re.search(p, src, re.M)]
             # 어댑터가 사는 곳은 공급자에 직접 말을 걸어도 된다. 지금은 두 곳이다 —
             # llm.py(Claude·Ollama)와 holmes.py(심층조사). 둘 다 출구가 부른다.
-            if base not in ("egress.py", "llm.py", "holmes.py"):
+            # proxy.py 는 상류로 그대로 중계하는 것이 일이라 공급자 주소를 쓴다.
+            # app.py 는 그 경로를 라우팅만 한다.
+            if base not in ("egress.py", "llm.py", "holmes.py", "proxy.py", "app.py"):
                 hits += [w for p, w in TALKS_PROVIDER if re.search(p, src, re.M)]
             if base in KNOWN_OUTSIDE:
                 assert hits, (f"{base} 가 예외 목록에 있는데 나가는 코드가 없다 — "

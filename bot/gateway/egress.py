@@ -16,6 +16,7 @@
 설정·근거는 bot/GATEWAY_GUIDE.md §21.
 """
 
+import contextlib
 import logging
 import os
 import threading
@@ -73,7 +74,7 @@ def kind_counts(now: float = None) -> dict:
         return out
 
 
-def _hour_ok(exempt: bool, now: float = None) -> bool:
+def _hour_ok(exempt: bool, now: float = None, cap: int = None) -> bool:
     """시간당 총량이 남았는지 본다. **세지는 않는다.**
 
     exempt 는 위중한 사건이다. 총량과 무관하게 통과시킨다 — 폭주 때 정작 위중한
@@ -82,7 +83,7 @@ def _hour_ok(exempt: bool, now: float = None) -> bool:
     now = time.time() if now is None else now
     with _lock:
         _calls[:] = [t for t in _calls if now - t <= 3600]
-        if not exempt and len(_calls) >= MAX_PER_HOUR:
+        if not exempt and len(_calls) >= (MAX_PER_HOUR if cap is None else cap):
             _stats["hour_blocked"] += 1
             return False
         return True
@@ -134,6 +135,39 @@ def _leave():
         _stats["inflight"] -= 1
 
 
+class Blocked(Exception):
+    """제한에 걸려 나가지 못했다. reason 은 BLOCKED_* 중 하나 (§21)."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+@contextlib.contextmanager
+def guard(kind: str = "", exempt: bool = False, max_per_hour: int = None):
+    """동시 수·시간당 총량을 걸고 실제 발신 직전에 센다 (§21).
+
+    `call` 이 쓰던 것을 그대로 뺐다. 프록시는 멀티턴 요청을 그대로 중계하므로
+    `(system, user) -> str` 계약에 안 맞는다. 제한만 따로 쓴다.
+    """
+    if not _hour_ok(exempt, cap=max_per_hour):
+        log.warning("시간당 상한 도달 — %d건/1h (용도 %s)",
+                    max_per_hour or MAX_PER_HOUR, kind or "?")
+        raise Blocked(BLOCKED_HOUR)
+    if not _sem.acquire(timeout=QUEUE_WAIT_S):
+        with _lock:
+            _stats["queue_timeouts"] += 1
+        log.warning("동시 호출 대기 초과 — 상한 %d, 대기 %.0fs (용도 %s)",
+                    MAX_CONCURRENCY, QUEUE_WAIT_S, kind or "?")
+        raise Blocked(BLOCKED_QUEUE)
+    _enter()
+    try:
+        yield lambda: _record(kind)
+    finally:
+        _leave()
+        _sem.release()
+
+
 def call(adapters, system: str, user: str, exempt: bool = False,
          kind: str = "") -> dict:
     """외부 LLM 호출. 예외를 던지지 않는다.
@@ -149,33 +183,18 @@ def call(adapters, system: str, user: str, exempt: bool = False,
         return {"text": text, "provider": provider, "degraded": degraded,
                 "reason": reason, "elapsed_s": round(time.monotonic() - t0, 2)}
 
-    # 총량을 먼저 본다. 총량에 걸린 건은 자리를 기다릴 이유가 없다. 다만 여기서는
-    # 확인만 하고 세지 않는다 — 실제로 나갈 때 센다.
-    if not _hour_ok(exempt):
-        log.warning("시간당 상한 도달 — %d건/1h (용도 %s). 열화로 회신한다",
-                    MAX_PER_HOUR, kind or "?")
-        return _out("", "none", True, BLOCKED_HOUR)
-
-    if not _sem.acquire(timeout=QUEUE_WAIT_S):
-        with _lock:
-            _stats["queue_timeouts"] += 1
-        log.warning("동시 호출 대기 초과 — 상한 %d, 대기 %.0fs (용도 %s)",
-                    MAX_CONCURRENCY, QUEUE_WAIT_S, kind or "?")
-        return _out("", "none", True, BLOCKED_QUEUE)
-
-    _enter()
     try:
-        for adapter in adapters:
-            if not adapter.available():
-                continue
-            _record(kind)          # 이 어댑터로 실제로 나간다 — 여기서 센다
-            try:
-                text = adapter.complete(system, user)
-                return _out(text, adapter.name, False)
-            except Exception as e:  # 타임아웃·429·529 포함 — 다음 어댑터로 폴백
-                log.warning("adapter %s failed (%s): %s", adapter.name, kind or "?", e)
-    finally:
-        _leave()
-        _sem.release()
+        with guard(kind, exempt) as record:
+            for adapter in adapters:
+                if not adapter.available():
+                    continue
+                record()           # 이 어댑터로 실제로 나간다 — 여기서 센다
+                try:
+                    text = adapter.complete(system, user)
+                    return _out(text, adapter.name, False)
+                except Exception as e:  # 타임아웃·429·529 포함 — 다음 어댑터로 폴백
+                    log.warning("adapter %s failed (%s): %s", adapter.name, kind or "?", e)
+    except Blocked as b:
+        return _out("", "none", True, b.reason)
     # 어댑터가 하나도 안 붙었거나 전부 실패. 붙을 어댑터가 없었으면 아무것도 안 셌다.
     return _out("", "none", True, BLOCKED_NONE)
