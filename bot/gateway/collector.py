@@ -304,6 +304,8 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
             "merge_reason": incident.merge_reason(),
             "fingerprint": incident.fingerprint(),
             "dominant_sev": incident.dominant_sev(),
+            "scope": incident.scope(),
+            "automate": incident.automate(),
         },
         "host": host_obj,
         # 축마다 부르는 이름이 다를 수 있고, 로그 라인 본문에는 그 이름이 들어 있다.

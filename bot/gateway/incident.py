@@ -360,6 +360,11 @@ class Alert:
     # recv 는 단조 시계라 재기동하면 기준이 바뀐다. 그걸로 로그 창을 잡으면 두 시간 전
     # 사건인데 지금 기준 15분을 보게 되고, 빈 결과가 "기록 없음"으로 단언된다.
     clock: float = 0.0
+    # 위탁 계약 제약(notify_only)과 자동 조치 태그. 라우팅에서만 쓰고 버리면, 조치가
+    # 금지된 고객사 사건에도 모델이 시스템 변경을 권고하는 문장을 쓴다. 실행은 라우터가
+    # 막지만 담당자가 읽는 문장은 계약과 무관하게 만들어진다.
+    scope: str = ""
+    automate: str = ""
 
 
 @dataclass
@@ -399,6 +404,17 @@ class Incident:
         raw = "|".join([str(x) for x in self.key]
                        + [self.host, ",".join(sorted(self.classes()))])
         return hashlib.sha1(raw.encode()).hexdigest()[:12]
+
+    def scope(self) -> str:
+        """계약 제약. 하나라도 금지면 금지다 — 느슨한 쪽으로 접으면 금지 대상에 조치를 권한다."""
+        for a in self.alerts:
+            if getattr(a, "scope", "") == "notify_only":
+                return "notify_only"
+        return ""
+
+    def automate(self) -> bool:
+        """이 사건에 자동 조치 플레이북이 붙어 있는가. 모델이 지어내던 자리다."""
+        return any(getattr(a, "automate", "") for a in self.alerts)
 
     def merge_reason(self) -> str:
         classes = sorted(self.classes())

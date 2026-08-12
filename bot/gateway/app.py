@@ -293,7 +293,10 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
         alert = incident.Alert(
             source=source, event_id=event_id, trigger_id=trigger_id, host=host,
             alert_name=alert_name, sev=sev,
-            incident_class=cls, recv=time.monotonic(), clock=_as_clock(clock))
+            incident_class=cls, recv=time.monotonic(), clock=_as_clock(clock),
+            # 계약 제약은 라우팅에서 쓰고 끝나면 안 된다 — 분석 문장에도 필요하다.
+            scope=tag_router.tag_value(tags or [], tag_router.SCOPE_TAG) or "",
+            automate=tag_router.tag_value(tags or [], tag_router.AUTOMATE_TAG) or "")
         # 이 경로만 기다린다. 기다리는 동안 죽으면 알림이 사라지므로 파일에 먼저 적고,
         # 적지 못하면 200 을 주지 않는다 — Zabbix 가 재시도하게 둔다.
         rec = {"source": source, "event_id": event_id, "trigger_id": trigger_id,

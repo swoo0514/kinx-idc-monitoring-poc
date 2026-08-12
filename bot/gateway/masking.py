@@ -249,6 +249,10 @@ def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
             "alert_count": inc.get("alert_count"),
             "merge_reason": inc.get("merge_reason"),
             "dominant_sev": inc.get("dominant_sev", sev),
+            # 계약 제약과 자동 조치 가능 여부. 값이 식별자가 아니라 라벨이라 마스킹하지
+            # 않는다. 이 둘이 없으면 모델이 조치 권고와 자동화 가능 여부를 근거 없이 쓴다.
+            "scope": inc.get("scope") or "",
+            "automate": bool(inc.get("automate")),
         },
         "alerts": alerts,
         "logs": [m(line) for line in (context.get("logs") or [])],

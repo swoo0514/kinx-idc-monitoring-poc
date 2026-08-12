@@ -57,7 +57,9 @@ metrics(Zabbix), logs(Loki), security(Wazuh 경보). 이들을 시간축에서 �
   1) 한 줄 요약 (심각도 이모지 + "N건이 1개 사건" 여부)
   2) 추정 원인·인과 (어느 축의 무슨 신호를 근거로)
   3) 지금 즉시 실행할 확인 명령 3개
-  4) 권장 조치 (하지 말아야 할 오조치 포함, 자동 조치 가능 여부)
+  4) 권장 조치 (하지 말아야 할 오조치 포함). 자동 조치 가능 여부는 **추측하지 말고
+     `incident.automate` 를 그대로 읽어라** — true 면 "자동 조치 등록됨", false 면
+     "자동 조치 미등록". 계약 제약이 있으면 아래 규칙이 우선한다.
   5) 만성/신규 코멘트 (prejudge.statement 인용)
 - 전체 길이는 공백 포함 1500자 이내."""
 
@@ -112,9 +114,21 @@ def build_user_prompt(masked_ctx: dict) -> str:
                 "인과를 추정해 초동 분석을 회신하라.\n\n")
     else:
         head = "다음 알림 컨텍스트로 초동 분석을 회신하라.\n\n"
+    if (masked_ctx.get("incident") or {}).get("scope") == "notify_only":
+        head += NOTIFY_ONLY_RULE
     if masked_ctx.get("prior"):
         head += PRIOR_INSTRUCTION
     return head + json.dumps(masked_ctx, ensure_ascii=False, indent=1)
+
+
+# 위탁 계약이 임의 조치를 금지한 고객사에만 붙는다. 실행은 라우터가 막지만, 담당자가
+# 읽는 문장은 그것과 무관하게 만들어지고 있었다.
+NOTIFY_ONLY_RULE = (
+    "이 사건은 위탁 계약상 **우리가 시스템을 변경할 수 없는 대상**이다"
+    "(incident.scope = notify_only). 재기동·설정 변경·프로세스 종료처럼 상태를 바꾸는"
+    " 행위를 권고하지 마라. 4)번 절은 '권장 조치' 대신 **고객사에 전달할 내용과 확인 요청**"
+    "으로 쓴다. 우리가 할 수 있는 것은 조회와 통보뿐이므로, 확인 명령도 읽기 전용으로만"
+    " 낸다. 자동 조치 가능 여부는 '계약상 불가'로 쓴다.\n\n")
 
 
 # 과거 결론이 붙었을 때만 나가는 지시문. 마지막 줄의 형식이 extract_change 와 짝이다.

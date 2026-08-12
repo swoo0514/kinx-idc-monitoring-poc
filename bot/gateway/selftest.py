@@ -276,7 +276,7 @@ def main():
     overflow_checks = _overflow_checks()
     timer_checks = _timer_close_checks()
     holmes_eg_checks = _holmes_egress_checks()
-    tenant_checks = _tenant_scope_checks()
+    tenant_checks = _tenant_scope_checks() + _contract_checks()
     nametable_checks = _nametable_checks()
     proxy_checks = _proxy_mask_checks()
     store_checks = (_store_checks() + _store_schema_checks()
@@ -2353,6 +2353,82 @@ def _dashboard_annotation_checks() -> int:
             assert q["target"]["tags"][0] == sja.TAG, q["target"]
         n += 5
     return n
+
+
+def _contract_checks() -> int:
+    """위탁 계약 제약이 분석 문장까지 가는가 (§2-3-3)."""
+    import json
+    import time as _t
+
+    from . import app as gw_app, incident as inc_mod, llm, masking
+
+    def _alert(scope="", automate=""):
+        return inc_mod.Alert(source="zabbix-msp", event_id="e1", trigger_id="t1",
+                             host="custa-db01", alert_name="MySQL is down",
+                             sev="SEV2", incident_class="service_down",
+                             recv=_t.monotonic(), scope=scope, automate=automate)
+
+    def _inc(*alerts):
+        return inc_mod.Incident(key=("msp", "custa-db01", "service_down"),
+                                host="custa-db01", alerts=list(alerts),
+                                opened_at=_t.monotonic(), last_at=_t.monotonic())
+
+    # ① 계약 표시가 알림에 실려 인시던트까지 온다. 라우팅에서 쓰고 버리면 안 된다.
+    assert _inc(_alert("notify_only")).scope() == "notify_only"
+    assert _inc(_alert()).scope() == ""
+    # 병합 시 하나라도 금지면 금지다 — 느슨한 쪽으로 접으면 금지 대상에 조치를 권한다
+    assert _inc(_alert(), _alert("notify_only")).scope() == "notify_only"
+    # 자동 조치 가능 여부도 근거가 있어야 한다. 모델이 지어내는 자리였다.
+    assert _inc(_alert("", "service_restart")).automate() is True
+    assert _inc(_alert()).automate() is False
+
+    # ② 웹훅이 태그에서 받아 알림에 싣는다
+    class _Bg:
+        def add_task(self, fn, *a, **kw):
+            fn(*a, **kw)          # 배경으로 미루지 않고 바로 돌린다
+
+    import os
+    import shutil
+    import tempfile
+
+    from . import pending
+    d = tempfile.mkdtemp(prefix="scope-")
+    saved_pending = pending.PATH
+    captured = []
+    saved_submit = gw_app._incidents.submit
+    try:
+        pending.PATH = os.path.join(d, "p.jsonl")
+        gw_app._incidents.submit = lambda alert: captured.append(alert)
+        gw_app._dispatch(_Bg(), "zabbix-msp", "e9", "t9", "custa-db01", "MySQL is down",
+                         "SEV2", {"route": "triage", "playbook": None},
+                         tags=[{"tag": "scope", "value": "notify_only"},
+                               {"tag": "automate", "value": "service_restart"}])
+    finally:
+        pending.PATH = saved_pending
+        gw_app._incidents.submit = saved_submit
+        shutil.rmtree(d, ignore_errors=True)
+    assert captured and captured[0].scope == "notify_only", captured
+    assert captured[0].automate == "service_restart", captured
+
+    # ③ 전송 형태에 실린다. 계약 표시는 식별자가 아니라 라벨이라 마스킹 대상이 아니다.
+    ctx = {"incident": {"host": "custa-db01", "classes": ["service_down"],
+                        "alert_count": 1, "merge_reason": "단일",
+                        "scope": "notify_only", "automate": False},
+           "host": {}, "alerts": [], "logs": [], "security": [],
+           "sources": {"logs": "ok"}}
+    out = masking.build_llm_context(ctx, "SEV2", masking.Masker())
+    assert out["incident"]["scope"] == "notify_only", out["incident"]
+    assert out["incident"]["automate"] is False, out["incident"]
+
+    # ④ 금지일 때만 규칙이 프롬프트에 붙는다
+    p_block = llm.build_user_prompt(out)
+    assert llm.NOTIFY_ONLY_RULE in p_block
+    ok = masking.build_llm_context(dict(ctx, incident=dict(ctx["incident"],
+                                                          scope="")), "SEV2",
+                                  masking.Masker())
+    assert llm.NOTIFY_ONLY_RULE not in llm.build_user_prompt(ok)
+    assert "custa-db01" not in json.dumps(out, ensure_ascii=False)
+    return 13
 
 
 def _proxy_mask_checks() -> int:
