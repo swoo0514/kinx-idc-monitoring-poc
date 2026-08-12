@@ -10,7 +10,7 @@ import os
 
 import httpx
 
-from . import severity
+from . import egress, severity
 
 log = logging.getLogger("gateway.holmes")
 
@@ -61,36 +61,60 @@ def build_question(alert_names, classes, window_s: float) -> str:
     )
 
 
+class HolmesAdapter:
+    """심층조사 도구를 다른 LLM 어댑터와 같은 모양으로 감싼다.
+
+    이렇게 해야 출구(`egress.call`)를 그대로 지나간다. 예전에는 이 호출만 출구 밖이라
+    두 가지가 새고 있었다. 호출량 지표에 안 잡혀 사용량이 실제보다 적게 보고됐고,
+    동시 호출 제한 밖이라 폭주 때 인시던트마다 최대 300초짜리 호출이 무제한으로 떠
+    공용 스레드를 다 차지했다.
+
+    ⚠ 반출은 여기서 막지 못한다. 이 도구는 **받은 호스트명으로 감시 서버를 직접
+    조회하고 그 결과를 자기 키로 모델에 보낸다.** 우리가 보내는 문장을 가려 봐야
+    도구가 스스로 가져가는 자료는 그대로다. 게다가 이름을 가리면 조회 자체를 못 해
+    도구가 일을 못 한다. 통제하려면 그 도구의 모델 호출 주소를 우리 쪽으로 돌려야
+    한다 — 그때까지 고객사 대상은 차단을 유지한다(should_investigate).
+    """
+
+    name = "holmes"
+
+    def __init__(self, host: str):
+        self.host = host
+        self.url = os.environ.get("HOLMES_URL", "").rstrip("/")
+        self.timeout = int(os.environ.get("HOLMES_TIMEOUT_S", "300"))
+
+    def available(self) -> bool:
+        return bool(self.url)
+
+    def complete(self, _system: str, user: str) -> str:
+        body = {"ask": user, "stream": False}
+        model = os.environ.get("HOLMES_MODEL", "")
+        if model:
+            body["model"] = model
+        headers = {"Content-Type": "application/json"}
+        key = os.environ.get("HOLMES_API_KEY", "")
+        if key:
+            headers["X-API-Key"] = key
+        r = httpx.post(f"{self.url}/api/chat", headers=headers, json=body,
+                       timeout=self.timeout)
+        if r.status_code >= 300:
+            raise RuntimeError("http %s: %s" % (r.status_code, r.text[:200]))
+        return (r.json() or {}).get("analysis", "")
+
+
 def investigate(host: str, question: str) -> dict:
-    """HolmesGPT HTTP API로 심층조사(읽기 전용). 블로킹·분 단위 — 호출측이 백그라운드로 감쌀 것."""
-    url = os.environ.get("HOLMES_URL", "").rstrip("/")
-    if not url:
+    """심층조사(읽기 전용). 블로킹·분 단위 — 호출측이 백그라운드로 감쌀 것."""
+    adapter = HolmesAdapter(host)
+    if not adapter.available():
         log.info("[holmes skipped: no HOLMES_URL] host=%s", host)
         return {"ok": False, "skipped": True}
-    timeout = int(os.environ.get("HOLMES_TIMEOUT_S", "300"))
     ask = (f"Investigate host {host}. {question} "
            "State the root cause and what remediation must NOT be performed.")
-    body = {"ask": ask, "stream": False}
-    model = os.environ.get("HOLMES_MODEL", "")
-    if model:
-        body["model"] = model
-    headers = {"Content-Type": "application/json"}
-    key = os.environ.get("HOLMES_API_KEY", "")
-    if key:
-        headers["X-API-Key"] = key
-    try:
-        r = httpx.post(f"{url}/api/chat", headers=headers, json=body, timeout=timeout)
-        if r.status_code >= 300:
-            log.warning("holmes http %s host=%s: %s", r.status_code, host, r.text[:200])
-            return {"ok": False, "error": f"http {r.status_code}"}
-        analysis = (r.json() or {}).get("analysis", "")
-        return {"ok": bool(analysis), "analysis": analysis}
-    except httpx.TimeoutException:
-        log.warning("holmes timeout host=%s (%ss)", host, timeout)
-        return {"ok": False, "error": "timeout"}
-    except Exception as e:
-        log.warning("holmes exception host=%s: %s", host, e)
-        return {"ok": False, "error": str(e)}
+    res = egress.call([adapter], "", ask, kind="holmes")
+    if res["degraded"]:
+        log.warning("holmes 실패 host=%s 사유=%s", host, res["reason"])
+        return {"ok": False, "error": res["reason"]}
+    return {"ok": bool(res["text"]), "analysis": res["text"]}
 
 
 if __name__ == "__main__":   # 격리 테스트: HOLMES_URL 세팅 후 python -m gateway.holmes <host>

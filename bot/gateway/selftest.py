@@ -275,6 +275,7 @@ def main():
     idem_checks = _idempotency_checks()
     overflow_checks = _overflow_checks()
     timer_checks = _timer_close_checks()
+    holmes_eg_checks = _holmes_egress_checks()
     tenant_checks = _tenant_scope_checks()
     collect_fail_checks = _collect_failure_checks()
     wrong_srv_checks = _wrong_server_checks()
@@ -292,7 +293,7 @@ def main():
                 + masking_checks + degraded_checks + incident_checks + source_checks
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
-                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + timer_checks + tenant_checks + collect_fail_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
+                + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + timer_checks + holmes_eg_checks + tenant_checks + collect_fail_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
@@ -1546,6 +1547,61 @@ def _tenant_scope_checks() -> int:
     return 3
 
 
+def _holmes_egress_checks() -> int:
+    """심층조사도 출구를 지나는가.
+
+    이 도구는 별도 프로세스라 자기 키로 나갔다. 그래서 (a) 호출량 지표에 안 잡혀
+    사용량이 실제보다 적게 보고되고 (b) 동시 호출 제한 밖이라 폭주 때 인시던트마다
+    최대 300초짜리 호출이 무제한으로 떠 공용 스레드를 다 차지한다.
+
+    호스트명은 가리지 못한다. 그 이름으로 감시 서버를 조회해야 도구가 일을 하기
+    때문이다. 반출 통제는 그 도구의 모델 호출을 우리 쪽으로 돌려야 가능하다.
+    여기서는 집계와 동시 제한까지만 본다.
+    """
+    import os
+    import threading
+
+    from . import egress, holmes
+
+    sent = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"analysis": "원인은 디스크다"}
+
+    def _fake_post(url, **kw):
+        sent["url"] = url
+        sent["body"] = kw.get("json")
+        return _Resp()
+
+    saved = (holmes.httpx.post, egress.MAX_PER_HOUR, dict(egress._stats))
+    holmes.httpx.post = _fake_post
+    os.environ["HOLMES_URL"] = "http://127.0.0.1:9999"
+    egress._calls.clear()
+    egress._by_kind.clear()
+    try:
+        res = holmes.investigate("cust-db01", "why")
+        assert res.get("ok") and "디스크" in res.get("analysis", ""), res
+        assert egress.kind_counts().get("holmes") == 1,             f"심층조사가 호출 집계에 안 잡힌다 — 사용량 지표가 실제보다 적게 나온다: {egress.kind_counts()}"
+        # 호스트명은 그대로 나간다(가리면 도구가 조회를 못 한다). 그 사실을 고정한다.
+        assert "cust-db01" in str(sent.get("body")), sent
+
+        # 시간당 총량에도 걸려야 한다
+        egress.MAX_PER_HOUR = 1
+        blocked = holmes.investigate("cust-db01", "why")
+        assert blocked.get("ok") is False, f"상한을 넘겼는데 나갔다: {blocked}"
+        return 4
+    finally:
+        holmes.httpx.post, egress.MAX_PER_HOUR, restore = saved
+        os.environ.pop("HOLMES_URL", None)
+        egress._stats.clear()
+        egress._stats.update(restore)
+        egress._calls.clear()
+        egress._by_kind.clear()
+
+
 def _timer_close_checks() -> int:
     """창이 닫힐 때 마감 처리가 끝까지 도는가.
 
@@ -2116,7 +2172,6 @@ def _llm_concurrency_checks() -> int:
         import re
         # 파일 -> 왜 아직 출구 밖인가. 옮기면 여기서 지운다.
         KNOWN_OUTSIDE = {
-            "holmes.py": "심층조사는 별도 프로세스 API 호출 — 미해소(가이드 §21)",
             "latency_bench.py": "응답시간 실측 도구 — 출구를 거치면 상한·마스킹이 "
                                 "측정값을 흐린다. 운영 경로가 아니다",
         }
@@ -2143,7 +2198,9 @@ def _llm_concurrency_checks() -> int:
             hits = []
             if base != "egress.py":
                 hits += [w for p, w in CALLS_ADAPTER if re.search(p, src, re.M)]
-            if base not in ("egress.py", "llm.py"):
+            # 어댑터가 사는 곳은 공급자에 직접 말을 걸어도 된다. 지금은 두 곳이다 —
+            # llm.py(Claude·Ollama)와 holmes.py(심층조사). 둘 다 출구가 부른다.
+            if base not in ("egress.py", "llm.py", "holmes.py"):
                 hits += [w for p, w in TALKS_PROVIDER if re.search(p, src, re.M)]
             if base in KNOWN_OUTSIDE:
                 assert hits, (f"{base} 가 예외 목록에 있는데 나가는 코드가 없다 — "
