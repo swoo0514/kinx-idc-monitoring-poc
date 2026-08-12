@@ -53,8 +53,8 @@ def risky() -> list:
         why = []
         if len(n) <= RISKY_MAX_LEN:
             why.append("%d자 이하" % RISKY_MAX_LEN)
-        if re.fullmatch(r"[a-z]+", n):
-            why.append("영문 소문자 낱말")
+        if re.fullmatch(r"[A-Za-z]+", n):
+            why.append("영문 낱말형")
         if any(n != o and n.lower() in o.lower() for o in names):
             why.append("다른 이름의 일부")
         if why:

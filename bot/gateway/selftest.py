@@ -1540,7 +1540,20 @@ def _nametable_checks() -> int:
     finally:
         nametable._terms, nametable._by_source = saved
 
-    return 11
+    # 위험 판정이 실제로 위험한 것을 집는가. 치환은 대소문자를 무시하므로 판정도
+    # 그래야 한다 — Test 는 일반 문장의 test 를 바꾸는데 위험으로 안 잡혔다.
+    saved2 = dict(nametable._terms)
+    try:
+        nametable._terms = {"Test": "group", "kdhtest": "host", "임시": "group"}
+        why = {r["name"]: r["why"] for r in nametable.risky()}
+        assert "Test" in why, f"흔한 낱말인데 위험으로 안 잡힌다: {why}"
+        assert any("낱말" in w for w in why["Test"]), why["Test"]
+        assert "임시" in why, why
+        assert "kdhtest" in why, why
+    finally:
+        nametable._terms = saved2
+
+    return 15
 
 
 def _tenant_scope_checks() -> int:
