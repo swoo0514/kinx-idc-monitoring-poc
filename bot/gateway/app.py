@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from . import heartbeat
 from . import incident
 from . import keep
+from . import nametable
 from . import pending
 from . import registry
 from . import router as tag_router
@@ -61,6 +62,7 @@ async def _close_incident(inc):
 
 _incidents = incident.IncidentManager(on_close=_close_incident, on_signal=_raw_ping)
 _beat = heartbeat.Beat()
+_names = nametable.Refresher()
 
 
 @app.on_event("startup")
@@ -78,6 +80,9 @@ async def _start_heartbeat():
         log.info("호스트 명부 %s — 호스트 %d건 / 감시 서버 %s",
                  st["path"], st["entries"], registry.source_names() or "미기재(단일)")
     _beat.start()
+    # 이름 표는 조회가 몇 초 걸리므로 별도 스레드에서 만든다. 만들어지기 전에도
+    # 캐시가 있으면 그걸로 돌고, 없으면 오늘까지의 동작(맥락 기반 등록)으로 돈다.
+    _names.start()
 
 
 @app.on_event("shutdown")
@@ -88,6 +93,7 @@ async def _flush_open_incidents():
     창을 처음부터 다시 세고 재시도 횟수가 올라가는 것을 막는다.
     """
     _beat.stop()
+    _names.stop()
     try:
         await _incidents.flush()
     except Exception as e:

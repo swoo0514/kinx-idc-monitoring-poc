@@ -378,6 +378,71 @@ async def gen_registry(source: str = "zabbix-internal", limit: int = 500):
         print('    id: ""')
 
 
+def nametable_report():
+    """전역 이름 표를 만들고 위험 항목·정확도 수치를 낸다.
+
+    실환경 진단용이다. **이름은 출력하지 않고 개수만 낸다** — 결과를 문서에 남겨야 하는데
+    호스트명은 리포에 남기지 않는 것이 이 프로젝트 원칙이다. 위험 항목만 사람이 판단할 수
+    있게 이름을 보이고, 그건 화면에서만 본다.
+    """
+    from gateway import masking, nametable
+
+    st = nametable.build()
+    names = [n for n, _ in nametable.terms()]
+    print("== 이름 표 ==")
+    print("출처별:", st["by_source"])
+    print("총 %d개 / 오류: %s" % (st["terms"], st["error"] or "없음"))
+
+    rk = nametable.risky()
+    print()
+    print("== 위험 항목 %d개 (%.1f%%) ==" % (len(rk), 100.0 * len(rk) / max(1, len(names))))
+    by_why = {}
+    for r in rk:
+        for w in r["why"]:
+            by_why[w] = by_why.get(w, 0) + 1
+    for w, c in sorted(by_why.items(), key=lambda kv: -kv[1]):
+        print("  %-16s %d" % (w, c))
+    print("  (사유별 합계는 한 이름이 여러 사유에 걸리면 중복 계산된다)")
+
+    # 미탐 — 이름이 든 문장을 마스킹한 뒤에도 남는가
+    miss = 0
+    for n in names:
+        mk = masking.Masker()
+        nametable.apply_to(mk)
+        if n in mk.mask("backup from %s failed" % n):
+            miss += 1
+    print()
+    print("== 미탐 == 이름 %d개 중 마스킹 후 남은 것: %d" % (len(names), miss))
+
+    # 오탐 — 이름이 없어야 하는 문장이 바뀌는가
+    clean = [
+        "디스크 사용률이 임계치를 넘었습니다. 로그 정리를 권장합니다.",
+        "Zabbix agent is not available (for 3m)",
+        "MySQL: Replication lag is too high",
+        "backup job finished successfully in 12 minutes",
+        "the database node was restarted by the operator",
+        "web service returned 500 for the health check",
+        "high load average detected on the reporting server",
+        "disk space is critically low on the data volume",
+    ]
+    fp = []
+    for line in clean:
+        mk = masking.Masker()
+        nametable.apply_to(mk)
+        out = mk.mask(line)
+        if out != line:
+            fp.append((line, out))
+    print("== 오탐 == 문장 %d개 중 바뀐 것: %d" % (len(clean), len(fp)))
+    for a, b in fp:
+        print("   %s" % a)
+        print("   -> %s" % b)
+    if rk:
+        print()
+        print("== 위험 항목 목록 (화면에서만 확인, 문서에 남기지 말 것) ==")
+        for r in rk:
+            print("  %-30s %s" % (r["name"], ", ".join(r["why"])))
+
+
 def main():
     a = sys.argv
     if len(a) >= 2 and a[1] == "registry":
@@ -388,6 +453,8 @@ def main():
         asyncio.run(problems())
     elif len(a) >= 3 and a[1] == "map":
         asyncio.run(host_map(a[2]))
+    elif len(a) >= 2 and a[1] == "nametable":
+        nametable_report()
     elif len(a) >= 2 and a[1] == "env":
         show_env()
     elif len(a) >= 4 and a[1] == "context":
@@ -398,7 +465,7 @@ def main():
         asyncio.run(loki_probe(a[2], a[3] if len(a) >= 4 else 24))
     else:
         print(__doc__)
-        print("추가: env | names [limit] | registry [source] | loki <label> [hours]"
+        print("추가: env | names [limit] | registry [source] | nametable | loki <label> [hours]"
               " | openlink <zabbix호스트명> | context <event_id> <trigger_id>")
 
 
