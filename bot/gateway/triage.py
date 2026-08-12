@@ -4,7 +4,8 @@ import asyncio
 import logging
 import time
 
-from . import collector, holmes, incident as incident_mod, keep, llm, slack, store
+from . import (collector, grafana, holmes, incident as incident_mod, keep, llm,
+               prior, slack, store)
 
 log = logging.getLogger("gateway.triage")
 
@@ -71,7 +72,7 @@ async def run(event_id: str, trigger_id: str, sev: str,
             "thread_ts": posted.get("ts")}
 
 
-def _push_gated(inc, context: dict, reason: str) -> dict:
+def _push_gated(inc, context: dict, reason: str, jid=None) -> dict:
     """게이트에서 걸러진 사건도 Keep 에는 남긴다 — 근거는 가이드 §8 말미."""
     verdict = incident_mod.dominant_verdict(context) or "미상"
     classes = ", ".join(sorted(inc.classes()))
@@ -85,7 +86,8 @@ def _push_gated(inc, context: dict, reason: str) -> dict:
                            prejudge=verdict, fingerprint=inc.fingerprint(),
                            classes=classes, alert_count=len(inc.alerts),
                            sources=_sources_note(context),
-                           playbook="analyze", extra={"analyze_ref": analyze_ref(inc)})
+                           playbook="analyze",
+                           extra={"analyze_ref": analyze_ref(inc), "judgment_id": jid})
 
 
 def analyze_ref(inc) -> str:
@@ -100,24 +102,43 @@ def analyze_ref(inc) -> str:
                     for a in inc.alerts)
 
 
-def _record(inc, context, sev, fired, reason, reply, timings) -> None:
-    """판정을 이력에 남긴다 (§24). 실패해도 흐름을 막지 않는다."""
+async def _annotate(jid, inc, sev, headline: str, note: str, text: str) -> None:
+    """판정을 관측 타임라인에 남긴다 (§25-4). 30초 예산 밖이라 배경으로 돈다."""
+    body = "[%s] %s · %s\n%s" % (sev, headline, note, (text or "").strip()[:400])
+    if jid:
+        body += "\n(판정 #%s)" % jid
+    aid = await asyncio.to_thread(
+        grafana.annotate, body, collector.reference_time(inc, int(time.time())),
+        ["kinx-bot", sev, inc.host])
+    if aid and jid:
+        await asyncio.to_thread(_finish, jid, {"annotation_id": aid})
+
+
+def _record(inc, context, sev, fired, reason, origin):
+    """판정을 이력에 남기고 식별자를 돌려준다 (§24). 실패해도 흐름을 막지 않는다."""
     try:
-        store.record_judgment({
+        return store.record_judgment({
             "fingerprint": inc.fingerprint(), "host": inc.host,
+            "ikey": "|".join(str(x) for x in (inc.key or ())),
             "realm": inc.key[0] if inc.key else "",
             "source": inc.alerts[0].source if inc.alerts else "",
             "classes": ",".join(sorted(inc.classes())),
             "alert_count": len(inc.alerts), "sev": sev,
             "verdict": incident_mod.dominant_verdict(context) or "",
             "gate_fired": 1 if fired else 0, "gate_reason": reason,
-            "sources": _sources_note(context),
-            "provider": (reply or {}).get("provider", ""),
-            "degraded": 1 if (reply or {}).get("degraded") else 0,
-            "total_s": timings.get("total_s"),
+            "sources": _sources_note(context), "origin": origin,
+            "event_ts": collector.reference_time(inc, int(time.time())),
         })
     except Exception as e:
         log.warning("판정 이력 기록 실패: %s", e)
+        return None
+
+
+def _finish(jid, fields: dict) -> None:
+    try:
+        store.finish(jid, fields)
+    except Exception as e:
+        log.warning("판정 이력 갱신 실패: %s", e)
 
 
 async def run_incident(inc, force: bool = False) -> dict:
@@ -153,10 +174,14 @@ async def run_incident(inc, force: bool = False) -> dict:
     timings["collect_s"] = round(time.monotonic() - t0, 2)
 
     fire, reason = (True, "사람 요청") if force else incident_mod.should_triage(inc, context)
+    # 카드보다 먼저 남긴다 — 카드에 실을 식별자가 여기서 나오고, 분석 중 프로세스가
+    # 죽어도 판정은 남는다. 저장은 블로킹이라 다른 사건 타이머를 막지 않게 감싼다.
+    jid = await asyncio.to_thread(_record, inc, context, sev, fire, reason,
+                                  "forced" if force else "auto")
     if not fire:
-        await asyncio.to_thread(_push_gated, inc, context, reason)
+        await asyncio.to_thread(_push_gated, inc, context, reason, jid)
         timings["total_s"] = round(time.monotonic() - t0, 2)
-        _record(inc, context, sev, False, reason, None, timings)
+        await asyncio.to_thread(_finish, jid, {"total_s": timings["total_s"]})
         log.info("gate skip fp=%s alerts=%d reason=%s timings=%s",
                  inc.fingerprint(), len(inc.alerts), reason, timings)
         return {"fingerprint": inc.fingerprint(), "alert_count": len(inc.alerts),
@@ -167,6 +192,11 @@ async def run_incident(inc, force: bool = False) -> dict:
              inc.fingerprint(), len(inc.alerts), reason, context.get("sources"),
              len(context.get("open_problems") or []))
 
+    # 과거 결론을 붙인다. 방금 남긴 이 사건의 행은 빼고 고른다 (§25-6).
+    try:
+        context["prior"] = await asyncio.to_thread(prior.select, inc, jid)
+    except Exception as e:
+        log.warning("과거 결론 조회 실패: %s", e)
     t1 = time.monotonic()
     reply = await asyncio.to_thread(llm.triage_reply, context, sev)
     timings["llm_s"] = round(time.monotonic() - t1, 2)
@@ -189,7 +219,8 @@ async def run_incident(inc, force: bool = False) -> dict:
     await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"],
                             chronic, fingerprint=fp, classes=classes,
                             alert_count=n, merge=merge_note,
-                            sources=_sources_note(context))
+                            sources=_sources_note(context),
+                            extra={"judgment_id": jid})
 
     fire_h, reason_h = holmes.should_investigate(sev, reply["degraded"],
                                                  [a.source for a in inc.alerts],
@@ -204,7 +235,16 @@ async def run_incident(inc, force: bool = False) -> dict:
             sev, fp, anchor or posted.get("ts")))
 
     timings["total_s"] = round(time.monotonic() - t0, 2)
-    _record(inc, context, sev, True, reason, reply, timings)
+    await asyncio.to_thread(_finish, jid, {
+        "provider": reply.get("provider", ""),
+        "degraded": 1 if reply.get("degraded") else 0,
+        "total_s": timings["total_s"], "summary": reply.get("text", ""),
+        "change": reply.get("change", ""),
+        "prior_used": 1 if context.get("prior") else 0})
+    # 게이트에서 걸러진 사건은 안 찍는다 — 그쪽이 다수라 타임라인이 우리가 진단한
+    # 노이즈와 같은 모양이 된다.
+    _spawn_bg(_annotate(jid, inc, sev, headline, f"{merge_note} · {chronic}",
+                        reply.get("text", "")))
     log.info("incident triage done fp=%s alerts=%d provider=%s degraded=%s timings=%s",
              inc.fingerprint(), n, reply["provider"], reply["degraded"], timings)
     return {"fingerprint": inc.fingerprint(), "alert_count": n,

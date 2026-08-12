@@ -22,6 +22,7 @@ from . import proxy as llm_proxy
 from . import registry
 from . import router as tag_router
 from . import store
+from . import grafana
 from . import severity
 from . import slack
 from . import triage
@@ -30,6 +31,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("gateway")
 
 app = FastAPI(title="kinx-poc alert gateway", version="0.1.0")
+
+_grafana_state: dict = {}   # 기동 시 1회 확인. /healthz 가 참·거짓만 내보낸다.
 
 # 규칙 로드는 import 시점이라 로깅 설정 전에 끝난다. 어느 규칙으로 도는지가 반드시
 # 드러나도록 기동 시 한 번 더 남긴다.
@@ -66,6 +69,7 @@ async def _close_incident(inc):
 _incidents = incident.IncidentManager(on_close=_close_incident, on_signal=_raw_ping)
 _beat = heartbeat.Beat()
 _names = nametable.Refresher()
+_pruner = store.Pruner()
 
 
 @app.on_event("startup")
@@ -84,6 +88,16 @@ async def _start_heartbeat():
                  st["path"], st["entries"], registry.source_names() or "미기재(단일)")
     if store.init():
         store.prune()
+        _pruner.start()
+    # 주석은 사건이 날 때만 나가므로, 안 되는 상태를 며칠 뒤에야 안다. 기동 때 한 번 본다.
+    global _grafana_state
+    _grafana_state = grafana.status()
+    if not _grafana_state["configured"]:
+        log.info("판정 주석 미설정 — %s (GATEWAY_GRAFANA_URL·GRAFANA_TOKEN)",
+                 _grafana_state["error"])
+    elif not _grafana_state["ok"]:
+        log.error("Grafana 에 닿지 못했다(%s) — 판정 주석이 안 올라간다",
+                  _grafana_state["error"])
     _beat.start()
     # 이름 표는 조회가 몇 초 걸리므로 별도 스레드에서 만든다. 만들어지기 전에도
     # 캐시가 있으면 그걸로 돌고, 없으면 오늘까지의 동작(맥락 기반 등록)으로 돈다.
@@ -99,6 +113,7 @@ async def _flush_open_incidents():
     """
     _beat.stop()
     _names.stop()
+    _pruner.stop()
     try:
         await _incidents.flush()
     except Exception as e:
@@ -181,7 +196,10 @@ class WazuhEvent(BaseModel):
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "version": app.version}
+    # 값은 참·거짓만 싣는다. 인증이 없는 경로라 경로·주소·오류 문구를 내보내지 않는다.
+    return {"ok": True, "version": app.version,
+            "store": store.status()["open"],
+            "annotations": bool(_grafana_state.get("ok"))}
 
 
 @app.post("/v1/messages")
@@ -205,9 +223,6 @@ def webhook_zabbix(ev: ZabbixEvent, bg: BackgroundTasks, x_gateway_token: str = 
         raise HTTPException(status_code=401, detail="invalid token")
     if ev.source not in (severity.SOURCE_ZABBIX_INTERNAL, severity.SOURCE_ZABBIX_MSP):
         raise HTTPException(status_code=422, detail="unknown source")
-    if _duplicate((ev.source, ev.event_id, ev.event_value)):
-        return {"status": "duplicate", "event_id": ev.event_id}
-
     ns = ev.nseverity
     if ns is None:
         log.warning("event=%s nseverity 누락 — 미디어타입 {EVENT.NSEVERITY} 파라미터 확인. "
@@ -215,8 +230,14 @@ def webhook_zabbix(ev: ZabbixEvent, bg: BackgroundTasks, x_gateway_token: str = 
         ns = 4   # 미상 → High 취급. severity.normalize 의 SEV2 페일세이프와 정합
     sev = severity.normalize(ev.source, ns)
     decision = tag_router.decide(sev, ev.tags, ev.event_value)
+    # 중복 판정보다 먼저 매긴다 — 중복도 라우팅 분모에 들어가야 한다 (§25-3).
+    cls = incident.classify(ev.event_name, tags=ev.tags)
+    dup = _duplicate((ev.source, ev.event_id, ev.event_value))
+    _record_route(ev.source, ev.host, sev, cls, decision["route"], dup)
+    if dup:
+        return {"status": "duplicate", "event_id": ev.event_id}
     _dispatch(bg, ev.source, ev.event_id, ev.trigger_id, ev.host, ev.event_name, sev,
-              decision, ev.tags, clock=ev.clock)
+              decision, ev.tags, clock=ev.clock, cls=cls)
     return {"status": "accepted", "sev": sev, **decision, "event_id": ev.event_id}
 
 
@@ -224,14 +245,18 @@ def webhook_zabbix(ev: ZabbixEvent, bg: BackgroundTasks, x_gateway_token: str = 
 def webhook_wazuh(ev: WazuhEvent, bg: BackgroundTasks, x_gateway_token: str = Header(default="")):
     if not _token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="invalid token")
-    if _duplicate((severity.SOURCE_WAZUH, ev.alert_id, 1)):
-        return {"status": "duplicate", "event_id": ev.alert_id}
-
     sev = severity.normalize(severity.SOURCE_WAZUH, ev.rule_level)
     decision = tag_router.decide(sev, [], 1)
+    cls = incident.classify(ev.rule_description, groups=ev.rule_groups,
+                            rule_id=ev.rule_id)
+    dup = _duplicate((severity.SOURCE_WAZUH, ev.alert_id, 1))
+    _record_route(severity.SOURCE_WAZUH, ev.agent_name, sev, cls,
+                  decision["route"], dup)
+    if dup:
+        return {"status": "duplicate", "event_id": ev.alert_id}
     _dispatch(bg, severity.SOURCE_WAZUH, ev.alert_id, "", ev.agent_name,
               ev.rule_description, sev, decision, groups=ev.rule_groups,
-              rule_id=ev.rule_id)
+              rule_id=ev.rule_id, cls=cls)
     return {"status": "accepted", "sev": sev, **decision, "event_id": ev.alert_id}
 
 
@@ -244,14 +269,24 @@ def _as_clock(v) -> float:
     return c if c > 0 else 0.0
 
 
+def _record_route(source, host, sev, cls, route, dup) -> None:
+    """알림 1건의 라우팅 판정. 실패해도 알림 처리를 막지 않는다 (§25-3)."""
+    try:
+        store.record_route({"source": source, "host": host, "sev": sev, "cls": cls,
+                            "route": route, "dup": 1 if dup else 0})
+    except Exception as e:
+        log.warning("라우팅 기록 실패: %s", e)
+
+
 def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
-              tags=None, groups=None, rule_id="", clock=""):
+              tags=None, groups=None, rule_id="", clock="", cls=None):
     """경로별 후속 처리를 백그라운드로 넘긴다 — 웹훅은 즉시 200(발송측 타임아웃 회피)."""
     route = decision["route"]
     _beat.mark_alert(source)
     # rule_id 를 빠뜨리면 분류 선언 파일의 wazuh 절이 통째로 죽는다. 파일은 정상
     # 로드되고 로그도 찍히므로, 설정한 사람은 적용됐다고 믿는다.
-    cls = incident.classify(alert_name, tags=tags, groups=groups, rule_id=rule_id)
+    if cls is None:
+        cls = incident.classify(alert_name, tags=tags, groups=groups, rule_id=rule_id)
     log.info("event=%s source=%s host=%s sev=%s class=%s route=%s playbook=%s",
              event_id, source, host, sev, cls, route, decision["playbook"])
     if route == "triage":

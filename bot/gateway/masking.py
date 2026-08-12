@@ -105,6 +105,47 @@ def _security_item(s: dict, m) -> dict:
             "path": m(s.get("path")), "change": s.get("change")}
 
 
+def _leaks(text: str) -> bool:
+    """가린 뒤에도 아는 이름이 남았는가 — 남으면 본문을 통째로 버린다 (§25-6)."""
+    if IP_RE.search(text or ""):
+        return True
+    try:
+        from . import nametable
+        low = (text or "").lower()
+        return any(name.lower() in low for name, _kind in nametable.terms())
+    except Exception as e:
+        log.warning("잔여 이름 검사를 못 했다: %s", e)
+        return True
+
+
+def _prior_item(p: dict, m) -> dict:
+    """과거 결론 1건의 전송 형태.
+
+    구조화 필드에는 자유 서술이 없어 유출면이 없다. 본문은 조건을 전부 만족할 때만
+    싣는다 — 이름 표가 살아 있고, 가린 뒤 아는 이름이 남지 않을 때다. 하나라도
+    어긋나면 본문을 버리고 구조화 필드만 보낸다.
+    """
+    from . import nametable, prior
+    body = ""
+    raw = (p.get("summary") or "")[:prior.MAX_BODY_CHARS]
+    if raw:
+        if not nametable.terms():
+            log.warning("이름 표가 비어 과거 결론 본문을 뺀다 (판정 %s)", p.get("id"))
+        else:
+            masked = m(raw)
+            if _leaks(masked):
+                log.warning("과거 결론 본문에 가리지 못한 이름이 남아 뺀다 (판정 %s)",
+                            p.get("id"))
+            else:
+                body = masked
+    return {"match": p.get("match"), "verdict": p.get("verdict"),
+            "classes": m(p.get("classes")), "sev": p.get("sev"),
+            "days_ago": p.get("days_ago"),
+            "확인": "사람 확인됨" if p.get("confirmed") else
+                    ("사람이 오답으로 표시함" if p.get("wrong") else "미확인(봇 출력)"),
+            "summary": body}
+
+
 def _register_host(host: dict, masker: Masker):
     masker.register("host", host.get("host"))
     masker.register("host", host.get("name"))
@@ -167,6 +208,7 @@ def build_llm_context(context: dict, sev: str, masker: Masker) -> dict:
             "statement": (context.get("prejudge") or {}).get("statement"),
         },
         "sources": _sources(context),
+        "prior": [_prior_item(p, m) for p in (context.get("prior") or [])],
     }
 
 
@@ -214,4 +256,5 @@ def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
         "open_problems": [_open_problem_item(p, m)
                           for p in (context.get("open_problems") or [])],
         "sources": _sources(context),
+        "prior": [_prior_item(p, m) for p in (context.get("prior") or [])],
     }

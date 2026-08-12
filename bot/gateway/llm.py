@@ -8,6 +8,7 @@
 import json
 import logging
 import os
+import re
 import time
 
 from . import egress
@@ -111,7 +112,27 @@ def build_user_prompt(masked_ctx: dict) -> str:
                 "인과를 추정해 초동 분석을 회신하라.\n\n")
     else:
         head = "다음 알림 컨텍스트로 초동 분석을 회신하라.\n\n"
+    if masked_ctx.get("prior"):
+        head += PRIOR_INSTRUCTION
     return head + json.dumps(masked_ctx, ensure_ascii=False, indent=1)
+
+
+# 과거 결론이 붙었을 때만 나가는 지시문. 마지막 줄의 형식이 extract_change 와 짝이다.
+PRIOR_INSTRUCTION = (
+    "prior 는 같은 대상에 대한 과거 판정이다. match 가 매칭 강도이고(동일 사건 · 같은 유형 ·"
+    " 같은 호스트), '확인' 이 사람 검증 여부다. 미확인 결론은 봇이 예전에 쓴 문장일 뿐이므로"
+    " 사실로 취급하지 말고, 사람이 오답으로 표시한 결론은 그 방향을 따라가지 마라."
+    " summary 가 비어 있으면 본문이 제공되지 않은 것이지 내용이 없는 것이 아니다.\n"
+    "회신 마지막 줄에 반드시 이 형식 한 줄을 붙인다:\n"
+    "변화: 동일 | 달라짐 — 무엇이 같고 무엇이 달라졌는지 한 문장\n\n")
+
+CHANGE_RE = re.compile(r"^\s*변화\s*:\s*(.+)$", re.MULTILINE)
+
+
+def extract_change(text: str) -> str:
+    """회신 마지막 줄의 변화 판정. 없으면 빈 문자열 — 지어내지 않는다."""
+    found = CHANGE_RE.findall(text or "")
+    return found[-1].strip()[:200] if found else ""
 
 
 MONTHLY_SYSTEM = """\
@@ -205,7 +226,8 @@ def triage_reply(context: dict, sev: str) -> dict:
     res = egress.call(_adapters(), TRIAGE_SYSTEM, user,
                       exempt=(sev == "SEV1"), kind="triage")
     if not res["degraded"]:
-        return {**res, "text": masker.unmask(res["text"])}
+        text = masker.unmask(res["text"])
+        return {**res, "text": text, "change": extract_change(text)}
 
     note = f" — {_reason_text(res['reason'])}" if res["reason"] != egress.BLOCKED_NONE else ""
     inc = context.get("incident")

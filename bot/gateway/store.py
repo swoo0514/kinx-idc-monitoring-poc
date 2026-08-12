@@ -8,22 +8,45 @@ import time
 
 log = logging.getLogger("gateway.store")
 
-PATH = os.environ.get("GATEWAY_STORE_FILE",
-                      os.path.expanduser("~/.kinx-gateway/history.db"))
+# 환경변수로 들어온 값에도 물결표를 편다. 안 펴면 작업 디렉토리 밑에 `~` 폴더가 생기고,
+# 파일은 열리므로 아무 오류 없이 다른 곳에 쌓인다 (§24-1).
+PATH = os.path.expanduser(os.environ.get("GATEWAY_STORE_FILE",
+                                         "~/.kinx-gateway/history.db"))
 KEEP_DAYS = int(os.environ.get("GATEWAY_STORE_KEEP_DAYS", "90"))
+SUMMARY_DAYS = int(os.environ.get("GATEWAY_STORE_SUMMARY_DAYS", "30"))
 
 _lock = threading.Lock()
 _conn = None
 _error = ""
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS judgment (
-  ts REAL NOT NULL, fingerprint TEXT, host TEXT, realm TEXT, source TEXT,
+# 판정 행이 담는 값. ts 는 기록 시각이고 event_ts 가 사건 발생 시각이다.
+JUDGMENT_COLS = (
+    "fingerprint", "ikey", "host", "realm", "source", "classes", "alert_count",
+    "sev", "verdict", "gate_fired", "gate_reason", "sources", "origin",
+    "event_ts", "provider", "degraded", "total_s", "summary", "change",
+    "prior_used", "annotation_id")
+
+_JUDGMENT_DDL = """
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL,
+  fingerprint TEXT, ikey TEXT, host TEXT, realm TEXT, source TEXT,
   classes TEXT, alert_count INTEGER, sev TEXT, verdict TEXT,
-  gate_fired INTEGER, gate_reason TEXT, sources TEXT,
-  provider TEXT, degraded INTEGER, total_s REAL);
-CREATE INDEX IF NOT EXISTS judgment_ts ON judgment(ts);
+  gate_fired INTEGER, gate_reason TEXT, sources TEXT, origin TEXT,
+  event_ts REAL, provider TEXT, degraded INTEGER, total_s REAL,
+  summary TEXT, change TEXT, prior_used INTEGER, annotation_id INTEGER"""
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS judgment (%s);
+CREATE INDEX IF NOT EXISTS judgment_ts ON judgment(ts);""" % _JUDGMENT_DDL + """
 CREATE INDEX IF NOT EXISTS judgment_fp ON judgment(fingerprint);
+CREATE INDEX IF NOT EXISTS judgment_ikey ON judgment(ikey);
+CREATE TABLE IF NOT EXISTS feedback (
+  ts REAL NOT NULL, judgment_id INTEGER, axis TEXT, ok INTEGER,
+  note TEXT, who TEXT);
+CREATE INDEX IF NOT EXISTS feedback_jid ON feedback(judgment_id);
+CREATE TABLE IF NOT EXISTS route (
+  ts REAL NOT NULL, source TEXT, host TEXT, sev TEXT, cls TEXT,
+  route TEXT, dup INTEGER);
+CREATE INDEX IF NOT EXISTS route_ts ON route(ts);
 CREATE TABLE IF NOT EXISTS seen (key TEXT PRIMARY KEY, ts REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS call (ts REAL NOT NULL, kind TEXT);
 CREATE INDEX IF NOT EXISTS call_ts ON call(ts);
@@ -35,6 +58,38 @@ def status() -> dict:
         return {"path": PATH, "open": _conn is not None, "error": _error}
 
 
+def _columns(c, table: str) -> list:
+    return [r[1] for r in c.execute("PRAGMA table_info(%s)" % table).fetchall()]
+
+
+def _migrate(c) -> None:
+    """구스키마를 판올림한다. 근거는 가이드 §24-4.
+
+    판정 식별자는 ALTER 로 붙일 수 없으므로(SQLite 제약) 표를 한 번 다시 만든다.
+    ALTER 는 다른 프로세스가 같은 파일에 먼저 붙였을 수 있어 중복 오류를 흡수한다.
+    """
+    old = _columns(c, "judgment")
+    if old and "id" not in old:
+        keep = [x for x in ("ts",) + JUDGMENT_COLS if x in old]
+        cols = ",".join(keep)
+        c.execute("CREATE TABLE judgment_v2 (%s)" % _JUDGMENT_DDL)
+        c.execute("INSERT INTO judgment_v2 (%s) SELECT %s FROM judgment" % (cols, cols))
+        c.execute("DROP TABLE judgment")
+        c.execute("ALTER TABLE judgment_v2 RENAME TO judgment")
+        log.info("판정 이력 스키마를 판올림했다 — 행 %d개 보존",
+                 c.execute("SELECT COUNT(*) FROM judgment").fetchone()[0])
+    c.executescript(_SCHEMA)
+    have = _columns(c, "judgment")
+    for name in JUDGMENT_COLS:
+        if name in have:
+            continue
+        try:
+            c.execute("ALTER TABLE judgment ADD COLUMN %s" % name)
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
+
 def init() -> bool:
     global _conn, _error
     with _lock:
@@ -44,11 +99,18 @@ def init() -> bool:
             d = os.path.dirname(PATH)
             if d:
                 os.makedirs(d, exist_ok=True)
+                os.chmod(d, 0o700)
             c = sqlite3.connect(PATH, check_same_thread=False, timeout=5)
             c.row_factory = sqlite3.Row
             c.execute("PRAGMA journal_mode=WAL")
-            c.executescript(_SCHEMA)
+            _migrate(c)
             c.commit()
+            # 서술이 담기므로 같은 기계의 다른 사용자에게 열어 두지 않는다 (§24-6).
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.chmod(PATH + suffix, 0o600)
+                except OSError:
+                    pass
             _conn, _error = c, ""
             return True
         except Exception as e:
@@ -85,14 +147,80 @@ def _exec(sql: str, args=(), fetch: str = ""):
             return None
 
 
-def record_judgment(row: dict, now: float = None) -> bool:
-    cols = ("fingerprint", "host", "realm", "source", "classes", "alert_count",
-            "sev", "verdict", "gate_fired", "gate_reason", "sources",
-            "provider", "degraded", "total_s")
+def record_judgment(row: dict, now: float = None):
+    """판정 행을 남기고 식별자를 돌려준다. 저장소를 못 쓰면 None."""
+    cols = JUDGMENT_COLS
     vals = [time.time() if now is None else now] + [row.get(c) for c in cols]
-    ok = _exec("INSERT INTO judgment (ts,%s) VALUES (%s)"
-               % (",".join(cols), ",".join("?" * (len(cols) + 1))), vals)
-    return ok is True
+    with _lock:
+        if _conn is None:
+            return None
+        try:
+            cur = _conn.execute(
+                "INSERT INTO judgment (ts,%s) VALUES (%s)"
+                % (",".join(cols), ",".join("?" * (len(cols) + 1))), vals)
+            _conn.commit()
+            return cur.lastrowid
+        except Exception as e:
+            log.warning("판정 기록 실패: %s", e)
+            return None
+
+
+def finish(judgment_id, fields: dict) -> bool:
+    """분석이 끝난 뒤 채워지는 값. 없는 식별자는 조용히 넘어간다."""
+    cols = [c for c in fields if c in JUDGMENT_COLS]
+    if not judgment_id or not cols:
+        return False
+    sql = "UPDATE judgment SET %s WHERE id=?" % ",".join("%s=?" % c for c in cols)
+    return _exec(sql, [fields[c] for c in cols] + [judgment_id]) is True
+
+
+def get_judgment(judgment_id) -> dict:
+    r = _exec("SELECT * FROM judgment WHERE id=?", (judgment_id,), fetch="one")
+    return dict(r) if r else {}
+
+
+def latest_judgment(fingerprint: str) -> dict:
+    r = _exec("SELECT * FROM judgment WHERE fingerprint=? ORDER BY ts DESC LIMIT 1",
+              (fingerprint,), fetch="one")
+    return dict(r) if r else {}
+
+
+def record_feedback(judgment_id, axis: str, ok: bool, note: str = "",
+                    who: str = "", now: float = None) -> bool:
+    """사람이 남긴 판정 확인·정정. 같은 축에 여러 번 남을 수 있고 나중 것이 유효하다."""
+    now = time.time() if now is None else now
+    return _exec("INSERT INTO feedback (ts,judgment_id,axis,ok,note,who)"
+                 " VALUES (?,?,?,?,?,?)",
+                 (now, judgment_id, axis, 1 if ok else 0, note, who)) is True
+
+
+def labels_for(ids) -> dict:
+    """판정별 축별 최신 라벨. {판정 id: {축: {ok, ts, who, note}}}"""
+    ids = [int(i) for i in ids if i]
+    if not ids:
+        return {}
+    rows = _exec("SELECT * FROM feedback WHERE judgment_id IN (%s) ORDER BY ts ASC"
+                 % ",".join("?" * len(ids)), tuple(ids), fetch="all") or []
+    out = {}
+    for r in rows:                      # 시간 오름차순이라 나중 것이 앞을 덮는다
+        out.setdefault(r["judgment_id"], {})[r["axis"]] = {
+            "ok": r["ok"], "ts": r["ts"], "who": r["who"], "note": r["note"]}
+    return out
+
+
+def record_route(row: dict, now: float = None) -> bool:
+    """알림 1건의 라우팅 판정. 중복으로 걸린 것도 남긴다 — 안 남기면 분모에서 빠진다."""
+    now = time.time() if now is None else now
+    cols = ("source", "host", "sev", "cls", "route", "dup")
+    return _exec("INSERT INTO route (ts,%s) VALUES (?,?,?,?,?,?,?)" % ",".join(cols),
+                 [now] + [row.get(c) for c in cols]) is True
+
+
+def routes(since: float = 0, now: float = None, limit: int = 100000) -> list:
+    now = time.time() if now is None else now
+    rows = _exec("SELECT * FROM route WHERE ts>=? AND ts<=? ORDER BY ts DESC LIMIT ?",
+                 (since, now, limit), fetch="all")
+    return [dict(r) for r in (rows or [])]
 
 
 def judgments(since: float = 0, now: float = None, limit: int = 1000) -> list:
@@ -145,8 +273,46 @@ def kind_counts(window_s: float, now: float = None) -> dict:
     return {r["kind"]: int(r["n"]) for r in (rows or []) if r["kind"]}
 
 
+class Pruner:
+    """보관 기한을 실제로 지키는 주기 정리.
+
+    기동 때 한 번만 지우면 오래 떠 있는 프로세스는 영원히 안 지운다. 서술을 담기
+    시작한 뒤로는 그게 못 지키는 보관 약속이 된다.
+    """
+
+    def __init__(self, interval_s: float = None):
+        self.interval_s = float(interval_s if interval_s is not None
+                                else os.environ.get("GATEWAY_STORE_PRUNE_S", "21600"))
+        self._stop = threading.Event()
+        self._thread = None
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return True
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, name="store-prune",
+                                        daemon=True)
+        self._thread.start()
+        return True
+
+    def stop(self):
+        self._stop.set()
+
+    def _loop(self):
+        while not self._stop.wait(self.interval_s):
+            try:
+                prune()
+            except Exception as e:
+                log.warning("주기 정리 실패: %s", e)
+
+
 def prune(now: float = None) -> None:
+    """행보다 서술을 먼저 지운다 — 지표는 구조화 값만으로 산출된다 (§24-6)."""
     now = time.time() if now is None else now
     cut = now - KEEP_DAYS * 86400
+    _exec("UPDATE judgment SET summary=NULL WHERE ts < ? AND summary IS NOT NULL",
+          (now - SUMMARY_DAYS * 86400,))
     _exec("DELETE FROM judgment WHERE ts < ?", (cut,))
+    _exec("DELETE FROM feedback WHERE judgment_id NOT IN (SELECT id FROM judgment)")
+    _exec("DELETE FROM route WHERE ts < ?", (cut,))
     _exec("DELETE FROM call WHERE ts < ?", (now - 2 * 86400,))

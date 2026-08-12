@@ -29,7 +29,23 @@ for _s in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from gateway import incident, triage  # noqa: E402
+from gateway import incident, store, triage  # noqa: E402
+
+
+def label_previous(fingerprint: str) -> int:
+    """사람이 재분석을 부른 것은 게이트 판정이 틀렸다는 라벨이다 (§25-2).
+
+    누구에게도 새 행동을 요구하지 않고 모이는 유일한 라벨이라 자동으로 남긴다.
+    """
+    if not store.init():
+        return 0
+    row = store.latest_judgment(fingerprint)
+    if not row:
+        return 0
+    ok = store.record_feedback(row["id"], "gate", False,
+                               note="사람이 재분석을 요청함",
+                               who="workflow:analyze-now")
+    return 1 if ok else 0
 
 
 def parse_ref(ref: str, host: str) -> list:
@@ -67,6 +83,8 @@ def main():
         host=a.host, alerts=alerts, opened_at=now, last_at=now)
 
     print("요청 분석: 호스트 %s / 알림 %d건" % (a.host, len(alerts)), file=sys.stderr)
+    # 새 판정이 생기기 전에 붙인다 — 안 그러면 방금 만든 행에 라벨이 간다.
+    label_previous(inc.fingerprint())
     res = asyncio.run(triage.run_incident(inc, force=True))
     print("완료: %s" % res, file=sys.stderr)
 
