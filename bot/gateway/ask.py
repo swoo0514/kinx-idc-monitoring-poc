@@ -62,6 +62,47 @@ def allowed_sources() -> list:
     return [n for n in registry.source_names() if target_allowed(n)[0]]
 
 
+async def build_table(masker: masking.Masker = None, client_factory=None) -> dict:
+    """질의가 조회할 수 있는 대상 표. `{토큰: {host, source, logs, security}}`.
+
+    **표에 없으면 도구가 대상을 지정할 방법이 없다.** 그래서 이 표가 곧 경계다.
+    허용된 감시 서버에만 묻는다 — 나머지 서버에는 조회 자체를 보내지 않는다.
+
+    실패해도 예외를 던지지 않는다. 답을 못 하더라도 왜 못 하는지는 말해야 하므로,
+    빈 표를 받은 쪽이 그 사실을 사람에게 전한다.
+    """
+    import httpx                                  # 모듈 들여오기를 쓰는 자리에 둔다
+
+    from . import collector
+
+    mk = masker if masker is not None else proxy.build_masker()
+    factory = client_factory or (lambda source="": collector.ZabbixClient(source=source))
+    table = {}
+    for source in allowed_sources():
+        try:
+            zbx = factory(source=source)
+            async with httpx.AsyncClient() as client:
+                hosts = await zbx.call(client, "host.get", {
+                    "output": ["hostid", "host", "name", "status"],
+                    "selectInterfaces": ["ip", "dns"]})
+        except Exception as e:
+            log.warning("대상 표를 못 만들었다 source=%s: %s", source, e)
+            continue
+        for h in hosts or []:
+            name = str(h.get("host") or "")
+            if not name:
+                continue
+            mk.register("host", name)
+            table[mk._fwd[name]] = {
+                "host": name,
+                "source": source,
+                # 축마다 이름이 다를 수 있다. 못 풀면 빈 값이고 그건 '없음'이 아니다.
+                "logs": collector._resolve_label(name, h, source, "logs"),
+                "security": collector._resolve_label(name, h, source, "security"),
+            }
+    return table
+
+
 def session_masker(sid: str) -> masking.Masker:
     """이번 요청의 이름 표 + 이 세션이 이미 발행한 토큰을 합친 마스커.
 

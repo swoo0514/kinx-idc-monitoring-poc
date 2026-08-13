@@ -280,7 +280,8 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_dispatch_checks())
+                    + _ask_tool_checks() + _ask_dispatch_checks()
+                    + _ask_table_checks())
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
@@ -3234,6 +3235,73 @@ def _ask_dispatch_checks() -> int:
     assert hasattr(store, "judgments_in_realms"), "영역 조건이 붙은 읽기 함수가 없다"
     assert store.judgments_in_realms([]) == [], "허용 영역이 없으면 아무것도 안 준다"
     return 14
+
+
+def _ask_table_checks() -> int:
+    """조회 대상 표를 서버가 만드는가.
+
+    표에 없으면 도구가 대상을 지정할 방법이 없다. 그래서 이 표가 곧 경계다.
+    """
+    import asyncio
+    import json
+    import os
+
+    from . import ask, collector, incident as inc_mod, registry
+
+    saved_src = list(registry._SOURCES)
+    saved_map = dict(inc_mod.REALM_MAP)
+    saved_env = os.environ.get("ASK_ALLOWED_REALMS")
+    saved_entries = list(registry._ENTRIES)
+    try:
+        registry._SOURCES = [{"name": "zabbix-internal", "realm": "internal"},
+                             {"name": "zabbix-msp", "realm": "msp"}]
+        registry._ENTRIES = []
+        inc_mod.REALM_MAP = {}
+        os.environ.pop("ASK_ALLOWED_REALMS", None)
+
+        asked = []
+
+        class _Fake:
+            def __init__(self, source=""):
+                self.source = source
+
+            async def call(self, client, method, params):
+                asked.append((self.source, method))
+                if self.source == "zabbix-internal":
+                    return [{"hostid": "1", "host": "web-01", "status": "0",
+                             "interfaces": [{"ip": "10.0.0.5", "dns": "web-01.example"}]}]
+                return [{"hostid": "9", "host": "cust-db", "status": "0", "interfaces": []}]
+
+        table = asyncio.run(ask.build_table(client_factory=_Fake))
+
+        # ① **허용된 감시 서버에만 묻는다.** MSP 서버에는 조회조차 가지 않는다.
+        assert {s for s, _m in asked} == {"zabbix-internal"}, asked
+        assert all(m == "host.get" for _s, m in asked), asked
+
+        # ② 열쇠는 토큰이고 실명은 값 안에만 있다. 표 자체가 모델에 나가지 않는다.
+        assert table and all(k.startswith("[host-") for k in table), list(table)[:3]
+        assert "cust-db" not in json.dumps(table, ensure_ascii=False), "MSP 호스트가 실렸다"
+
+        ent = list(table.values())[0]
+        assert ent["host"] == "web-01" and ent["source"] == "zabbix-internal", ent
+        # ③ 축 이름은 명부·인터페이스에서 푼다. 못 풀면 빈 값이고 그건 '없음'이 아니다.
+        assert ent["logs"] == "web-01.example", ent
+
+        # ④ 조회가 실패해도 예외로 끝내지 않는다 — 답을 못 하더라도 이유를 말해야 한다
+        class _Dead(_Fake):
+            async def call(self, client, method, params):
+                raise RuntimeError("zabbix down")
+
+        assert asyncio.run(ask.build_table(client_factory=_Dead)) == {}
+        return 9
+    finally:
+        registry._SOURCES = saved_src
+        registry._ENTRIES = saved_entries
+        inc_mod.REALM_MAP = saved_map
+        if saved_env is None:
+            os.environ.pop("ASK_ALLOWED_REALMS", None)
+        else:
+            os.environ["ASK_ALLOWED_REALMS"] = saved_env
 
 
 def _proxy_mask_checks() -> int:
