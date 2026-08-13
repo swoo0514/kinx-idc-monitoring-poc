@@ -2549,9 +2549,12 @@ def _truncation_checks() -> int:
         assert [r["line"] for r in recs] == ["이른 줄", "늦은 줄"], recs
         assert recs[0]["t"] < recs[1]["t"]
 
-        # ⑧ 조회 상한과 전송 상한이 다르다. 랩 실측상 평상시에도 15분에 120줄이라
-        #    40줄 상한이 매번 3분의 2를 버린다. 더 읽고 골라 보내야 한다.
-        assert collector.LOKI_FETCH_LIMIT > collector.LOKI_SEND_LIMIT
+        # ⑧ 전송 제동은 줄 수가 아니라 글자 수로 건다. 지연 실측(2026-08-13)에서
+        #    입력을 75배 늘려도 응답 시간이 2.2초밖에 안 늘어, 줄 수 상한이 지키던
+        #    것이 사실상 없었다. 줄 수 상한은 안전망으로만 남기고 조회 상한을 넘지
+        #    않게만 잠근다.
+        assert collector.LOKI_FETCH_LIMIT >= collector.LOKI_SEND_LIMIT
+        assert collector.LOKI_SEND_BYTES > 0
 
         # ⑨ 표시를 쪼갠다. 한 불리언에 "창에 더 있었다"와 "조회가 상한에 닿았다"를
         #    같이 실으면 오늘 고친 문제가 이름만 바꿔 재발한다.
@@ -2659,11 +2662,30 @@ def _log_select_checks() -> int:
     assert len(same) <= c.SAME_SHAPE_MAX, "같은 형태가 %d줄" % len(same)
 
     # ⑦-1 첫 오류 직전은 오류에 **가까운** 쪽을 고른다. 원인은 바로 앞에 있다.
+    #      몫 선별은 예산을 넘을 때만 도는 경로라, 검사도 예산을 좁혀 그 경로로 넣는다.
     seq2 = [_r(i, "INFO steady %d" % i) for i in range(200)]
     seq2 += [_r(300 + i, "ERROR boom %d" % i) for i in range(20)]
-    picked = c.select_logs(seq2)
+    picked = c.select_logs(seq2, limit=40)
     pre = [r["t"] for r in picked if r.get("why") == "pre"]
     assert pre and max(pre) >= 190, "오류에서 먼 쪽만 골랐다: %s" % sorted(pre)[:3]
+
+    # ⑦-1a **접기가 먼저고 선별은 예산을 넘을 때만이다.** 랩 실측(2026-08-13):
+    #       평상시 15분 120줄이 접기만으로 12줄이 되어 몫 선별은 할 일이 없었다.
+    #       그런데 옛 코드는 40줄 상한 때문에 몫 선별이 늘 돌았고, 문서는 그 죽은
+    #       분기를 규칙인 것처럼 적고 있었다. 평상시 창에서 몫이 등장하면 실패다.
+    normal = [_r(i, "INFO request completed status=200 dur=%dms" % (i % 80))
+              for i in range(120)]
+    picked = c.select_logs(normal)
+    assert all(r["why"] == "fold" for r in picked if "line" in r), \
+        "평상시 창에 몫 선별이 개입했다: %s" % {r.get("why") for r in picked}
+    assert len([r for r in picked if "line" in r]) <= c.SAME_SHAPE_MAX
+
+    # ⑦-1b 예산을 글자 수로 건다. 줄 수는 줄 길이에 따라 같은 값이 열 배 차이가 난다.
+    long_recs = [_r(i, "ERROR distinct failure %d %s" % (i, "x" * 500))
+                 for i in range(300)]
+    picked = c.select_logs(long_recs)
+    sent = sum(len(r["line"]) for r in picked if "line" in r)
+    assert sent <= c.LOKI_SEND_BYTES, "글자 예산을 넘었다: %d" % sent
 
     # ⑦ 등급 미상이 오류 몫을 먹지 않는다
     assert c.log_level("something happened") == ""
@@ -2720,7 +2742,10 @@ def _log_select_checks() -> int:
 
     # ⑦-3 생략 구간을 표시한다. 안 하면 모델이 떨어진 줄을 붙은 것으로 읽고
     #      인접성에서 인과를 만든다. 줄 수와 시간 범위를 함께 낸다.
-    many = [_r(i * 10, "INFO step %d done in %dms" % (i, i)) for i in range(200)]
+    #      반복이 있어야 접기가 줄을 버리고 그 자리에 표시가 들어간다. 두 형태를
+    #      번갈아 넣어 생략 구간이 여러 곳에 생기게 한다.
+    many = [_r(i * 10, ("INFO step done in %dms" % i) if i % 2 else
+                       ("INFO flush wrote %dKB" % i)) for i in range(200)]
     picked = c.select_logs(many)
     gaps = [r for r in picked if "gap" in r]
     assert gaps, "생략 표시가 없다"

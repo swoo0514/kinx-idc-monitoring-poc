@@ -27,7 +27,20 @@ CORR_WINDOW_S = 900   # 15분
 # 호스트가 있어 40줄 상한이 매번 3분의 2를 버렸다. 더 읽고 골라 보낸다.
 # 300 은 랩 최대(120줄)의 2.5배다. 실환경은 호스트당 로그량이 미지라 도입 전 재측정한다.
 LOKI_FETCH_LIMIT = 300
-LOKI_SEND_LIMIT = 40
+# 전송 예산. **줄 수가 아니라 글자 수가 진짜 예산이다** — 모델이 먹는 단위가 글자
+# 수이고, 줄 수는 줄 길이에 따라 같은 값이 열 배 차이가 난다.
+#
+# 40줄이라는 옛 값은 응답 시간 때문이라고 적혀 있었으나 근거가 없었다. 실측
+# (2026-08-13, claude-opus-4-8, 3회 중앙값): 입력을 3,746토큰에서 278,286토큰으로
+# 75배 늘려도 응답 시간은 9.70초에서 11.86초로 2.2초 늘었다. 40줄 제한이 지킨 것은
+# 2초였고, 그 대가는 원인 줄을 버릴 위험이었다.
+#
+# 그래서 상한을 조회 상한과 같은 300줄로 올리고, 실제 제동은 글자 수로 건다.
+# 64KB 는 300줄이 평균 213자 이하일 때 통째로 나가는 크기다. 랩 실측 줄 길이는
+# 중앙값 108자·최대 233자이므로 평상시에는 걸리지 않고, 스택 트레이스처럼 줄이
+# 유난히 긴 구간에서만 선별이 개입한다.
+LOKI_SEND_LIMIT = 300
+LOKI_SEND_BYTES = 64 * 1024
 # 줄 수만으로는 부족하다. 300자 절단은 응답을 받은 뒤 우리가 하므로 와이어에는 전장이
 # 온다. 4KB 줄이면 300줄이 1.2MB 이고 그 파싱이 이벤트 루프를 막는다.
 LOKI_FETCH_BYTES = 2 * 1024 * 1024
@@ -553,7 +566,9 @@ _BARE_CODE_RE = re.compile(
 SAME_SHAPE_MAX = 3          # 같은 형태를 몇 줄까지 실을지
 # 선별을 끄는 스위치. 끄면 예전 동작(최신 N줄)으로 돌아간다.
 SELECT_ENABLED = os.environ.get("LOG_SELECT_ENABLED", "1") != "0"
-# 몫. 임의값이며 실측으로 조정한다. 남는 몫은 뒤로 넘긴다.
+# 몫. **접어도 예산을 넘을 때만 쓰는 비상 배분이다.** 랩 실측(2026-08-13)에서는 접기만으로
+# 15분 120줄이 12줄이 되어 이 배분이 한 번도 개입하지 않았다. 값 자체는 임의값이므로,
+# 이 경로가 실제로 도는 환경을 만나면 그때 실측으로 정한다.
 SELECT_QUOTA = (("error", 14), ("novel", 8), ("pre", 12), ("recent", 6))
 
 
@@ -597,16 +612,46 @@ def log_shape(line: str) -> str:
     return re.sub(r"(?:<TS> ?){2,}", "<TS> ", out).strip()
 
 
-def select_logs(records: list, limit: int = None) -> list:
-    """조회한 것 중 보낼 것을 고른다.
+def _with_gaps(recs: list, chosen: set, why_of: dict, line_of) -> list:
+    """안 실린 구간을 표시한다.
 
-    최신 순으로만 채우면 오류가 평상시 로그에 묻힌다. 랩 실측에서 정상 260줄에 섞인
-    오류 3줄이 통째로 잘렸다. 반대로 오류만 먼저 채우면 재시도 루프 하나가 전부를
-    먹고 사건 직전 문맥이 사라진다. 그래서 순차가 아니라 몫으로 나눈다.
+    고른 줄만 이어 붙이면 모델은 그것이 연속된 기록인 줄 알고 인접성에서 인과를
+    만든다. 몇 줄이 어느 구간에서 빠졌는지 함께 낸다 — 줄 수만으로는 그 사이에
+    몇 초가 비었는지 안 보인다.
+    """
+    out, gap, gap_from, gap_to = [], 0, None, None
+    for i, r in enumerate(recs):
+        if i in chosen:
+            if gap:
+                out.append({"t": int(gap_from), "gap": gap, "to": int(gap_to)})
+                gap, gap_from, gap_to = 0, None, None
+            out.append(line_of(i, why_of[i]))
+        else:
+            gap += 1
+            if gap_from is None:
+                gap_from = r["t"]
+            gap_to = r["t"]      # 다음에 실린 줄이 아니라 **마지막으로 빠진 줄**이다
+    if gap:
+        out.append({"t": int(gap_from), "gap": gap, "to": int(gap_to)})
+    return out
+
+
+def select_logs(records: list, limit: int = None, budget: int = None) -> list:
+    """조회한 것 중 보낼 것을 고른다. 접기가 먼저고 선별은 그다음이다.
+
+    순서가 중요하다. 접기(같은 모양 최대 3줄 + 개수 표기)만으로 랩 15분 120줄이
+    12줄로 줄었고, 그 뒤에 몫 선별은 할 일이 없었다(2026-08-13 실측). 드물게 한 번
+    나타난 줄은 그 자체가 하나의 모양이라 접기 단계에서 반드시 살아남는다. 우리가
+    고치려던 고장(정상 260줄에 섞인 오류 3줄이 잘림)은 접기만으로 해결된다.
+
+    그래서 몫 선별은 평상시에 개입하지 않는다. **접은 결과가 예산을 넘을 때만**
+    무엇을 버릴지 정한다. 예산은 줄 수가 아니라 글자 수로 잡는다. 모델이 실제로
+    먹는 단위가 글자 수이고, 줄 수는 줄 길이에 따라 같은 값이 열 배 차이가 난다.
 
     고른 뒤에는 반드시 시각순으로 돌려준다. 모델이 인접성에서 인과를 만들기 때문이다.
     """
     limit = LOKI_SEND_LIMIT if limit is None else limit
+    budget = LOKI_SEND_BYTES if budget is None else budget
     recs = sorted(records, key=lambda r: r["t"])
     if not SELECT_ENABLED:
         # 되돌리기용. 선별을 끄면 예전 동작(최신 N줄)으로 돌아간다. 커밋을 되돌리지
@@ -627,9 +672,20 @@ def select_logs(records: list, limit: int = None) -> list:
         return dict(recs[i], n=counts[shapes_of[i]], why=why,
                     **({"level": levels_of[i]} if levels_of[i] else {}))
 
-    if len(recs) <= limit:
-        return [_line(i, "all") for i in range(len(recs))]
+    # 1단계 — 접기. 항상 한다. 여기서 남는 줄이 곧 후보다. 조건을 달면 규칙이 둘로
+    #   갈라지고, 같은 줄 200개가 그대로 나가는 경로가 생긴다.
+    seen, folded = {}, []
+    for i in range(len(recs)):
+        s = shapes_of[i]
+        if seen.get(s, 0) < SAME_SHAPE_MAX:
+            seen[s] = seen.get(s, 0) + 1
+            folded.append(i)
 
+    # 2단계 — 예산 안에 들어오면 선별하지 않는다. 랩에서는 항상 이 경로다.
+    if len(folded) <= limit and sum(len(recs[i]["line"]) for i in folded) <= budget:
+        return _with_gaps(recs, set(folded), {i: "fold" for i in folded}, _line)
+
+    # 3단계 — 접어도 예산을 넘는 구간에서만 무엇을 버릴지 정한다.
     first_err = next((i for i, lv in enumerate(levels_of) if lv == "error"), None)
     pools = {
         "error": [i for i, lv in enumerate(levels_of) if lv == "error"],
@@ -640,6 +696,7 @@ def select_logs(records: list, limit: int = None) -> list:
         "recent": list(range(len(recs) - 1, -1, -1)),
     }
     chosen, used, why_of = set(), {}, {}
+    spent = [0]
 
     def _take(pool, n, why):
         got = 0
@@ -648,7 +705,13 @@ def select_logs(records: list, limit: int = None) -> list:
                 break
             if i in chosen or used.get(shapes_of[i], 0) >= SAME_SHAPE_MAX:
                 continue
+            # 넘고 나서가 아니라 넘기 전에 멈춘다. 뒤에서 재면 마지막 한 줄만큼
+            # 항상 초과한다. 첫 줄은 아무리 길어도 싣는다 — 빈 채로 보내면
+            # 모델이 "로그에 흔적이 없다"를 쓴다.
+            if chosen and spent[0] + len(recs[i]["line"]) > budget:
+                break
             chosen.add(i)
+            spent[0] += len(recs[i]["line"])
             used[shapes_of[i]] = used.get(shapes_of[i], 0) + 1
             why_of[i] = why
             got += 1
@@ -665,23 +728,7 @@ def select_logs(records: list, limit: int = None) -> list:
     if len(chosen) < limit:
         _take(pools["recent"], limit - len(chosen), "recent")
 
-    # 안 실린 구간을 표시한다. 고른 줄만 이어 붙이면 모델은 그것이 연속된 기록인 줄 알고
-    # 인접성에서 인과를 만든다. 몇 줄이 어느 구간에서 빠졌는지 함께 낸다 — 줄 수만으로는
-    # 그 사이에 몇 초가 비었는지 안 보인다.
-    out, gap, gap_from, gap_to = [], 0, None, None
-    for i, r in enumerate(recs):
-        if i in chosen:
-            if gap:
-                out.append({"t": int(gap_from), "gap": gap, "to": int(gap_to)})
-                gap, gap_from, gap_to = 0, None, None
-            out.append(_line(i, why_of[i]))
-        else:
-            gap += 1
-            if gap_from is None:
-                gap_from = r["t"]
-            gap_to = r["t"]      # 다음에 실린 줄이 아니라 **마지막으로 빠진 줄**이다
-    if gap:
-        out.append({"t": int(gap_from), "gap": gap, "to": int(gap_to)})
+    out = _with_gaps(recs, chosen, why_of, _line)
     return out
 
 
