@@ -2648,6 +2648,13 @@ def _log_select_checks() -> int:
     # ⑦ 등급 미상이 오류 몫을 먹지 않는다
     assert c.log_level("something happened") == ""
 
+    # ⑦-2 정규화 — 접어야 할 것과 남겨야 할 것
+    assert c.log_shape("GET /a 500 12ms") != c.log_shape("GET /a 200 3ms"), "상태 코드가 접혔다"
+    assert c.log_shape("req path=/v1/pay/151") == c.log_shape("req path=/v1/pay/9")
+    assert c.log_shape("/etc/shadow changed") != c.log_shape("/tmp/junk changed")
+    assert (c.log_shape("2026-08-13 10:00:01 pid=41 from 10.0.0.5 done")
+            == c.log_shape("2026-08-13 11:22:33 pid=7 from 10.0.0.9 done"))
+
     # ⑧ 고른 이유와 개수가 전송 형태에 실린다. 안 실리면 모델은 40줄이 전부인 줄 안다.
     from . import llm, masking
     ctx = {"incident": {"host": "h1", "classes": ["disk_space"], "alert_count": 1},
@@ -2661,7 +2668,7 @@ def _log_select_checks() -> int:
     assert "shape" not in item and "<N>" not in json.dumps(item, ensure_ascii=False)
     # 프롬프트가 이 필드를 설명해야 한다. 안 하면 모델이 n 을 무시한다.
     assert "`n`" in llm.TRIAGE_SYSTEM and "`why`" in llm.TRIAGE_SYSTEM
-    return 22
+    return 26
 
 
 def _proxy_mask_checks() -> int:

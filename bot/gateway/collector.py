@@ -493,6 +493,9 @@ _NORM = (
     (re.compile(r"\b[0-9a-f]{8,}\b", re.IGNORECASE), "<HEX>"),
     (re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|us|ns|B|KB|MB|GB)\b", re.IGNORECASE), "<QTY>"),
     (re.compile(r"\b\d{4,}\b"), "<N>"),
+    # 경로의 숫자 구간은 변수다(`/v1/pay/151`). 디렉토리 이름은 남긴다 — `/etc/shadow`
+    # 와 `/tmp/junk` 가 합쳐지면 보안 축과의 교차 판단이 무너진다.
+    (re.compile(r"(?<=/)\d+\b"), "<N>"),
 )
 # `key=값` 의 숫자는 변수다(`retry=0`·`pid=5`). 다만 아래 열쇠는 남긴다 — 상태 코드와
 # 종료 코드가 접히면 오류 줄과 정상 줄이 같은 형태가 되어 선별이 통째로 죽는다.
