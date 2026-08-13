@@ -2618,31 +2618,31 @@ def _log_select_checks() -> int:
     recs += [_r(300 + i, "INFO request completed status=200 dur=%dms" % (i % 80))
              for i in range(60)]
     picked = c.select_logs(recs)
-    assert len(picked) <= c.LOKI_SEND_LIMIT, len(picked)
-    errs = [r for r in picked if "connection reset" in r["line"]]
+    assert len([r for r in picked if "line" in r]) <= c.LOKI_SEND_LIMIT, len(picked)
+    errs = [r for r in picked if "connection reset" in r.get("line", "")]
     assert len(errs) == 3, "오류 3줄이 안 실렸다: %d" % len(errs)
 
     # ③ 고른 뒤에는 시각순이다. 모델이 인접성에서 인과를 만들기 때문이다.
     assert [r["t"] for r in picked] == sorted(r["t"] for r in picked)
 
     # ④ 접은 줄은 개수로 알린다. 안 알리면 260줄이 3줄로 조용히 줄어든다.
-    info = [r for r in picked if "request completed" in r["line"]]
+    info = [r for r in picked if "request completed" in r.get("line", "")]
     assert info and info[0]["n"] >= 200, info[:1]
-    assert all("why" in r for r in picked), picked[:1]
+    assert all("why" in r for r in picked if "line" in r), picked[:1]
 
     # ⑤ 같은 오류가 쏟아져도 40칸을 다 먹지 않는다. 문맥이 남아야 인과를 본다.
     flood = [_r(i, "ERROR upstream timeout retry=%d" % i) for i in range(300)]
     flood += [_r(1000 + i, "INFO warmup step %d" % i) for i in range(20)]
     picked = c.select_logs(flood)
-    same = [r for r in picked if "upstream timeout" in r["line"]]
+    same = [r for r in picked if "upstream timeout" in r.get("line", "")]
     assert len(same) <= c.SAME_SHAPE_MAX, "같은 형태가 %d줄" % len(same)
-    assert any("warmup" in r["line"] for r in picked), "문맥이 통째로 밀렸다"
+    assert any("warmup" in r.get("line", "") for r in picked), "문맥이 통째로 밀렸다"
 
     # ⑥ 첫 오류 직전 구간이 보존된다 — 원인은 대개 그 앞에 있다
     seq = [_r(i, "INFO steady %d" % i) for i in range(100)]
     seq += [_r(200 + i, "ERROR boom %d" % i) for i in range(100)]
     picked = c.select_logs(seq)
-    pre = [r for r in picked if r["t"] < 200]
+    pre = [r for r in picked if "line" in r and r["t"] < 200]
     assert pre, "첫 오류 직전 줄이 하나도 안 남았다"
 
     # ⑦ 등급 미상이 오류 몫을 먹지 않는다
@@ -2654,6 +2654,18 @@ def _log_select_checks() -> int:
     assert c.log_shape("/etc/shadow changed") != c.log_shape("/tmp/junk changed")
     assert (c.log_shape("2026-08-13 10:00:01 pid=41 from 10.0.0.5 done")
             == c.log_shape("2026-08-13 11:22:33 pid=7 from 10.0.0.9 done"))
+
+    # ⑦-3 생략 구간을 표시한다. 안 하면 모델이 떨어진 줄을 붙은 것으로 읽고
+    #      인접성에서 인과를 만든다. 줄 수와 시간 범위를 함께 낸다.
+    many = [_r(i * 10, "INFO step %d done in %dms" % (i, i)) for i in range(200)]
+    picked = c.select_logs(many)
+    gaps = [r for r in picked if "gap" in r]
+    assert gaps, "생략 표시가 없다"
+    assert all(g.get("to") is not None and g["gap"] > 0 for g in gaps), gaps[:1]
+    lines = [r for r in picked if "line" in r]
+    assert sum(g["gap"] for g in gaps) + len(lines) == len(many), (
+        "생략 수와 실린 수의 합이 조회 수와 다르다: %d + %d != %d"
+        % (sum(g["gap"] for g in gaps), len(lines), len(many)))
 
     # ⑧ 고른 이유와 개수가 전송 형태에 실린다. 안 실리면 모델은 40줄이 전부인 줄 안다.
     from . import llm, masking

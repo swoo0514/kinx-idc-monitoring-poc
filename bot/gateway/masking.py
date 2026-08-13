@@ -113,6 +113,9 @@ def _log_item(rec, m) -> dict:
     """
     if not isinstance(rec, dict):
         return {"line": m(rec)}
+    if "gap" in rec:   # 안 실린 구간 표시 — 식별자가 없어 마스킹 대상이 아니다
+        return {"t": int(rec.get("t") or 0), "gap": int(rec["gap"]),
+                "to": int(rec.get("to") or 0)}
     out = {"t": int(rec.get("t") or 0), "line": m(rec.get("line", "")),
            "why": rec.get("why", "")}
     lvl = rec.get("level") or ""

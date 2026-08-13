@@ -582,7 +582,32 @@ def select_logs(records: list, limit: int = None) -> list:
         carry = want - _take(pools[name], want)
     if carry and len(picked) < limit:
         _take(pools["recent"], limit - len(picked))
-    return _out(sorted(picked, key=lambda r: r["t"]), "recent")
+    return _mark_gaps(recs, _out(sorted(picked, key=lambda r: r["t"]), "recent"))
+
+
+def _mark_gaps(fetched: list, picked: list) -> list:
+    """안 실린 구간을 표시한다.
+
+    고른 줄만 시각순으로 이어 붙이면 모델은 그것이 연속된 기록인 줄 알고 인접성에서
+    인과를 만든다. 실제로는 사이에 수백 줄이 빠져 있다. 몇 줄이 어느 구간에서 빠졌는지
+    함께 낸다 — 줄 수만으로는 그 사이에 몇 분이 비었는지 안 보인다.
+    """
+    keys = {(r["t"], r["line"]) for r in picked}
+    out, gap, gap_from = [], 0, None
+    for r in fetched:
+        if (r["t"], r["line"]) in keys:
+            if gap:
+                out.append({"t": int(gap_from), "gap": gap, "to": int(r["t"])})
+                gap, gap_from = 0, None
+            out.append(next(p for p in picked
+                            if (p["t"], p["line"]) == (r["t"], r["line"])))
+        else:
+            gap += 1
+            if gap_from is None:
+                gap_from = r["t"]
+    if gap:
+        out.append({"t": int(gap_from), "gap": gap, "to": int(fetched[-1]["t"])})
+    return out
 
 
 def _loki_ts(ts) -> float:
