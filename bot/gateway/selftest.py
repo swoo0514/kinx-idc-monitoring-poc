@@ -280,7 +280,7 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks())
+                    + _ask_tool_checks() + _ask_dispatch_checks())
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
@@ -3181,6 +3181,59 @@ def _ask_tool_checks() -> int:
     assert body["query"]["bool"]["filter"][0]["term"]["agent.name"] == "vm-a.example", body
     assert set(body) <= {"size", "sort", "query", "_source"}, body
     return 21
+
+
+def _ask_dispatch_checks() -> int:
+    """도구를 실제로 부를 때 무엇을 막는가.
+
+    모델이 도구 이름과 인자를 정한다. 그 값이 어떻든 **거부는 예외가 아니라 도구
+    결과로 돌려준다** — 예외로 끝내면 모델이 스스로 고칠 기회가 없다.
+    """
+    import asyncio
+    import json
+
+    from . import asktools, store
+
+    table = {
+        "[host-aaa]": {"host": "web-01", "source": "zabbix-internal",
+                       "logs": "web-01.example", "security": "web-01.example"},
+    }
+    ctx = {"table": table, "now": 1786590000, "zbx": None}
+
+    # ① 목록에 없는 도구는 거부한다. 모델이 이름을 지어내도 실행되면 안 된다.
+    r = asyncio.run(asktools.run_tool("delete_host", {}, ctx))
+    assert r.get("error"), r
+    assert "delete_host" in str(r), r
+
+    # ② 표에 없는 대상은 거부한다. 표는 허용된 감시 서버에서만 만들어진다.
+    r = asyncio.run(asktools.run_tool("host_logs", {"host": "[host-zzz]"}, ctx))
+    assert r.get("error") and "대상" in r["error"], r
+
+    # ③ 대상 인자가 아예 없어도 예외가 아니라 결과로 돌려준다
+    r = asyncio.run(asktools.run_tool("host_logs", {}, ctx))
+    assert r.get("error"), r
+
+    # ④ 질의문을 깨뜨리는 필터는 거부한다 (asktools.check_filter 와 같은 기준)
+    r = asyncio.run(asktools.run_tool(
+        "host_logs", {"host": "[host-aaa]", "contains": 'a"b'}, ctx))
+    assert r.get("error"), r
+
+    # ⑤ 호스트 목록은 표에서 만든다 — 조회 없이 답할 수 있어야 라운드를 아낀다
+    r = asyncio.run(asktools.run_tool("list_hosts", {}, ctx))
+    assert r.get("hosts") and r["hosts"][0]["host"] == "[host-aaa]", r
+    # **실명이 아니라 토큰으로 돌려준다.** 도구 결과는 그대로 모델에 실린다.
+    assert "web-01" not in json.dumps(r, ensure_ascii=False), r
+
+    # ⑥ 도구 목록이 모델에 줄 형태를 갖췄는가
+    names = {t["name"] for t in asktools.TOOL_SPECS}
+    assert {"list_hosts", "host_logs", "security_alerts", "past_judgments"} <= names, names
+    for t in asktools.TOOL_SPECS:
+        assert t.get("description") and t.get("input_schema", {}).get("type") == "object", t
+
+    # ⑦ 판정 이력은 영역으로 걸러 읽는다. 기존 함수를 고치면 품질 지표의 분모가 바뀐다.
+    assert hasattr(store, "judgments_in_realms"), "영역 조건이 붙은 읽기 함수가 없다"
+    assert store.judgments_in_realms([]) == [], "허용 영역이 없으면 아무것도 안 준다"
+    return 14
 
 
 def _proxy_mask_checks() -> int:

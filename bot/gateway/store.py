@@ -231,6 +231,30 @@ def judgments(since: float = 0, now: float = None, limit: int = 1000) -> list:
     return [dict(r) for r in (rows or [])]
 
 
+def judgments_in_realms(realms, since: float = 0, now: float = None,
+                        host: str = "", limit: int = 20) -> list:
+    """허용된 감시 영역의 판정만. 대화형 질의가 남의 영역을 못 읽게 하는 자리다.
+
+    `judgments()` 에 조건을 얹지 않고 따로 둔다. 그 함수는 품질 지표와 월간 리포트가
+    분모로 쓰고 있어, 조건이 붙으면 그 수치가 조용히 바뀐다.
+
+    **허용 영역이 비면 아무것도 주지 않는다.** 빈 목록을 "제한 없음" 으로 읽으면
+    설정을 빠뜨린 사람이 전부를 보게 된다.
+    """
+    names = [str(r) for r in (realms or []) if str(r)]
+    if not names:
+        return []
+    now = time.time() if now is None else now
+    sql = ("SELECT * FROM judgment WHERE ts>=? AND ts<=? AND realm IN (%s)"
+           % ",".join("?" for _ in names))
+    args = [since, now] + names
+    if host:
+        sql += " AND host=?"
+        args.append(host)
+    rows = _exec(sql + " ORDER BY ts DESC LIMIT ?", tuple(args + [limit]), fetch="all")
+    return [dict(r) for r in (rows or [])]
+
+
 def seen_once(key: str, ttl_s: float, now: float = None) -> bool:
     """처음 보는 키면 True. 저장소를 못 쓰면 True — 알림을 막지 않는다 (§24-3)."""
     now = time.time() if now is None else now
