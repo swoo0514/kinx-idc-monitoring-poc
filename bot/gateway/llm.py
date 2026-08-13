@@ -129,12 +129,21 @@ def build_user_prompt(masked_ctx: dict) -> str:
             or (masked_ctx.get("logs_fetched") or 0)
             > (masked_ctx.get("logs_selected") or 0)):
         head += TRUNCATION_RULE
+    if masked_ctx.get("logs_window_guessed"):
+        head += WINDOW_GUESSED_RULE
     if (masked_ctx.get("incident") or {}).get("scope") == "notify_only":
         head += NOTIFY_ONLY_RULE
     if masked_ctx.get("prior"):
         head += PRIOR_INSTRUCTION
     return head + json.dumps(masked_ctx, ensure_ascii=False, indent=1)
 
+
+# 조회 창이 사건 시각이 아니라 지금으로 떨어졌을 때만 붙는다.
+WINDOW_GUESSED_RULE = (
+    "**이 사건의 로그·보안 조회 창은 사건이 난 시각이 아니라 조회를 돌린 시각 기준이다.**"
+    " 사건 시각을 아무도 주지 않아 지금을 기준으로 잡았다. 따라서 이 창에 신호가 없다는"
+    " 사실을 근거로 쓰지 마라 — 사건이 없던 시간대를 본 것일 수 있다. 로그 축은"
+    " '확인 불가'로 다뤄라.\n\n")
 
 # 로그가 잘렸을 때만 붙는다. 안 잘렸는데 의심하게 만들면 그것도 오도다.
 TRUNCATION_RULE = (

@@ -233,6 +233,7 @@ def build_llm_context(context: dict, sev: str, masker: Masker) -> dict:
         "logs_fetched": int(context.get("logs_fetched") or 0),
         "logs_selected": int(context.get("logs_selected") or 0),
         "logs_fetch_capped": bool(context.get("logs_fetch_capped")),
+        "logs_window_guessed": bool(context.get("logs_window_guessed")),
         "logs_clipped": int(context.get("logs_clipped") or 0),
         "prior": [_prior_item(p, m) for p in (context.get("prior") or [])],
     }
@@ -290,6 +291,7 @@ def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
         "logs_fetched": int(context.get("logs_fetched") or 0),
         "logs_selected": int(context.get("logs_selected") or 0),
         "logs_fetch_capped": bool(context.get("logs_fetch_capped")),
+        "logs_window_guessed": bool(context.get("logs_window_guessed")),
         "logs_clipped": int(context.get("logs_clipped") or 0),
         "prior": [_prior_item(p, m) for p in (context.get("prior") or [])],
     }

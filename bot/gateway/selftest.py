@@ -1372,6 +1372,15 @@ def _event_time_checks() -> int:
     # 둘 다 있으면 이른 쪽을 쓴다 — 사건이 시작된 시점이 기준이다
     assert collector.reference_time(old_inc, now, [now - 9000]) == now - 9000
 
+    # **지금으로 떨어진 사실이 밖으로 드러나야 한다.** 2026-08-13 랩에서 사건 두 시간
+    # 뒤에 재분석을 돌렸는데 시각을 아무도 못 줘서 창이 조용히 "지금"이 됐고, 그 조용한
+    # 창에서 잡힌 6줄을 보고 모델이 "로그 축에는 이번 사건을 설명할 신호가 없다"고 썼다.
+    # 신호가 없던 것이 아니라 사건이 없던 시간대를 본 것이다.
+    assert hasattr(collector, "reference_guessed"), \
+        "창 기준을 지금으로 떨어뜨린 사실을 알릴 방법이 없다"
+    assert collector.reference_guessed(no_clock, now, []) is True
+    assert collector.reference_guessed(old_inc, now, []) is False
+
     # 배선 — 웹훅이 받은 시각이 알림과 대기 기록까지 이어져야 한다. 한 군데만 끊겨도
     # 재기동 뒤에는 값이 없어 지금 기준으로 떨어진다.
     import importlib

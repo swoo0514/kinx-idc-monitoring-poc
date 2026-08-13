@@ -216,6 +216,8 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
         # "일부만 실렸다"는 경고가 붙지 않는다(2026-08-13 감사).
         "logs_selected": sum(1 for r in picked_logs if "line" in r),
         "logs_fetch_capped": logs_capped,
+        # 이 경로는 알림이 실시간으로 도착한 것이라 지금이 곧 사건 시각이다.
+        "logs_window_guessed": False,
         "logs_clipped": logs_clip,
         # 사람이 원문으로 되짚을 재료. 화이트리스트에 없어 모델에는 안 간다.
         "logs_query": '{%s="%s"}' % (LOKI_HOST_LABEL, loki_label) if loki_label else "",
@@ -236,12 +238,28 @@ def reference_time(incident, now: int, extra_clocks=()) -> int:
     """
     # 감시 서버가 돌려준 이벤트 시각이 가장 정확하다. 발송 설정이 시각을 안 실어
     # 보내도 이 값은 온다. 발송 측 매크로에 의존하지 않으려고 이 순서로 둔다.
-    known = [c for c in extra_clocks if c]
-    known += [a.clock for a in getattr(incident, "alerts", []) if getattr(a, "clock", 0)]
-    known = [c for c in known if c <= now + 60]
+    known = _known_clocks(incident, now, extra_clocks)
     if not known:
         return now
     return int(min(known))
+
+
+def _known_clocks(incident, now: int, extra_clocks=()) -> list:
+    known = [c for c in extra_clocks if c]
+    known += [a.clock for a in getattr(incident, "alerts", []) if getattr(a, "clock", 0)]
+    return [c for c in known if c <= now + 60]
+
+
+def reference_guessed(incident, now: int, extra_clocks=()) -> bool:
+    """조회 창의 기준을 사건 시각이 아니라 '지금'으로 떨어뜨렸는가.
+
+    떨어뜨리는 것 자체는 설계다(없는 값을 지어내지 않는다). 문제는 그 사실이 조용하다는
+    점이다. 2026-08-13 랩에서 사건 두 시간 뒤에 재분석을 돌렸더니 시각을 아무도 주지
+    못해 창이 조용히 지금이 됐고, 그 한산한 창에서 잡힌 6줄을 보고 모델이 "로그 축에는
+    이번 사건을 설명할 신호가 없다"고 썼다. 신호가 없던 것이 아니라 사건이 없던 시간대를
+    본 것이다.
+    """
+    return not _known_clocks(incident, now, extra_clocks)
 
 
 async def zabbix_probe(source: str = "", client=None) -> dict:
@@ -312,6 +330,10 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
             except (TypeError, ValueError):
                 pass
     ref = reference_time(incident, now, event_clocks)
+    win_guessed = reference_guessed(incident, now, event_clocks)
+    if win_guessed:
+        log.warning("사건 시각을 아무도 주지 않아 로그·보안 창을 지금 기준으로 "
+                    "잡는다 host=%s — 이 창의 '신호 없음'은 근거가 못 된다", zbx_host)
     if ref != now:
         log.info("조회 기준을 사건 시각으로 맞춘다 host=%s (%d초 전)", zbx_host, now - ref)
     ((logs, logs_status, logs_capped, logs_clip), (security, sec_status),
@@ -397,6 +419,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         # "일부만 실렸다"는 경고가 붙지 않는다(2026-08-13 감사).
         "logs_selected": sum(1 for r in picked_logs if "line" in r),
         "logs_fetch_capped": logs_capped,
+        "logs_window_guessed": win_guessed,
         "logs_clipped": logs_clip,
         # 사람이 원문으로 되짚을 재료. 화이트리스트에 없어 모델에는 안 간다.
         "logs_query": '{%s="%s"}' % (LOKI_HOST_LABEL, loki_label) if loki_label else "",
