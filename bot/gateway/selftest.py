@@ -279,7 +279,8 @@ def main():
     tenant_checks = _tenant_scope_checks() + _contract_checks()
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
-                    + _ask_question_checks() + _ask_scope_checks())
+                    + _ask_question_checks() + _ask_scope_checks()
+                    + _ask_tool_checks())
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
@@ -3134,6 +3135,52 @@ def _ask_scope_checks() -> int:
             os.environ.pop("ASK_ALLOWED_REALMS", None)
         else:
             os.environ["ASK_ALLOWED_REALMS"] = saved_env
+
+
+def _ask_tool_checks() -> int:
+    """도구가 무엇을 조회할 수 있는가.
+
+    Zabbix 축에는 `.get` 아닌 메서드를 거부하는 검사가 있지만 Loki·Wazuh 에는 없다.
+    두 축의 등가물은 **호출자가 질의문을 못 주는 것**이다. 도구는 라벨·기간·문자열
+    필터만 받고 질의문은 코드가 만든다.
+    """
+    from . import asktools
+
+    # ① 창 길이는 상한을 넘지 못한다. 모델이 큰 값을 넣어도 잘린다.
+    assert asktools.clamp_window(999999) == asktools.WINDOW_MAX_M
+    assert asktools.clamp_window(0) == asktools.WINDOW_DEFAULT_M
+    assert asktools.clamp_window(30) == 30
+
+    # ② 로그 필터는 정규식이 아니라 문자열이다. 질의문을 깨뜨릴 글자는 거부한다.
+    for bad in ('a"b', "a}b", "a{b", "a\nb", "a\\b", "x" * 200):
+        ok, why = asktools.check_filter(bad)
+        assert not ok and why, bad
+    for good in ("timeout", "connection reset", "zbx_monitor", "/etc/ssh"):
+        assert asktools.check_filter(good)[0], good
+
+    # ③ **질의문은 코드가 만든다.** 라벨 등식 하나에 문자열 필터만 붙는다.
+    q = asktools.build_logql("vm-a.example", "timeout")
+    assert q == '{host="vm-a.example"} |= "timeout"', q
+    assert asktools.build_logql("vm-a.example", "") == '{host="vm-a.example"}'
+
+    # ④ 라벨 값에 질의문을 깨뜨릴 글자가 있으면 만들지 않는다
+    for bad in ('a"b', "a}b", "a b"):
+        try:
+            asktools.build_logql(bad, "")
+            raise AssertionError("깨뜨릴 라벨을 통과시켰다: %r" % bad)
+        except ValueError:
+            pass
+
+    # ⑤ Zabbix 는 도구가 쓰는 메서드로만 좁힌다. `.get` 이어도 목록 밖이면 거부다.
+    assert asktools.zbx_method_ok("host.get")
+    assert not asktools.zbx_method_ok("user.get"), "목록 밖 조회를 허용했다"
+    assert not asktools.zbx_method_ok("host.update")
+
+    # ⑥ Wazuh 질의 본문은 고정 틀에서 만든다. 에이전트명은 정확 일치다.
+    body = asktools.build_wazuh_query("vm-a.example", 60, 7, 1786590000)
+    assert body["query"]["bool"]["filter"][0]["term"]["agent.name"] == "vm-a.example", body
+    assert set(body) <= {"size", "sort", "query", "_source"}, body
+    return 21
 
 
 def _proxy_mask_checks() -> int:
