@@ -2646,8 +2646,52 @@ def _log_select_checks() -> int:
     pre = [r for r in picked if "line" in r and r["t"] < 200]
     assert pre, "첫 오류 직전 줄이 하나도 안 남았다"
 
+    # ⑦-0 완전히 같은 줄이 같은 초에 여러 개여도 상한을 넘지 않는다.
+    #      값으로 같은지 보면 되찾을 때 같은 항목이 여러 번 붙는다. 실제로 300줄이
+    #      그대로 나갔다(2026-08-13 감사). 나노초를 초로 바꾸면서 해상도가 사라져
+    #      서로 다른 줄이 같은 시각이 되는 경로가 실재한다.
+    dup = [_r(1.0, "INFO steady") for _ in range(100)]
+    dup += [_r(500.0, "ERROR upstream refused connection") for _ in range(200)]
+    picked = c.select_logs(dup)
+    body = [r for r in picked if "line" in r]
+    assert len(body) <= c.LOKI_SEND_LIMIT, "상한을 넘었다: %d" % len(body)
+    same = [r for r in body if "upstream refused" in r["line"]]
+    assert len(same) <= c.SAME_SHAPE_MAX, "같은 형태가 %d줄" % len(same)
+
+    # ⑦-1 첫 오류 직전은 오류에 **가까운** 쪽을 고른다. 원인은 바로 앞에 있다.
+    seq2 = [_r(i, "INFO steady %d" % i) for i in range(200)]
+    seq2 += [_r(300 + i, "ERROR boom %d" % i) for i in range(20)]
+    picked = c.select_logs(seq2)
+    pre = [r["t"] for r in picked if r.get("why") == "pre"]
+    assert pre and max(pre) >= 190, "오류에서 먼 쪽만 골랐다: %s" % sorted(pre)[:3]
+
     # ⑦ 등급 미상이 오류 몫을 먹지 않는다
     assert c.log_level("something happened") == ""
+
+    # ⑦-1b 게이트웨이·감시 서버가 평상시 쓰는 낱말이 오류로 잡히면 안 된다.
+    #       alert·critical 은 이 환경의 일상 어휘라 맨낱말로 잡으면 자기 로그가
+    #       오류 자리를 먹는다 (2026-08-13 감사).
+    for benign in ("gateway: alert received eventid=12345 host=db01",
+                   "zabbix_server: alert manager #1 started",
+                   "config: cpu critical threshold = 90",
+                   "nagios: service state changed from CRITICAL to OK",
+                   "app: Error Rate: 0%", "app: warning: none",
+                   "systemd: Started Error Reporting Service."):
+        assert c.log_level(benign) == "", benign
+
+    # ⑦-1c 실제 형식에서 등급이 잡혀야 한다
+    for line, want in (('{"severity":"ERROR","msg":"x"}', "error"),
+                       ('{"lvl":"error"}', "error"),
+                       ('{"levelname":"ERROR"}', "error"),
+                       ("[core:error] [pid 1] AH00037: x", "error"),
+                       ("[ssl:warn] [pid 1] AH01906: x", "warn"),
+                       ("2026/08/13 10:00:00 [error] 123#0: upstream timed out", "error"),
+                       ("ERROR:  relation \"x\" does not exist", "error")):
+        assert c.log_level(line) == want, (line, c.log_level(line))
+
+    # ⑦-1d systemd 유닛 실패의 현행 문구. Rocky 8·9 에서 실제로 보이는 줄이다.
+    assert c.log_level("mariadb.service: Failed with result 'exit-code'.") == "error"
+    assert c.log_level("Dependency failed for MariaDB database server.") == "error"
 
     # ⑦-2 정규화 — 접어야 할 것과 남겨야 할 것
     assert c.log_shape("GET /a 500 12ms") != c.log_shape("GET /a 200 3ms"), "상태 코드가 접혔다"
@@ -2655,6 +2699,19 @@ def _log_select_checks() -> int:
     assert c.log_shape("/etc/shadow changed") != c.log_shape("/tmp/junk changed")
     assert (c.log_shape("2026-08-13 10:00:01 pid=41 from 10.0.0.5 done")
             == c.log_shape("2026-08-13 11:22:33 pid=7 from 10.0.0.9 done"))
+    # 시각 형식이 ISO 만이 아니다. 랩 실측에서 슬래시 날짜 때문에 469줄이 408가지
+    # 모양으로 세어져 반복 접기가 통째로 동작하지 않았다.
+    for a, b in (("2026/08/13 01:58:33.666159 [Mysql] Cannot fetch data",
+                  "2026/08/13 01:58:34.112233 [Mysql] Cannot fetch data"),
+                 ("Aug 13 10:00:00 host sshd: session opened",
+                  "Aug 13 10:00:07 host sshd: session opened"),
+                 ("[Wed Aug 13 10:00:00 2026] [core:error] x",
+                  "[Wed Aug 13 10:11:22 2026] [core:error] x")):
+        assert c.log_shape(a) == c.log_shape(b), (c.log_shape(a), c.log_shape(b))
+    # 오류 번호는 접히면 안 된다. MySQL 오류 번호가 4자리라 자리수 규칙에 먹혔다.
+    assert c.log_shape("errno=1062 dup key") != c.log_shape("errno=1236 relay log")
+    assert c.log_shape("uid=0 session") != c.log_shape("uid=1000 session")
+    assert c.log_shape("killed sig=9") != c.log_shape("killed sig=11")
 
     # ⑦-3 생략 구간을 표시한다. 안 하면 모델이 떨어진 줄을 붙은 것으로 읽고
     #      인접성에서 인과를 만든다. 줄 수와 시간 범위를 함께 낸다.

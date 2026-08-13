@@ -187,18 +187,21 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
         _loki_logs(loki_label, now, zbx_host, source),
         _wazuh_alerts(wz_label, now, zbx_host, source),
     )
+    picked_logs = select_logs(logs)
     return {
         **base,
         "loki_label": loki_label,
         "wazuh_label": wz_label,
-        "logs": select_logs(logs),   # Loki (Alloy) — 조회분 중 보낼 것만
+        "logs": picked_logs,   # Loki (Alloy) — 조회분 중 보낼 것만
         "security": security,    # Wazuh Indexer — 침해·변경 경보
         # 빈 목록의 의미를 확정하는 상태. ok 일 때만 "없음 = 사실"이다.
         "sources": {"logs": logs_status, "security": sec_status},
         # 조회 상태와 별개다. 창에서 몇 줄을 읽었고 그중 몇 줄을 보냈는지,
         # 조회 자체가 상한에 닿았는지를 각각 낸다.
         "logs_fetched": len(logs),
-        "logs_selected": len(select_logs(logs)),
+        # 생략 표시는 줄이 아니다. 세면 41줄 조회에서 fetched 와 selected 가 같아져
+        # "일부만 실렸다"는 경고가 붙지 않는다(2026-08-13 감사).
+        "logs_selected": sum(1 for r in picked_logs if "line" in r),
         "logs_fetch_capped": logs_capped,
         "logs_clipped": logs_clip,
         # 사람이 원문으로 되짚을 재료. 화이트리스트에 없어 모델에는 안 간다.
@@ -315,6 +318,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
             alerts_ctx.append({"name": a.alert_name, "source": a.source, "sev": a.sev,
                                "class": a.incident_class, "prejudge": {}})
 
+    picked_logs = select_logs(logs)
     return {
         "incident": {
             "host": zbx_host,
@@ -333,7 +337,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         "loki_label": loki_label,
         "wazuh_label": wz_label,
         "alerts": alerts_ctx,
-        "logs": select_logs(logs),
+        "logs": picked_logs,
         "security": security,
         # 이번 알림보다 먼저 열려 있던, 연계 관계에 있는 문제. 병합 대상이 아니라 참고 정보다.
         "open_problems": opens,
@@ -346,7 +350,9 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         # 조회 상태와 별개다. 창에서 몇 줄을 읽었고 그중 몇 줄을 보냈는지,
         # 조회 자체가 상한에 닿았는지를 각각 낸다.
         "logs_fetched": len(logs),
-        "logs_selected": len(select_logs(logs)),
+        # 생략 표시는 줄이 아니다. 세면 41줄 조회에서 fetched 와 selected 가 같아져
+        # "일부만 실렸다"는 경고가 붙지 않는다(2026-08-13 감사).
+        "logs_selected": sum(1 for r in picked_logs if "line" in r),
         "logs_fetch_capped": logs_capped,
         "logs_clipped": logs_clip,
         # 사람이 원문으로 되짚을 재료. 화이트리스트에 없어 모델에는 안 간다.
@@ -475,26 +481,52 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
 
 # 등급은 앵커를 요구한다. 부분 문자열로 잡으면 `0 errors`·`error_rate=0`·
 # `ErrorDocument 404` 가 전부 오류가 된다. 줄머리·대괄호·JSON 키·구분자 뒤만 본다.
-_LEVEL_RE = re.compile(
-    r'(?:^|(?<=[\s\[\(\|<{,]))'
-    r'(?:"level"\s*:\s*"|level=|severity=|priority=)?'
-    r'(EMERG|ALERT|CRIT|CRITICAL|FATAL|ERR|ERROR|WARN|WARNING)'
-    r'(?=$|[\s\]\)\|>:,"])', re.IGNORECASE)
+_LEVELS = "EMERG|ALERT|CRIT|CRITICAL|FATAL|ERR|ERROR|WARN|WARNING"
+# 등급 필드에 담겨 온 경우. 이때는 대소문자를 가리지 않는다.
+# 열쇠 이름은 실제 형식에서 확인한 것만 넣는다 — JSON 은 level·lvl·levelname·
+# severity·log.level 을 쓰고 logfmt 은 level 을 쓴다. Apache 2.4 는 [모듈:등급] 이라
+# 앞자리에 콜론이 온다.
+_LEVEL_FIELD_RE = re.compile(
+    r'(?:^|[\s\[\(\|<{,:\'"])'
+    r'(?:"?(?:level|lvl|levelname|severity|priority|log\.level)"?\s*[:=]\s*"?)'
+    r'(%s)(?=$|[\s\]\)\|>:,\'"])' % _LEVELS, re.IGNORECASE)
+# 괄호·대괄호 안에 등급만 들어 있는 경우. nginx `[error]`, Apache `[core:error]`.
+_LEVEL_BRACKET_RE = re.compile(r'[\[\(](?:[a-z_]+:)?(%s)[\]\)]' % _LEVELS, re.IGNORECASE)
+# 문장 안에 낱말로 서 있는 경우. **대문자일 때만** 인정한다. `Error Rate: 0%`,
+# `warning: none`, `cpu critical threshold` 같은 평범한 문장이 오류로 잡히기 때문이다.
+# alert·crit·emerg 는 이 경로에서 뺀다 — 게이트웨이·Keep·Zabbix 가 평상시에 쓰는
+# 낱말이라 자기 로그가 오류 자리를 먹는다(2026-08-13 감사).
+_LEVEL_BARE_RE = re.compile(
+    r'(?:^|(?<=[\s\[\(\|<{,]))(FATAL|ERROR|ERR|WARNING|WARN)'
+    r'(?=$|[\s\]\)\|>:,"])')
 _LEVEL_MAP = {"emerg": "error", "alert": "error", "crit": "error",
               "critical": "error", "fatal": "error", "err": "error",
               "error": "error", "warn": "warn", "warning": "warn"}
 
-# 등급 낱말이 없어도 중요한 줄이 있다. 커널 OOM 과 systemd 유닛 실패가 그렇다.
-# 목록은 짧게 두고 실제로 본 문구만 넣는다.
+# 등급 낱말이 없어도 중요한 줄이 있다. 커널과 systemd 가 그렇다.
+# 문구는 공식 소스로 대조했다 — `Out of memory: Kill` 은 linux v5.14 mm/oom_kill.c,
+# `Failed to start`·`Failed with result`·`Dependency failed for` 는 systemd v252
+# src/core/job.c·unit.c 다. `entered failed state` 는 v219 까지만 notice 였고 지금은
+# debug 라 Rocky 8·9 저널에 안 남는다 — 빼고 현행 문구로 바꾼다.
 _CRITICAL_RE = re.compile(
     r"Out of memory: Kill|oom-kill|segfault|"
-    r"Failed to start |entered failed state|I/O error|EXT4-fs error",
-    re.IGNORECASE)
+    r"Failed to start |Failed with result '|Dependency failed for |"
+    r"Timed out starting |I/O error|EXT4-fs error")
 
 # 정규화 — 같은 형태를 세기 위한 비교 키다. 절대 전송하지 않는다.
 # 순서가 중요하다. IP → UUID → 긴 hex → 숫자 순으로 걸러야 안쪽이 먼저 먹지 않는다.
 _NORM = (
+    # 시각 형식이 ISO 만이 아니다. 슬래시 날짜 하나를 빠뜨렸더니 랩의 한 서버에서
+    # 469줄이 408가지 모양으로 세어져 반복 접기가 통째로 죽었다(2026-08-13 실측).
     (re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?"), "<TS>"),
+    (re.compile(r"\d{4}/\d{2}/\d{2}[T ]?\d{2}:\d{2}:\d{2}(?:[.,]\d+)?"), "<TS>"),
+    # Apache 접근 로그: 13/Aug/2026:10:00:00
+    (re.compile(r"\d{1,2}/[A-Z][a-z]{2}/\d{4}:\d{2}:\d{2}:\d{2}"), "<TS>"),
+    # RFC3164 syslog: Aug 13 10:00:00 / Apache 오류 로그: Wed Aug 13 10:00:00 2026
+    (re.compile(r"(?:[A-Z][a-z]{2} )?[A-Z][a-z]{2} [ \d]?\d \d{2}:\d{2}:\d{2}"
+                r"(?: \d{4})?"), "<TS>"),
+    # 위에서 안 걸린 맨 시각
+    (re.compile(r"\b\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\b"), "<TS>"),
     (re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"), "<IP>"),
     (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
                 re.IGNORECASE), "<UUID>"),
@@ -505,32 +537,51 @@ _NORM = (
     # 와 `/tmp/junk` 가 합쳐지면 보안 축과의 교차 판단이 무너진다.
     (re.compile(r"(?<=/)\d+\b"), "<N>"),
 )
-# `key=값` 의 숫자는 변수다(`retry=0`·`pid=5`). 다만 아래 열쇠는 남긴다 — 상태 코드와
-# 종료 코드가 접히면 오류 줄과 정상 줄이 같은 형태가 되어 선별이 통째로 죽는다.
-_KEEP_NUM_KEYS = ("status", "code", "rc", "exit", "errno", "level", "signal")
+# `key=값` 의 숫자는 변수다(`retry=0`·`pid=5`). 다만 아래로 끝나는 열쇠는 남긴다 —
+# 상태 코드·오류 번호·사용자 번호·신호 번호가 접히면 서로 다른 사건이 한 형태로
+# 합쳐진다. MySQL 오류 번호가 4자리라 자리수 규칙에 먼저 먹히고 있었다.
+_KEEP_NUM_SUFFIX = ("status", "code", "rc", "exit", "errno", "level", "signal",
+                    "sig", "uid", "gid", "res", "retcode")
 _KV_NUM_RE = re.compile(r"\b([A-Za-z_][\w.]*)=(\d+)\b")
+_KEPT_RE = re.compile(r"\x00(\d+)\x00")
 SAME_SHAPE_MAX = 3          # 같은 형태를 몇 줄까지 실을지
 # 몫. 임의값이며 실측으로 조정한다. 남는 몫은 뒤로 넘긴다.
 SELECT_QUOTA = (("error", 14), ("novel", 8), ("pre", 12), ("recent", 6))
 
 
 def log_level(line: str) -> str:
-    """줄이 말하는 등급. 못 뽑으면 빈 문자열 — 미상을 오류로 올리지 않는다."""
-    if _CRITICAL_RE.search(line or ""):
+    """줄이 말하는 등급. 못 뽑으면 빈 문자열 — 미상을 오류로 올리지 않는다.
+
+    등급 필드 → 괄호 → 대문자 낱말 순으로 본다. 앞의 둘은 형식이 분명해 대소문자를
+    안 가리고, 마지막은 평범한 문장과 구분이 안 되므로 대문자만 인정한다.
+    """
+    line = line or ""
+    if _CRITICAL_RE.search(line):
         return "error"
-    m = _LEVEL_RE.search(line or "")
-    return _LEVEL_MAP.get(m.group(1).lower(), "") if m else ""
+    for rx in (_LEVEL_FIELD_RE, _LEVEL_BRACKET_RE, _LEVEL_BARE_RE):
+        m = rx.search(line)
+        if m:
+            return _LEVEL_MAP.get(m.group(1).lower(), "")
+    return ""
 
 
 def log_shape(line: str) -> str:
     """같은 모양인지 비교하는 키. HTTP 상태 코드·errno 는 남긴다 — 그것이 갈리면
     오류 줄과 정상 줄이 같은 형태가 되어 선별이 통째로 죽는다."""
     out = line or ""
+
+    # 남길 값을 **먼저** 감춘다. 자리수 규칙이 먼저 돌면 errno=1062 처럼 네 자리인
+    # 오류 번호가 접혀서 서로 다른 오류가 한 형태가 된다.
+    def _hide(m):
+        key = m.group(1).lower()
+        if key.endswith(_KEEP_NUM_SUFFIX):
+            return "%s=\x00%s\x00" % (m.group(1), m.group(2))
+        return "%s=<N>" % m.group(1)
+
+    out = _KV_NUM_RE.sub(_hide, out)
     for rx, tok in _NORM:
         out = rx.sub(tok, out)
-    return _KV_NUM_RE.sub(
-        lambda m: m.group(0) if m.group(1).lower() in _KEEP_NUM_KEYS
-        else "%s=<N>" % m.group(1), out)
+    return _KEPT_RE.sub(lambda m: m.group(1), out)
 
 
 def select_logs(records: list, limit: int = None) -> list:
@@ -544,42 +595,45 @@ def select_logs(records: list, limit: int = None) -> list:
     """
     limit = LOKI_SEND_LIMIT if limit is None else limit
     recs = sorted(records, key=lambda r: r["t"])
+    # **자리 번호로 고른다.** 값(시각+본문)으로 같은지 보면, 같은 줄이 같은 초에 여러 번
+    # 기록됐을 때 되찾는 과정에서 같은 항목이 여러 번 붙어 상한이 무너진다. 실제로 같은
+    # 줄 300개를 넣었더니 300줄이 그대로 나갔다(2026-08-13 감사). 나노초를 초로 바꾸면서
+    # 해상도가 사라져 서로 다른 줄이 같은 시각이 되는 경로도 있다.
+    shapes_of = [log_shape(r["line"]) for r in recs]
+    levels_of = [log_level(r["line"]) for r in recs]
     counts = {}
-    for r in recs:
-        s = log_shape(r["line"])
+    for s in shapes_of:
         counts[s] = counts.get(s, 0) + 1
 
-    def _out(rs, why):
+    def _line(i, why):
         # 접은 줄은 개수로 알린다. 안 알리면 260줄이 3줄로 조용히 줄어든다.
-        return [dict(r, n=counts.get(log_shape(r["line"]), 1),
-                     why=r.get("why", why)) for r in rs]
+        return dict(recs[i], n=counts[shapes_of[i]], why=why,
+                    **({"level": levels_of[i]} if levels_of[i] else {}))
 
     if len(recs) <= limit:
-        return _out(recs, "all")
+        return [_line(i, "all") for i in range(len(recs))]
 
-    first_err = next((r["t"] for r in recs if log_level(r["line"]) == "error"), None)
+    first_err = next((i for i, lv in enumerate(levels_of) if lv == "error"), None)
     pools = {
-        "error": [r for r in recs if log_level(r["line"]) == "error"],
-        "novel": [r for r in recs if log_level(r["line"]) == "warn"],
-        "pre": [r for r in recs if first_err is not None and r["t"] < first_err][-40:],
-        "recent": list(reversed(recs)),
+        "error": [i for i, lv in enumerate(levels_of) if lv == "error"],
+        "novel": [i for i, lv in enumerate(levels_of) if lv == "warn"],
+        # 오류에 **가까운 쪽부터** 본다. 원인은 대개 바로 앞에 있다. 앞에서부터 훑으면
+        # 오류에서 가장 먼 줄만 실린다.
+        "pre": list(range(first_err - 1, -1, -1)) if first_err else [],
+        "recent": list(range(len(recs) - 1, -1, -1)),
     }
-    picked, seen, shapes = [], set(), {}
+    chosen, used, why_of = set(), {}, {}
 
-    def _take(pool, n):
+    def _take(pool, n, why):
         got = 0
-        for r in pool:
-            if got >= n or len(picked) >= limit:
+        for i in pool:
+            if got >= n or len(chosen) >= limit:
                 break
-            key = (r["t"], r["line"])
-            if key in seen:
+            if i in chosen or used.get(shapes_of[i], 0) >= SAME_SHAPE_MAX:
                 continue
-            shape = log_shape(r["line"])
-            if shapes.get(shape, 0) >= SAME_SHAPE_MAX:
-                continue
-            seen.add(key)
-            shapes[shape] = shapes.get(shape, 0) + 1
-            picked.append(dict(r, why=name))
+            chosen.add(i)
+            used[shapes_of[i]] = used.get(shapes_of[i], 0) + 1
+            why_of[i] = why
             got += 1
         return got
 
@@ -587,34 +641,30 @@ def select_logs(records: list, limit: int = None) -> list:
     carry = 0
     for name, quota in SELECT_QUOTA:
         want = quota + carry
-        carry = want - _take(pools[name], want)
-    if carry and len(picked) < limit:
-        _take(pools["recent"], limit - len(picked))
-    return _mark_gaps(recs, _out(sorted(picked, key=lambda r: r["t"]), "recent"))
+        carry = want - _take(pools[name], want, name)
+    # 몫 합계보다 상한이 크면 남은 자리를 최신 쪽으로 채운다. 형태 상한으로 자리가
+    # 남는 경우에는 아무것도 안 늘어나는데, 그건 의도한 동작이다 — 거의 같은 줄로
+    # 40칸을 채우는 것보다 대표 몇 줄과 개수를 보내는 편이 낫다.
+    if len(chosen) < limit:
+        _take(pools["recent"], limit - len(chosen), "recent")
 
-
-def _mark_gaps(fetched: list, picked: list) -> list:
-    """안 실린 구간을 표시한다.
-
-    고른 줄만 시각순으로 이어 붙이면 모델은 그것이 연속된 기록인 줄 알고 인접성에서
-    인과를 만든다. 실제로는 사이에 수백 줄이 빠져 있다. 몇 줄이 어느 구간에서 빠졌는지
-    함께 낸다 — 줄 수만으로는 그 사이에 몇 분이 비었는지 안 보인다.
-    """
-    keys = {(r["t"], r["line"]) for r in picked}
-    out, gap, gap_from = [], 0, None
-    for r in fetched:
-        if (r["t"], r["line"]) in keys:
+    # 안 실린 구간을 표시한다. 고른 줄만 이어 붙이면 모델은 그것이 연속된 기록인 줄 알고
+    # 인접성에서 인과를 만든다. 몇 줄이 어느 구간에서 빠졌는지 함께 낸다 — 줄 수만으로는
+    # 그 사이에 몇 초가 비었는지 안 보인다.
+    out, gap, gap_from, gap_to = [], 0, None, None
+    for i, r in enumerate(recs):
+        if i in chosen:
             if gap:
-                out.append({"t": int(gap_from), "gap": gap, "to": int(r["t"])})
-                gap, gap_from = 0, None
-            out.append(next(p for p in picked
-                            if (p["t"], p["line"]) == (r["t"], r["line"])))
+                out.append({"t": int(gap_from), "gap": gap, "to": int(gap_to)})
+                gap, gap_from, gap_to = 0, None, None
+            out.append(_line(i, why_of[i]))
         else:
             gap += 1
             if gap_from is None:
                 gap_from = r["t"]
+            gap_to = r["t"]      # 다음에 실린 줄이 아니라 **마지막으로 빠진 줄**이다
     if gap:
-        out.append({"t": int(gap_from), "gap": gap, "to": int(fetched[-1]["t"])})
+        out.append({"t": int(gap_from), "gap": gap, "to": int(gap_to)})
     return out
 
 
