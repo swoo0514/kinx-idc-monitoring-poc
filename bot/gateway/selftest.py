@@ -2710,6 +2710,11 @@ def _log_select_checks() -> int:
         assert c.log_shape(a) == c.log_shape(b), (c.log_shape(a), c.log_shape(b))
     # 오류 번호는 접히면 안 된다. MySQL 오류 번호가 4자리라 자리수 규칙에 먹혔다.
     assert c.log_shape("errno=1062 dup key") != c.log_shape("errno=1236 relay log")
+    # 낱말 뒤에 맨 숫자로 오는 오류 번호도 남는다. MySQL 형식이 그렇다.
+    assert c.log_shape("Error 1045 access denied") != c.log_shape("Error 1213 deadlock")
+    # MariaDB 오류 로그는 시가 한 자리다
+    assert (c.log_shape("2026-08-13  2:13:33 0 [Warning] Access denied")
+            == c.log_shape("2026-08-13 11:04:05 0 [Warning] Access denied"))
     assert c.log_shape("uid=0 session") != c.log_shape("uid=1000 session")
     assert c.log_shape("killed sig=9") != c.log_shape("killed sig=11")
 

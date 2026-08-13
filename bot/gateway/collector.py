@@ -525,8 +525,10 @@ _NORM = (
     # RFC3164 syslog: Aug 13 10:00:00 / Apache 오류 로그: Wed Aug 13 10:00:00 2026
     (re.compile(r"(?:[A-Z][a-z]{2} )?[A-Z][a-z]{2} [ \d]?\d \d{2}:\d{2}:\d{2}"
                 r"(?: \d{4})?"), "<TS>"),
-    # 위에서 안 걸린 맨 시각
-    (re.compile(r"\b\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\b"), "<TS>"),
+    # 위에서 안 걸린 맨 시각. MariaDB 오류 로그는 시가 한 자리다(`2026-08-13  2:13:33`).
+    (re.compile(r"\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b"), "<TS>"),
+    # 시각이 떨어져 있는 날짜
+    (re.compile(r"\b\d{4}-\d{2}-\d{2}\b"), "<TS>"),
     (re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"), "<IP>"),
     (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
                 re.IGNORECASE), "<UUID>"),
@@ -544,6 +546,10 @@ _KEEP_NUM_SUFFIX = ("status", "code", "rc", "exit", "errno", "level", "signal",
                     "sig", "uid", "gid", "res", "retcode")
 _KV_NUM_RE = re.compile(r"\b([A-Za-z_][\w.]*)=(\d+)\b")
 _KEPT_RE = re.compile(r"\x00(\d+)\x00")
+# `key=값` 이 아니라 낱말 뒤에 맨 숫자로 오는 오류 번호도 남긴다. MySQL 은
+# `Error 1045 (28000)` 형식이라 네 자리 규칙에 먹힌다.
+_BARE_CODE_RE = re.compile(
+    r"\b(error|errno|code|status|sqlstate)\s+(\d+)", re.IGNORECASE)
 SAME_SHAPE_MAX = 3          # 같은 형태를 몇 줄까지 실을지
 # 몫. 임의값이며 실측으로 조정한다. 남는 몫은 뒤로 넘긴다.
 SELECT_QUOTA = (("error", 14), ("novel", 8), ("pre", 12), ("recent", 6))
@@ -579,9 +585,14 @@ def log_shape(line: str) -> str:
         return "%s=<N>" % m.group(1)
 
     out = _KV_NUM_RE.sub(_hide, out)
+    out = _BARE_CODE_RE.sub(lambda m: "%s \x00%s\x00" % (m.group(1), m.group(2)), out)
     for rx, tok in _NORM:
         out = rx.sub(tok, out)
-    return _KEPT_RE.sub(lambda m: m.group(1), out)
+    out = _KEPT_RE.sub(lambda m: m.group(1), out)
+    # 날짜와 시각이 따로 잡히면 토큰이 둘이 된다(`2026-08-13  2:13:33`). 같은 형식인데
+    # 자리 수만 다른 줄이 갈리므로 이어진 시각 토큰과 공백을 하나로 모은다.
+    out = re.sub(r"\s+", " ", out)
+    return re.sub(r"(?:<TS> ?){2,}", "<TS> ", out).strip()
 
 
 def select_logs(records: list, limit: int = None) -> list:
