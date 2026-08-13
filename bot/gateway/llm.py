@@ -365,3 +365,17 @@ if __name__ == "__main__":
     print(build_user_prompt(masked))
     print("\n=== 가명 맵 (게이트웨이 내부에만 존재, 전송 안 됨) ===")
     print(json.dumps(masker._rev, ensure_ascii=False, indent=1))
+
+
+def claude_tools(system: str, messages: list, tools: list) -> dict:
+    """도구를 쓸 수 있는 호출. 반환은 응답 본문 그대로(content 블록·stop_reason).
+
+    Ollama 로 폴백하지 않는다. 도구 호출에서 약하다는 것이 HolmesGPT 조사에서 이미
+    나왔고, 여기서 폴백하면 조사가 조용히 얕아진다. 실패는 실패로 알린다.
+    """
+    import anthropic
+    ad = ClaudeAdapter()
+    client = anthropic.Anthropic(timeout=ad.timeout, max_retries=0)
+    resp = client.messages.create(model=ad.model, max_tokens=MAX_TOKENS, system=system,
+                                  messages=messages, tools=tools)
+    return resp.model_dump()

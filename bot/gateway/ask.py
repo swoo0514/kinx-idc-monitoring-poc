@@ -171,3 +171,209 @@ def sanitize_question(text: str, mk: masking.Masker) -> dict:
                 "reason": "질문에 가려지지 않은 이름이나 주소가 남아 있다. "
                           "그 부분을 빼고 다시 물어달라"}
     return {"ok": True, "text": masked, "reason": ""}
+
+
+# ---------------------------------------------------------------------------
+# 실제 조회. 질의문은 asktools 가 만들고 여기서는 보내기만 한다.
+#
+# 반환에 항상 status 를 싣는다. 빈 결과가 "없었다" 인지 "못 봤다" 인지 구분되지 않으면
+# 모델이 없음을 근거로 단언한다. 알림 경로에서 이미 겪은 문제다(조회 상태 계약).
+# ---------------------------------------------------------------------------
+
+async def fetch_logs(logql: str, window_m: int, limit: int, now: int,
+                     masker: masking.Masker) -> dict:
+    import httpx
+
+    from . import collector
+
+    url = os.environ.get("LOKI_URL", "").rstrip("/")
+    if not url:
+        return {"logs": [], "status": collector.SOURCE_DISABLED,
+                "note": "로그 저장소가 연결돼 있지 않다"}
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.get(f"{url}/loki/api/v1/query_range", params={
+                "query": logql,
+                "start": str((now - window_m * 60) * 1_000_000_000),
+                "end": str(now * 1_000_000_000),
+                "limit": min(int(limit), collector.LOKI_FETCH_LIMIT),
+                "direction": "backward"}, timeout=collector.TIMEOUT_S)
+            r.raise_for_status()
+            recs = [{"t": collector._loki_ts(ts),
+                     "line": line[:collector.LOKI_LINE_MAX]}
+                    for st in r.json().get("data", {}).get("result", [])
+                    for ts, line in st.get("values", [])]
+    except Exception as e:
+        log.warning("로그 조회 실패: %s", e)
+        return {"logs": [], "status": collector.SOURCE_UNAVAILABLE,
+                "note": "조회하지 못했다. 이 결과를 '없음'으로 읽지 마라"}
+    picked = collector.select_logs(sorted(recs, key=lambda r: r["t"]))
+    return {"logs": [masking._log_item(x, masker.mask) for x in picked],
+            "fetched": len(recs), "status": collector.SOURCE_OK}
+
+
+async def fetch_security(body: dict, masker: masking.Masker) -> dict:
+    import httpx
+
+    from . import collector
+
+    url = os.environ.get("WAZUH_INDEXER_URL", "").rstrip("/")
+    if not url:
+        return {"alerts": [], "status": collector.SOURCE_DISABLED,
+                "note": "보안 저장소가 연결돼 있지 않다"}
+    auth = (os.environ.get("WAZUH_INDEXER_USER", ""),
+            os.environ.get("WAZUH_INDEXER_PASSWORD", ""))
+    try:
+        # 랩 인덱서가 자체 서명이라 검증을 끈다(알림 경로와 같은 조건).
+        async with httpx.AsyncClient(verify=False) as c:
+            r = await c.post(f"{url}/wazuh-alerts-*/_search", json=body, auth=auth,
+                             timeout=collector.TIMEOUT_S)
+            r.raise_for_status()
+            hits = r.json().get("hits", {}).get("hits", [])
+    except Exception as e:
+        log.warning("보안 조회 실패: %s", e)
+        return {"alerts": [], "status": collector.SOURCE_UNAVAILABLE,
+                "note": "조회하지 못했다. 이 결과를 '없음'으로 읽지 마라"}
+    return {"alerts": [masking._security_item(h.get("_source") or {}, masker.mask)
+                       for h in hits],
+            "status": collector.SOURCE_OK}
+
+
+async def fetch_judgments(host: str, days: int, masker: masking.Masker,
+                          now: float = None) -> dict:
+    from . import collector, store
+
+    if not store.status()["open"]:
+        return {"judgments": [], "status": collector.SOURCE_UNAVAILABLE,
+                "note": "판정 이력 저장소를 열지 못했다"}
+    now = time.time() if now is None else now
+    rows = store.judgments_in_realms(allowed_realms(), since=now - days * 86400,
+                                     now=now, host=host)
+    out = []
+    for r in rows:
+        out.append({"ts": int(r.get("ts") or 0),
+                    "host": masker.mask(r.get("host") or ""),
+                    "classes": r.get("classes") or "",
+                    "sev": r.get("sev") or "",
+                    "verdict": r.get("verdict") or ""})
+    return {"judgments": out, "status": collector.SOURCE_OK}
+
+
+# ---------------------------------------------------------------------------
+# 도구 루프
+#
+# 상한이 셋이다 — 라운드 수, 전체 시간, 도구 결과 누적 글자 수. 어디에 닿든 **오류가
+# 아니라 거기까지 본 것으로 답하게** 한다. 사람이 앞에서 기다리는 경로라 빈손으로
+# 끝내는 것이 가장 나쁘다.
+# ---------------------------------------------------------------------------
+
+MAX_ROUNDS = int(os.environ.get("ASK_MAX_ROUNDS", "6"))
+DEADLINE_S = float(os.environ.get("ASK_DEADLINE_S", "60"))
+RESULT_BYTES = int(os.environ.get("ASK_RESULT_BYTES", "60000"))
+
+ASK_SYSTEM = """\
+당신은 KINX IDC 관제 담당자의 질문에 답하는 조회 도우미다. 도구로 지표·로그·보안
+기록을 읽고 한국어로 답한다.
+
+규칙:
+- 호스트는 [host-...] 같은 가명 토큰으로만 지칭한다. 실명을 지어내지 마라.
+- 대상 토큰을 모르면 list_hosts 를 먼저 부른다.
+- **도구 결과의 status 를 반드시 읽어라.** "ok" 일 때만 빈 결과를 "없었다"로 해석한다.
+  "unavailable" 은 조회가 실패한 것이고 "disabled" 는 그 축이 없는 것이다. 둘 다
+  "없었다"가 아니므로 그렇게 밝혀라.
+- 도구가 error 를 돌려주면 그 지시를 읽고 고쳐서 다시 부른다.
+- 근거로 쓴 조회를 답에 밝힌다. 확인하지 못한 것은 확인하지 못했다고 쓴다.
+- 되돌릴 수 없는 명령(RESET SLAVE·DROP·rm -rf·kill -9 등)을 권하지 마라.
+- 답은 공백 포함 1200자 이내로 쓴다."""
+
+
+def _blocks_text(content) -> str:
+    return "\n".join(b.get("text", "") for b in (content or [])
+                     if isinstance(b, dict) and b.get("type") == "text").strip()
+
+
+async def run_ask(question: str, history=None, sid: str = "", table: dict = None,
+                  model_fn=None, clock=None, now: int = None) -> dict:
+    """질문 하나에 답한다. 어떤 실패도 예외로 던지지 않는다.
+
+    반환 `{"text", "trace", "rounds", "stopped", "error"}`.
+    """
+    import asyncio
+    import json as _json
+
+    from . import asktools, egress, llm
+
+    tick = clock or time.monotonic
+    started = tick()
+    now = int(time.time()) if now is None else now
+    mk = session_masker(sid or "-")
+
+    clean = sanitize_question(question, mk)
+    if not clean["ok"]:
+        return {"text": "", "trace": [], "rounds": 0, "stopped": "rejected",
+                "error": clean["reason"]}
+
+    if table is None:
+        table = await build_table(mk)
+    if not table:
+        return {"text": "", "trace": [], "rounds": 0, "stopped": "no_targets",
+                "error": "조회할 수 있는 대상이 없다. 감시 서버 연결과 허용 영역을 확인하라"}
+
+    ctx = {
+        "table": table, "now": now,
+        "fetch_logs": lambda q, w, lim: fetch_logs(q, w, lim, now, mk),
+        "fetch_security": lambda body: fetch_security(body, mk),
+        "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
+    }
+
+    messages = list(history or []) + [{"role": "user", "content": clean["text"]}]
+    trace, spent, stopped = [], 0, "end_turn"
+    text = ""
+
+    def _model(msgs):
+        if model_fn is not None:
+            return model_fn(ASK_SYSTEM, msgs, asktools.TOOL_SPECS)
+        return llm.claude_tools(ASK_SYSTEM, msgs, asktools.TOOL_SPECS)
+
+    for _round in range(MAX_ROUNDS):
+        if tick() - started > DEADLINE_S:
+            stopped = "deadline"
+            break
+        res = await asyncio.to_thread(egress.call_raw, lambda: _model(messages),
+                                      kind="ask")
+        if not res["ok"]:
+            return {"text": "", "trace": trace, "rounds": len(trace),
+                    "stopped": "llm_failed",
+                    "error": "모델을 부르지 못했다: %s" % res["reason"]}
+        reply = res["value"]
+        text = _blocks_text(reply.get("content")) or text
+        uses = [b for b in (reply.get("content") or [])
+                if isinstance(b, dict) and b.get("type") == "tool_use"]
+        if not uses:
+            break
+        messages = messages + [{"role": "assistant", "content": reply["content"]}]
+        results = []
+        for u in uses:
+            # 모델이 준 인자는 토큰 상태 그대로 쓴다. 도구가 표에서 실명을 찾는다.
+            out = await asktools.run_tool(u.get("name", ""), u.get("input") or {}, ctx)
+            blob = _json.dumps(out, ensure_ascii=False)
+            spent += len(blob)
+            if spent > RESULT_BYTES:
+                out = {"error": "조회 결과가 예산을 넘어 더 못 본다. 지금까지 본 것으로 답하라"}
+                blob = _json.dumps(out, ensure_ascii=False)
+                stopped = "budget"
+            trace.append({"tool": u.get("name", ""), "args": u.get("input") or {},
+                          "error": out.get("error", ""), "bytes": len(blob)})
+            results.append({"type": "tool_result", "tool_use_id": u.get("id"),
+                            "content": blob})
+        messages = messages + [{"role": "user", "content": results}]
+        if stopped == "budget":
+            break
+    else:
+        stopped = "rounds"
+
+    if stopped in ("rounds", "deadline", "budget") and not text:
+        text = ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
+                % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
+    return {"text": mk.unmask(text), "trace": trace, "rounds": len(trace),
+            "stopped": stopped, "error": ""}

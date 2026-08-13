@@ -204,3 +204,26 @@ def call(adapters, system: str, user: str, exempt: bool = False,
         return _out("", "none", True, b.reason)
     # 어댑터가 하나도 안 붙었거나 전부 실패. 붙을 어댑터가 없었으면 아무것도 안 셌다.
     return _out("", "none", True, BLOCKED_NONE)
+
+
+def call_raw(fn, exempt: bool = False, kind: str = "") -> dict:
+    """형태가 다른 호출(도구 사용 등)도 같은 출구를 지나게 한다.
+
+    반환 `{"ok", "value", "reason", "elapsed_s"}`. `call()` 과 마찬가지로 예외를
+    던지지 않는다 — 부르는 쪽 흐름이 끊기면 사람이 답 대신 오류를 본다.
+    """
+    t0 = time.monotonic()
+
+    def _out(ok, value=None, reason=""):
+        return {"ok": ok, "value": value, "reason": reason,
+                "elapsed_s": round(time.monotonic() - t0, 2)}
+
+    try:
+        with guard(kind, exempt) as record:
+            record()
+            return _out(True, fn())
+    except Blocked as b:
+        return _out(False, reason=b.reason)
+    except Exception as e:
+        log.warning("call_raw 실패 (%s): %s", kind or "?", e)
+        return _out(False, reason="%s: %s" % (type(e).__name__, e))

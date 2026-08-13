@@ -281,7 +281,7 @@ def main():
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
                     + _ask_tool_checks() + _ask_dispatch_checks()
-                    + _ask_table_checks())
+                    + _ask_table_checks() + _ask_loop_checks())
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
@@ -3304,6 +3304,85 @@ def _ask_table_checks() -> int:
             os.environ["ASK_ALLOWED_REALMS"] = saved_env
 
 
+def _ask_loop_checks() -> int:
+    """모델이 도구를 고르는 루프가 상한 안에서 도는가."""
+    import asyncio
+
+    from . import ask, nametable
+
+    saved = dict(nametable._terms)
+    try:
+        nametable._terms = {"web-01": "host"}
+        table = {ask.proxy.token_for("host", "web-01"):
+                 {"host": "web-01", "source": "zabbix-internal",
+                  "logs": "web-01.example", "security": "web-01.example"}}
+
+        def _tool_use(name, args):
+            return {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "t1", "name": name, "input": args}]}
+
+        def _text(t):
+            return {"stop_reason": "end_turn", "content": [{"type": "text", "text": t}]}
+
+        # ① 도구를 한 번 부르고 답한다. 추적에 무엇을 불렀는지 남는다.
+        calls = []
+
+        def model(system, messages, tools):
+            calls.append(len(messages))
+            return _tool_use("list_hosts", {}) if len(calls) == 1 else _text("web-01 이 원인이다")
+
+        r = asyncio.run(ask.run_ask("무슨 호스트가 있나", table=table, model_fn=model))
+        assert r["text"] == "web-01 이 원인이다", r
+        assert [t["tool"] for t in r["trace"]] == ["list_hosts"], r["trace"]
+
+        # ② **라운드 상한.** 모델이 계속 도구만 불러도 멈추고, 멈춘 이유를 남긴다.
+        def loop_forever(system, messages, tools):
+            return _tool_use("list_hosts", {})
+
+        r = asyncio.run(ask.run_ask("무한", table=table, model_fn=loop_forever))
+        assert len(r["trace"]) <= ask.MAX_ROUNDS, len(r["trace"])
+        assert r["stopped"] == "rounds", r
+        assert r["text"], "상한에 닿아도 사람에게 할 말은 있어야 한다"
+
+        # ③ **시간 상한.** 시계를 주입해 결정적으로 검증한다.
+        clock = [1000.0]
+
+        def slow(system, messages, tools):
+            clock[0] += ask.DEADLINE_S
+            return _tool_use("list_hosts", {})
+
+        r = asyncio.run(ask.run_ask("느림", table=table, model_fn=slow,
+                                    clock=lambda: clock[0]))
+        assert r["stopped"] == "deadline", r
+
+        # ④ 모델이 표에 없는 대상을 부르면 거부가 **도구 결과로** 돌아가 스스로 고친다
+        seq = [_tool_use("host_logs", {"host": "[host-000000000000]"}),
+               _text("대상을 다시 확인하겠다")]
+
+        def bad_then_fix(system, messages, tools):
+            return seq.pop(0)
+
+        r = asyncio.run(ask.run_ask("엉뚱", table=table, model_fn=bad_then_fix))
+        assert r["text"] and r["trace"][0]["error"], r["trace"]
+
+        # ⑤ 질문이 위생 검사를 통과 못 하면 모델을 부르지 않는다
+        called = []
+        r = asyncio.run(ask.run_ask("xweb-01y 가 이상함", table=table,
+                                    model_fn=lambda *a: called.append(1) or _text("x")))
+        assert r.get("error") and not called, r
+
+        # ⑥ 모델이 죽어도 예외를 위로 던지지 않는다
+        def dead(system, messages, tools):
+            raise RuntimeError("model down")
+
+        r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
+        assert r.get("error") and "모델" in r["error"], r
+        return 14
+    finally:
+        nametable._terms = saved
+        ask.forget_all()
+
+
 def _proxy_mask_checks() -> int:
     """수신 지점의 왕복 변환 — 중첩 JSON 마스킹과 도구 인자 역치환 (§23)."""
     import json
@@ -3954,6 +4033,9 @@ def _llm_concurrency_checks() -> int:
     egress._sem = threading.BoundedSemaphore(2)
     egress._stats.update({"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0})
     try:
+        # **절대값이 아니라 증가분으로 본다.** 앞선 검사가 같은 계수기를 쓰면 절대값
+        # 비교는 검사 순서에 따라 깨진다(2026-08-13 질의 루프 검사 추가 시 발생).
+        base_calls = egress.calls_last_hour()
         out = []
         ts = [threading.Thread(target=lambda: out.append(llm.triage_reply(ctx, "SEV3")))
               for _ in range(8)]
@@ -3971,7 +4053,7 @@ def _llm_concurrency_checks() -> int:
 
         # 앞선 8건은 실제로 나갔으므로 예산을 쓴 것이 맞다. 아래에서 "안 나간 호출"만
         # 따로 보려면 창을 비우고 시작해야 한다.
-        assert egress.calls_last_hour() == 8, egress.calls_last_hour()
+        assert egress.calls_last_hour() - base_calls == 8, egress.calls_last_hour()
         egress._calls.clear()
         egress._by_kind.clear()
 
