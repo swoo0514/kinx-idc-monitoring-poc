@@ -1,8 +1,9 @@
 # Loki 단일 바이너리 설정 (랩용).
 # 기준: 공식 loki-local-config.yaml (v3.4.0)
 #   https://raw.githubusercontent.com/grafana/loki/v3.4.0/cmd/loki/loki-local-config.yaml
-# 랩 조정 2곳만 공식과 다름: (1) path_prefix 를 /loki 로(도커 볼륨 영속),
-#   (2) reject_old_samples: false(과거 시각 로그 주입 허용 — 장애 재현 시 유용). 근거는 BUILD_GUIDE.
+# 랩 조정 3곳만 공식과 다름: (1) path_prefix 를 /loki 로(도커 볼륨 영속),
+#   (2) reject_old_samples: false(과거 시각 로그 주입 허용 — 장애 재현 시 유용),
+#   (3) pattern_ingester 활성화. 근거는 BUILD_GUIDE.
 
 auth_enabled: false
 
@@ -55,5 +56,16 @@ limits_config:
   # 디스크에는 부담이 없다. 실환경은 호스트 수가 달라 도입 전 재산정이 필요하다.
   retention_period: 744h
 
+# 로그 패턴 추출. Loki 가 drain 알고리즘으로 같은 모양의 줄을 묶고 시간대별 개수를
+# 센다. 기본이 꺼져 있어 /loki/api/v1/patterns 가 404 다.
+#
+# 왜 켜나: 봇이 로그를 40줄까지만 싣는데, 수다스러운 호스트에서는 그 40줄이 전부
+# 평상시 로그이고 원인 몇 줄은 잘려 나간다. 패턴과 개수를 쓰면 창 안의 모든 패턴이
+# 남고 반복만 접히므로, 개수가 적은 줄(대개 원인)이 사라지지 않는다.
+#
+# 별도 도구(Drain3)를 붙이지 않는 이유는 여기에 같은 알고리즘이 이미 있기 때문이다.
 ruler:
   alertmanager_url: http://localhost:9093
+
+pattern_ingester:
+  enabled: true
