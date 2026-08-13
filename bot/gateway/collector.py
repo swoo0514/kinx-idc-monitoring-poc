@@ -551,6 +551,8 @@ _KEPT_RE = re.compile(r"\x00(\d+)\x00")
 _BARE_CODE_RE = re.compile(
     r"\b(error|errno|code|status|sqlstate)\s+(\d+)", re.IGNORECASE)
 SAME_SHAPE_MAX = 3          # 같은 형태를 몇 줄까지 실을지
+# 선별을 끄는 스위치. 끄면 예전 동작(최신 N줄)으로 돌아간다.
+SELECT_ENABLED = os.environ.get("LOG_SELECT_ENABLED", "1") != "0"
 # 몫. 임의값이며 실측으로 조정한다. 남는 몫은 뒤로 넘긴다.
 SELECT_QUOTA = (("error", 14), ("novel", 8), ("pre", 12), ("recent", 6))
 
@@ -606,6 +608,10 @@ def select_logs(records: list, limit: int = None) -> list:
     """
     limit = LOKI_SEND_LIMIT if limit is None else limit
     recs = sorted(records, key=lambda r: r["t"])
+    if not SELECT_ENABLED:
+        # 되돌리기용. 선별을 끄면 예전 동작(최신 N줄)으로 돌아간다. 커밋을 되돌리지
+        # 않고도 원래 상태를 확인할 수 있어야 한다.
+        return [dict(r, why="recent", n=1) for r in recs[-limit:]]
     # **자리 번호로 고른다.** 값(시각+본문)으로 같은지 보면, 같은 줄이 같은 초에 여러 번
     # 기록됐을 때 되찾는 과정에서 같은 항목이 여러 번 붙어 상한이 무너진다. 실제로 같은
     # 줄 300개를 넣었더니 300줄이 그대로 나갔다(2026-08-13 감사). 나노초를 초로 바꾸면서

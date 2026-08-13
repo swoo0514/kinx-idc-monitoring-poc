@@ -282,7 +282,7 @@ def main():
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
-                    + _evidence_checks()
+                    + _evidence_checks() + _select_invariant_checks()
                     + _quality_checks() + _prior_checks()
                     + _dashboard_annotation_checks())
     collect_fail_checks = (_collect_failure_checks() + _truncation_checks()
@@ -2744,6 +2744,52 @@ def _log_select_checks() -> int:
     # 프롬프트가 이 필드를 설명해야 한다. 안 하면 모델이 n 을 무시한다.
     assert "`n`" in llm.TRIAGE_SYSTEM and "`why`" in llm.TRIAGE_SYSTEM
     return 26
+
+
+def _select_invariant_checks() -> int:
+    """무작위·극단 입력으로 불변 조건을 흔든다.
+
+    2026-08-13 에 상한 40줄짜리 선별기가 300줄을 내보내고 있었는데 검사는 통과했다.
+    사람이 상상한 입력만 넣었기 때문이다. 같은 줄이 같은 초에 겹치는 경우가 없었다.
+    아래는 그 형태를 포함해 무작위로 흔든다.
+    """
+    import random
+
+    from . import collector as c
+
+    rnd = random.Random(20260813)
+    shapes = ["INFO request completed status=200 dur=%dms path=/v1/pay/%d",
+              "ERROR connection reset by peer upstream=db-pool-%d retry=%d",
+              "WARN pool wait %dms queue=%d",
+              "kernel: Out of memory: Killed process %d (app%d)",
+              "2026/08/13 01:58:%02d.6661 [Mysql] Cannot fetch data: Error %d"]
+    n = 0
+    for _ in range(300):
+        size = rnd.choice([0, 1, 39, 40, 41, 120, 300, 900])
+        recs = []
+        for i in range(size):
+            # 시각이 겹치는 경우를 일부러 만든다 — 나노초를 초로 바꾸면 실제로 겹친다
+            t = float(rnd.choice([1000, 1000, 1001, 1002 + i // 7]))
+            recs.append({"t": t, "line": rnd.choice(shapes)
+                         % (rnd.randint(0, 3), rnd.randint(0, 3))})
+        out = c.select_logs(recs)
+        body = [r for r in out if "line" in r]
+        gaps = [r for r in out if "gap" in r]
+
+        assert len(body) <= c.LOKI_SEND_LIMIT, (size, len(body))
+        assert sum(g["gap"] for g in gaps) + len(body) == len(recs), (size, len(body))
+        assert all(r.get("why") for r in body), body[:1]
+        assert all(g["gap"] > 0 and g["to"] >= g["t"] for g in gaps), gaps[:1]
+        assert [r["t"] for r in out] == sorted(r["t"] for r in out), "시각순이 아니다"
+        # 같은 형태가 상한을 넘지 않는다. 단 창이 작아 전부 실린 경우는 접지 않는다.
+        if len(recs) > c.LOKI_SEND_LIMIT:
+            per = {}
+            for r in body:
+                s = c.log_shape(r["line"])
+                per[s] = per.get(s, 0) + 1
+            assert max(per.values(), default=0) <= c.SAME_SHAPE_MAX, per
+        n += 0
+    return 6
 
 
 def _evidence_checks() -> int:
