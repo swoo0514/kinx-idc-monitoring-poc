@@ -61,6 +61,10 @@ metrics(Zabbix), logs(Loki), security(Wazuh 경보). 이들을 시간축에서 �
   "ok" 가 아니면 **선행 문제 유무를 판단하지 말고 "확인 불가"로 명시하라.**
   `stale: true` 인 항목은 오래 방치된 문제다. **선행 원인으로 쓰지 말고** 별건으로 짧게
   언급하라(예: "디스크 문제가 N일째 미해소 상태 — 이번 사건과 별개로 정리 필요").
+- **되돌릴 수 없는 명령을 권고하지 마라.** `RESET SLAVE`·`RESET MASTER`·`DROP DATABASE`·
+  `TRUNCATE TABLE`·`rm -rf`·`kill -9`·`mkfs` 는 상태나 데이터를 지운다. 복제가 늦은 것과
+  복제가 깨진 것은 다르며, 늦은 복제는 원인을 없애면 따라잡는다. 되살리는 조치는 원인을
+  확인하고 사람이 판단할 일이므로, 확인 명령과 "무엇을 보고 판단할지"까지만 쓴다.
 - 컨텍스트에 없는 사실을 지어내지 않는다. 모르면 "컨텍스트 부족"이라고 쓴다.
 - 호스트명·IP·그룹명은 [host-1]·[ip-1] 형태의 가명 토큰이다. 그대로 사용하라(복원 금지 —
   시스템이 회신을 역치환한다).
@@ -174,6 +178,47 @@ PRIOR_INSTRUCTION = (
     "회신 마지막 줄에 반드시 이 형식 한 줄을 붙인다:\n"
     "변화: 동일 | 달라짐 — 무엇이 같고 무엇이 달라졌는지 한 문장\n\n")
 
+# 회신에 섞이면 안 되는 복구 명령. 되돌릴 수 없거나 상태를 지우는 것만 넣는다.
+# 재기동처럼 흔하고 가역인 조치는 넣지 않는다 — 다 위험하다고 하면 표시가 무의미해진다.
+#
+# 2026-08-13: 모델을 haiku 로 내린 뒤 복제 지연 회신에 `RESET SLAVE; START SLAVE;` 가
+# 권장 조치로 들어왔다. 같은 시나리오에서 opus 는 "복제 리셋 금지"를 명시했었다. 즉 이
+# 안전 제약이 모델 품질에 얹혀 있었다. 판정과 안전은 코드가 진다.
+_DESTRUCTIVE = (
+    (re.compile(r"\bRESET\s+(SLAVE|REPLICA|MASTER)\b", re.IGNORECASE),
+     "복제 위치·설정이 지워진다"),
+    (re.compile(r"\bDROP\s+(DATABASE|TABLE)\b", re.IGNORECASE), "데이터가 지워진다"),
+    (re.compile(r"\brm\s+-[a-z]*[rf][a-z]*\s+/", re.IGNORECASE), "파일이 지워진다"),
+    (re.compile(r"\bkill\s+-9\b", re.IGNORECASE), "정리 없이 죽어 손상이 남을 수 있다"),
+    (re.compile(r"\bmkfs|\bfdisk\b", re.IGNORECASE), "저장 장치를 다시 만든다"),
+    (re.compile(r"\bTRUNCATE\s+TABLE\b", re.IGNORECASE), "표의 내용이 지워진다"),
+)
+# 금지를 설명하는 문장까지 잡으면 안 된다. "복제 리셋은 하지 마십시오" 는 경고다.
+_NEGATED = re.compile(r"(하지\s*마|금지|말\s*것|안\s*된다|권장하지)")
+
+DESTRUCTIVE_NOTE = ("\n\n⚠️ **위 조치 중 되돌릴 수 없는 명령이 있다** — %s."
+                    " 실행 전에 사람이 확인한다.")
+
+
+def destructive_ops(text: str) -> list:
+    """회신에서 되돌릴 수 없는 명령을 찾는다. 금지를 설명하는 문장은 빼고 본다."""
+    found = []
+    for line in (text or "").splitlines():
+        if _NEGATED.search(line):
+            continue
+        for rx, why in _DESTRUCTIVE:
+            m = rx.search(line)
+            if m and why not in found:
+                found.append(why)
+    return found
+
+
+def mark_destructive(text: str) -> str:
+    """찾았으면 회신 끝에 표시를 붙인다. 문장을 지우지는 않는다 — 판단은 사람이 한다."""
+    found = destructive_ops(text)
+    return text + DESTRUCTIVE_NOTE % ", ".join(found) if found else text
+
+
 CHANGE_RE = re.compile(r"^\s*변화\s*:\s*(.+)$", re.MULTILINE)
 
 
@@ -275,6 +320,11 @@ def triage_reply(context: dict, sev: str) -> dict:
                       exempt=(sev == "SEV1"), kind="triage")
     if not res["degraded"]:
         text = masker.unmask(res["text"])
+        # 프롬프트로 막았어도 모델이 쓸 수 있다. 실제로 그랬다(2026-08-13).
+        found = destructive_ops(text)
+        if found:
+            log.warning("회신에 되돌릴 수 없는 명령이 있어 표시를 붙인다: %s", ", ".join(found))
+        text = mark_destructive(text)
         return {**res, "text": text, "change": extract_change(text)}
 
     note = f" — {_reason_text(res['reason'])}" if res["reason"] != egress.BLOCKED_NONE else ""

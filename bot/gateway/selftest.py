@@ -286,7 +286,7 @@ def main():
                     + _quality_checks() + _prior_checks()
                     + _dashboard_annotation_checks())
     collect_fail_checks = (_collect_failure_checks() + _truncation_checks()
-                           + _log_select_checks())
+                           + _log_select_checks() + _destructive_advice_checks())
     wrong_srv_checks = _wrong_server_checks()
     evt_time_checks = _event_time_checks()
     open_limit_checks = _open_limit_checks()
@@ -2489,6 +2489,39 @@ def _contract_checks() -> int:
     assert llm.NOTIFY_ONLY_RULE not in llm.build_user_prompt(ok)
     assert "custa-db01" not in json.dumps(out, ensure_ascii=False)
     return 13
+
+
+def _destructive_advice_checks() -> int:
+    """회신에 파괴적 복구 명령이 섞이면 사람에게 표시가 붙는가.
+
+    2026-08-13 랩에서 haiku 로 내린 뒤 복제 지연 사건 회신에 `RESET SLAVE; START SLAVE;`
+    가 권장 조치로 들어왔다. `RESET SLAVE` 는 복제 설정과 위치를 지운다. 같은 시나리오
+    에서 opus 는 "복제 리셋 금지"를 명시했었다. 즉 이 안전 제약이 모델 품질에 얹혀
+    있었다는 뜻이다. 판정과 안전은 코드가 진다는 원칙에 맞게 코드로 내린다.
+    """
+    from . import llm
+
+    danger = ("복제를 되살리려면 `RESET SLAVE; START SLAVE;` 를 실행하십시오.",
+              "RESET MASTER 후 재구성",
+              "kill -9 로 mysqld 를 종료",
+              "rm -rf /var/lib/mysql/relay-log.info")
+    for text in danger:
+        found = llm.destructive_ops(text)
+        assert found, "파괴적 명령을 못 잡았다: %r" % text
+        marked = llm.mark_destructive(text)
+        assert marked != text and "확인" in marked, marked
+
+    safe = ("SHOW SLAVE STATUS 로 상태를 확인하십시오.",
+            "복제 리셋은 하지 마십시오 — 위치가 사라집니다.",
+            "systemctl restart mariadb 로 재기동을 검토하십시오.")
+    for text in safe:
+        assert not llm.destructive_ops(text), "정상 문장을 잡았다: %r" % text
+        assert llm.mark_destructive(text) == text, text
+
+    # 프롬프트에도 금지가 적혀 있어야 한다. 코드 표시는 사후이고, 애초에 안 쓰게
+    # 만드는 것이 먼저다.
+    assert "RESET SLAVE" in llm.TRIAGE_SYSTEM, "프롬프트에 금지 항목이 없다"
+    return 15
 
 
 def _truncation_checks() -> int:
