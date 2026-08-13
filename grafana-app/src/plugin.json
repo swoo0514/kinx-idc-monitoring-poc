@@ -60,5 +60,16 @@
   "dependencies": {
     "grafanaDependency": ">=11.6.0",
     "plugins": []
+  },
+  "extensions": {
+    "addedLinks": [
+      {
+        "targets": [
+          "grafana/dashboard/panel/menu/v1"
+        ],
+        "title": "봇에게 묻기",
+        "description": "이 패널을 보고 관제 질의 창구를 연다"
+      }
+    ]
   }
 }
