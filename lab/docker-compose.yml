@@ -122,7 +122,8 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning
       # **하위 경로만 건다.** plugins 를 통째로 마운트하면 GF_INSTALL_PLUGINS 로 깔린
       # Zabbix·OpenSearch 플러그인이 가려진다.
-      - ./grafana/plugins/kinxidc-ask-app:/var/lib/grafana/plugins/kinxidc-ask-app:ro
+      # 앱은 빌드 산출물을 얹는다(grafana-app/ 에서 npm run build).
+      - ../grafana-app/dist:/var/lib/grafana/plugins/kinxidc-ask-app:ro
       - ./grafana/plugins/kinxidc-ask-datasource:/var/lib/grafana/plugins/kinxidc-ask-datasource:ro
     # 게이트웨이는 컨테이너가 아니라 호스트의 8800 에서 돈다(systemd kinx-gateway).
     extra_hosts:
