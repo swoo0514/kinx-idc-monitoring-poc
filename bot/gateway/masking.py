@@ -213,8 +213,10 @@ def build_llm_context(context: dict, sev: str, masker: Masker) -> dict:
             "statement": (context.get("prejudge") or {}).get("statement"),
         },
         "sources": _sources(context),
-        # 로그를 어디까지 읽었는가. 상태(ok)만으로는 전량과 일부가 구분되지 않는다.
-        "logs_truncated": bool(context.get("logs_truncated")),
+        # 로그를 어디까지 읽었고 그중 얼마를 보냈는가. 상태(ok)만으로는 구분되지 않는다.
+        "logs_fetched": int(context.get("logs_fetched") or 0),
+        "logs_selected": int(context.get("logs_selected") or 0),
+        "logs_fetch_capped": bool(context.get("logs_fetch_capped")),
         "logs_clipped": int(context.get("logs_clipped") or 0),
         "prior": [_prior_item(p, m) for p in (context.get("prior") or [])],
     }
@@ -268,8 +270,10 @@ def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
         "open_problems": [_open_problem_item(p, m)
                           for p in (context.get("open_problems") or [])],
         "sources": _sources(context),
-        # 로그를 어디까지 읽었는가. 상태(ok)만으로는 전량과 일부가 구분되지 않는다.
-        "logs_truncated": bool(context.get("logs_truncated")),
+        # 로그를 어디까지 읽었고 그중 얼마를 보냈는가. 상태(ok)만으로는 구분되지 않는다.
+        "logs_fetched": int(context.get("logs_fetched") or 0),
+        "logs_selected": int(context.get("logs_selected") or 0),
+        "logs_fetch_capped": bool(context.get("logs_fetch_capped")),
         "logs_clipped": int(context.get("logs_clipped") or 0),
         "prior": [_prior_item(p, m) for p in (context.get("prior") or [])],
     }

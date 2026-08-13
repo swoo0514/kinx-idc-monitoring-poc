@@ -2479,8 +2479,9 @@ def _truncation_checks() -> int:
     saved_url = os.environ.get("LOKI_URL")
     os.environ["LOKI_URL"] = "http://loki.invalid"
     try:
-        # ① 상한에 딱 찼으면 잘린 것으로 본다
-        collector.httpx = _Fake(["line %d" % i for i in range(collector.LOKI_LIMIT)])
+        # ① 조회 상한에 딱 찼으면 창에 더 있었다고 본다
+        collector.httpx = _Fake(["line %d" % i
+                                 for i in range(collector.LOKI_FETCH_LIMIT)])
         lines, status, trunc, clipped = asyncio.run(
             collector._loki_logs("h1", 1700000000))
         assert status == collector.SOURCE_OK and trunc is True, (status, trunc)
@@ -2500,16 +2501,17 @@ def _truncation_checks() -> int:
         # ④ 전송 형태에 실린다. 수치라 마스킹 대상이 아니다.
         ctx = {"incident": {"host": "h1", "classes": ["disk_space"], "alert_count": 1},
                "host": {}, "alerts": [], "logs": ["a"], "security": [],
-               "sources": {"logs": "ok"}, "logs_truncated": True, "logs_clipped": 2}
+               "sources": {"logs": "ok"}, "logs_fetch_capped": True,
+               "logs_clipped": 2}
         out = masking.build_llm_context(ctx, "SEV2", masking.Masker())
-        assert out["logs_truncated"] is True and out["logs_clipped"] == 2, out
+        assert out["logs_fetch_capped"] is True and out["logs_clipped"] == 2, out
 
         # ⑤ 잘렸을 때만 규칙이 붙는다. 안 잘렸는데 의심하게 만들면 그것도 오도다.
         assert llm.TRUNCATION_RULE in llm.build_user_prompt(out)
         whole = masking.build_llm_context(
-            dict(ctx, logs_truncated=False, logs_clipped=0), "SEV2", masking.Masker())
+            dict(ctx, logs_fetch_capped=False, logs_clipped=0), "SEV2", masking.Masker())
         assert llm.TRUNCATION_RULE not in llm.build_user_prompt(whole)
-        assert "logs_truncated" in json.dumps(out, ensure_ascii=False)
+        assert "logs_fetch_capped" in json.dumps(out, ensure_ascii=False)
 
         # ⑥ 시각을 살린다. 정렬·증거 범위·"첫 오류 직전"이 전부 이 값을 요구한다.
         collector.httpx = _Fake(["a", "b", "c"])
@@ -2544,7 +2546,39 @@ def _truncation_checks() -> int:
         recs, _s, _t, _c = asyncio.run(collector._loki_logs("h1", 1700000000))
         assert [r["line"] for r in recs] == ["이른 줄", "늦은 줄"], recs
         assert recs[0]["t"] < recs[1]["t"]
-        return 17
+
+        # ⑧ 조회 상한과 전송 상한이 다르다. 랩 실측상 평상시에도 15분에 120줄이라
+        #    40줄 상한이 매번 3분의 2를 버린다. 더 읽고 골라 보내야 한다.
+        assert collector.LOKI_FETCH_LIMIT > collector.LOKI_SEND_LIMIT
+
+        # ⑨ 표시를 쪼갠다. 한 불리언에 "창에 더 있었다"와 "조회가 상한에 닿았다"를
+        #    같이 실으면 오늘 고친 문제가 이름만 바꿔 재발한다.
+        collector.httpx = _Fake(["line %d" % i for i in range(120)])
+        recs, _s, capped, _c = asyncio.run(collector._loki_logs("h1", 1700000000))
+        assert len(recs) == 120 and capped is False, (len(recs), capped)
+
+        collector.httpx = _Fake(["x %d" % i for i in range(collector.LOKI_FETCH_LIMIT)])
+        recs, _s, capped, _c = asyncio.run(collector._loki_logs("h1", 1700000000))
+        assert capped is True, capped
+
+        # ⑩ 바이트 예산 — 줄 수만으로는 부족하다. 300자 절단은 클라이언트에서 하므로
+        #    와이어에는 전장이 온다. 긴 줄이면 300줄이 수 MB 가 되고 파싱이 루프를 막는다.
+        collector.httpx = _Fake(["y" * 20000 for _ in range(200)])
+        recs, _s, capped, _c = asyncio.run(collector._loki_logs("h1", 1700000000))
+        assert capped is True and len(recs) < 200, (len(recs), capped)
+
+        # ⑪ 전송 형태에 세 값이 실린다
+        ctx = {"incident": {"host": "h1", "classes": ["disk_space"], "alert_count": 1},
+               "host": {}, "alerts": [], "logs": [{"t": 1.0, "line": "a"}],
+               "security": [], "sources": {"logs": "ok"},
+               "logs_fetched": 263, "logs_selected": 40, "logs_fetch_capped": False}
+        out = masking.build_llm_context(ctx, "SEV2", masking.Masker())
+        assert out["logs_fetched"] == 263 and out["logs_selected"] == 40
+        assert out["logs_fetch_capped"] is False
+
+        # ⑫ 문구가 사실과 어긋나면 안 된다. 선별을 켜면 "가장 최근 것만"은 거짓이 된다.
+        assert "가장 최근 것만" not in llm.TRUNCATION_RULE
+        return 25
     finally:
         collector.httpx = saved_httpx
         if saved_url is None:

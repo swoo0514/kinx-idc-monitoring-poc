@@ -22,8 +22,15 @@ TIMEOUT_S = 5   # 콜당 — 수집이 30초 예산을 안 갉게
 
 # 인시던트 시간창 — 로그·보안은 이 창에서만 (병합 대상 신호 정렬용)
 CORR_WINDOW_S = 900   # 15분
-LOKI_LIMIT = 40
-LOKI_LINE_MAX = 300   # 라인당 최대 문자 (토큰 억제)
+# 조회 상한과 전송 상한을 나눈다. 랩 실측(2026-08-13): 평상시에도 15분에 120줄인
+# 호스트가 있어 40줄 상한이 매번 3분의 2를 버렸다. 더 읽고 골라 보낸다.
+# 300 은 랩 최대(120줄)의 2.5배다. 실환경은 호스트당 로그량이 미지라 도입 전 재측정한다.
+LOKI_FETCH_LIMIT = 300
+LOKI_SEND_LIMIT = 40
+# 줄 수만으로는 부족하다. 300자 절단은 응답을 받은 뒤 우리가 하므로 와이어에는 전장이
+# 온다. 4KB 줄이면 300줄이 1.2MB 이고 그 파싱이 이벤트 루프를 막는다.
+LOKI_FETCH_BYTES = 2 * 1024 * 1024
+LOKI_LINE_MAX = 300   # 라인당 최대 문자 (토큰 억제). 랩 실측 최대 233자로 현재는 안 걸린다
 WAZUH_LIMIT = 20
 # 과거 이벤트 목록 상한. 개수는 따로 세므로 이 값이 판정에 영향을 주지 않는다.
 PAST_EVENT_LIMIT = 200
@@ -175,7 +182,7 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
     # 축마다 이름이 다를 수 있다(Loki 라벨과 Wazuh 에이전트명이 갈리는 환경이 있다).
     loki_label = _resolve_label(zbx_host, base["host"], source, "logs")
     wz_label = _resolve_label(zbx_host, base["host"], source, "security")
-    (logs, logs_status, logs_trunc, logs_clip), (security, sec_status) = await asyncio.gather(
+    (logs, logs_status, logs_capped, logs_clip), (security, sec_status) = await asyncio.gather(
         _loki_logs(loki_label, now, zbx_host, source),
         _wazuh_alerts(wz_label, now, zbx_host, source),
     )
@@ -183,11 +190,15 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
         **base,
         "loki_label": loki_label,
         "wazuh_label": wz_label,
-        "logs": logs,            # Loki (Alloy) — 백업/앱 로그 등
+        "logs": select_logs(logs),   # Loki (Alloy) — 조회분 중 보낼 것만
         "security": security,    # Wazuh Indexer — 침해·변경 경보
         # 빈 목록의 의미를 확정하는 상태. ok 일 때만 "없음 = 사실"이다.
         "sources": {"logs": logs_status, "security": sec_status},
-        "logs_truncated": logs_trunc,
+        # 조회 상태와 별개다. 창에서 몇 줄을 읽었고 그중 몇 줄을 보냈는지,
+        # 조회 자체가 상한에 닿았는지를 각각 낸다.
+        "logs_fetched": len(logs),
+        "logs_selected": len(select_logs(logs)),
+        "logs_fetch_capped": logs_capped,
         "logs_clipped": logs_clip,
     }
 
@@ -262,7 +273,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
     ref = reference_time(incident, now, event_clocks)
     if ref != now:
         log.info("조회 기준을 사건 시각으로 맞춘다 host=%s (%d초 전)", zbx_host, now - ref)
-    ((logs, logs_status, logs_trunc, logs_clip), (security, sec_status),
+    ((logs, logs_status, logs_capped, logs_clip), (security, sec_status),
      (opens, opens_status)) = await asyncio.gather(
         _loki_logs(loki_label, ref, zbx_host, source),
         _wazuh_alerts(wz_label, ref, zbx_host, source),
@@ -317,7 +328,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         "loki_label": loki_label,
         "wazuh_label": wz_label,
         "alerts": alerts_ctx,
-        "logs": logs,
+        "logs": select_logs(logs),
         "security": security,
         # 이번 알림보다 먼저 열려 있던, 연계 관계에 있는 문제. 병합 대상이 아니라 참고 정보다.
         "open_problems": opens,
@@ -327,8 +338,11 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         # 사건이 전부 "봐줬는데 볼 게 없었다"로 남는다.
         "sources": {"logs": logs_status, "security": sec_status,
                     "open_problems": opens_status, "metrics": metrics_status},
-        # 조회 상태와 별개다. ok 이면서 잘렸을 수 있다.
-        "logs_truncated": logs_trunc,
+        # 조회 상태와 별개다. 창에서 몇 줄을 읽었고 그중 몇 줄을 보냈는지,
+        # 조회 자체가 상한에 닿았는지를 각각 낸다.
+        "logs_fetched": len(logs),
+        "logs_selected": len(select_logs(logs)),
+        "logs_fetch_capped": logs_capped,
         "logs_clipped": logs_clip,
     }
 
@@ -450,6 +464,17 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
     return out[:incident.OPEN_LINK_MAX], SOURCE_OK
 
 
+def select_logs(records: list, limit: int = None) -> list:
+    """조회한 것 중 보낼 것을 고른다.
+
+    지금은 최신 순이다. 등급·신규성으로 고르는 것은 다음 단계이며, 이 함수가 그 자리다.
+    고른 뒤에는 반드시 시각순으로 돌려준다 — 모델이 인접성에서 인과를 만들기 때문이다.
+    """
+    limit = LOKI_SEND_LIMIT if limit is None else limit
+    picked = sorted(records, key=lambda r: r["t"])[-limit:]
+    return picked
+
+
 def _loki_ts(ts) -> float:
     """Loki 는 나노초 문자열을 준다. 못 읽으면 0 — 지어내지 않는다."""
     try:
@@ -486,21 +511,27 @@ async def _loki_logs(host_label: str, now: int, zbx_host: str = "", source: str 
                 "query": '{%s="%s"}' % (LOKI_HOST_LABEL, host_label),
                 "start": str((now - CORR_WINDOW_S) * 1_000_000_000),
                 "end": str(now * 1_000_000_000),
-                "limit": LOKI_LIMIT, "direction": "backward"}, timeout=TIMEOUT_S)
+                "limit": LOKI_FETCH_LIMIT, "direction": "backward"}, timeout=TIMEOUT_S)
             r.raise_for_status()
-            out, clipped = [], 0
+            out, clipped, size = [], 0, 0
+            over_bytes = False
             for stream in r.json().get("data", {}).get("result", []):
                 for ts, line in stream.get("values", []):
+                    size += len(line)
+                    if size > LOKI_FETCH_BYTES:
+                        over_bytes = True
+                        break
                     if len(line) > LOKI_LINE_MAX:
                         clipped += 1
                     out.append({"t": _loki_ts(ts), "line": line[:LOKI_LINE_MAX]})
+                if over_bytes:
+                    break
             if out:
                 out.sort(key=lambda r: r["t"])
-                # 상한을 채웠으면 그 창에 더 있었다고 본다. 정확히 40줄이었을 수도 있으나
-                # 없는 것을 없다고 단언하는 쪽보다 더 있었다고 보는 쪽이 안전하다.
-                capped = len(out) >= LOKI_LIMIT
-                # 상한을 넘겼으면 최신 쪽을 남긴다(direction=backward 와 같은 방향).
-                return out[-LOKI_LIMIT:], SOURCE_OK, capped, clipped
+                # 상한을 채웠으면 그 창에 더 있었다고 본다. 정확히 상한만큼이었을 수도
+                # 있으나, 없는 것을 없다고 단언하는 쪽보다 더 있었다고 보는 쪽이 안전하다.
+                capped = over_bytes or len(out) >= LOKI_FETCH_LIMIT
+                return out, SOURCE_OK, capped, clipped
             return [], await _loki_name_status(client, url, host_label, now), False, 0
     except Exception as e:
         log.warning("loki query failed host=%s: %s", host_label, e)
