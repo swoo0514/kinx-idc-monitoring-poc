@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from . import collector
 from . import heartbeat
 from . import incident
 from . import keep
@@ -33,6 +34,7 @@ log = logging.getLogger("gateway")
 app = FastAPI(title="kinx-poc alert gateway", version="0.1.0")
 
 _grafana_state: dict = {}   # 기동 시 1회 확인. /healthz 가 참·거짓만 내보낸다.
+_zabbix_state: dict = {}    # 감시 서버별 조회 가능 여부. 토큰 만료를 미리 본다.
 
 # 규칙 로드는 import 시점이라 로깅 설정 전에 끝난다. 어느 규칙으로 도는지가 반드시
 # 드러나도록 기동 시 한 번 더 남긴다.
@@ -98,6 +100,15 @@ async def _start_heartbeat():
     elif not _grafana_state["ok"]:
         log.error("Grafana 에 닿지 못했다(%s) — 판정 주석이 안 올라간다",
                   _grafana_state["error"])
+    # 조회 토큰도 같은 이유로 기동 때 본다. 만료는 사건이 나기 전엔 안 보이고,
+    # JSON-RPC 는 오류도 HTTP 200 이라 접근 로그에도 성공만 찍힌다.
+    global _zabbix_state
+    for name in (registry.source_names() or [""]):
+        st = await collector.zabbix_probe(name)
+        _zabbix_state[name or "default"] = st["ok"]
+        if not st["ok"]:
+            log.error("Zabbix 조회 실패 source=%s (%s) — 이 서버의 사건은 지표 미상으로 "
+                      "기록된다", name or "기본", st["error"])
     _beat.start()
     # 이름 표는 조회가 몇 초 걸리므로 별도 스레드에서 만든다. 만들어지기 전에도
     # 캐시가 있으면 그걸로 돌고, 없으면 오늘까지의 동작(맥락 기반 등록)으로 돈다.
@@ -199,7 +210,8 @@ def healthz():
     # 값은 참·거짓만 싣는다. 인증이 없는 경로라 경로·주소·오류 문구를 내보내지 않는다.
     return {"ok": True, "version": app.version,
             "store": store.status()["open"],
-            "annotations": bool(_grafana_state.get("ok"))}
+            "annotations": bool(_grafana_state.get("ok")),
+            "zabbix": all(_zabbix_state.values()) if _zabbix_state else None}
 
 
 @app.post("/v1/messages")

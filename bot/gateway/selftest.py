@@ -1491,7 +1491,56 @@ def _collect_failure_checks() -> int:
     assert "지표" in note, f"카드에 Zabbix 축 실패가 안 보인다: {note!r}"
     # 전송 화이트리스트에도 있어야 LLM 이 그 상태를 읽는다
     assert "metrics" in masking._STATUS_KEYS, masking._STATUS_KEYS
-    return 6
+
+    # **사유가 로그에 남아야 한다.** 2026-08-13 랩에서 Zabbix 수집이 전건 실패했는데
+    # 원인이 어디에도 안 남았다. JSON-RPC 는 오류도 HTTP 200 으로 돌려주므로 접근
+    # 로그에는 `200 OK` 만 열 줄 찍혔고, 실제 사유는 `API token expired.` 였다.
+    # 예외는 gather(return_exceptions=True) 에 담긴 채 버려졌다.
+    import logging as _lg
+
+    class _Grab(_lg.Handler):
+        def __init__(self):
+            super().__init__()
+            self.msgs = []
+
+        def emit(self, rec):
+            self.msgs.append(rec.getMessage())
+
+    grab = _Grab()
+    collector.log.addHandler(grab)
+    try:
+        asyncio.run(collector.collect_incident_context(_DeadZbx(), inc))
+    finally:
+        collector.log.removeHandler(grab)
+    joined = " / ".join(grab.msgs)
+    assert "zabbix down" in joined, (
+        "수집 실패 사유가 로그에 안 남는다 — 토큰 만료·권한 부족을 구분할 방법이 "
+        "없다: %s" % joined)
+
+    # **사건이 나기 전에 알아야 한다.** 사후 경고만 있으면 토큰이 만료된 채로 며칠이
+    # 지나고, 그동안의 사건은 전부 "지표 미상"으로 기록된다. 기동 때 한 번 확인한다.
+    assert hasattr(collector, "zabbix_probe"), \
+        "조회 토큰 점검이 없다 — 만료를 사건이 날 때에야 안다"
+
+    class _Expired:
+        source = "zabbix-internal"
+
+        async def call(self, *a, **kw):
+            raise RuntimeError("zabbix api error on host.get: "
+                               "{'data': 'API token expired.'}")
+
+    st = asyncio.run(collector.zabbix_probe(client=_Expired()))
+    assert st["ok"] is False and "expired" in st["error"], st
+    st = asyncio.run(collector.zabbix_probe(client=_LiveZbx()))
+    assert st["ok"] is True and st["error"] == "", st
+    return 11
+
+
+class _LiveZbx:
+    source = "zabbix-internal"
+
+    async def call(self, *a, **kw):
+        return [{"hostid": "1"}]
 
 
 def _nametable_checks() -> int:

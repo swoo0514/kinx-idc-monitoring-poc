@@ -244,6 +244,26 @@ def reference_time(incident, now: int, extra_clocks=()) -> int:
     return int(min(known))
 
 
+async def zabbix_probe(source: str = "", client=None) -> dict:
+    """조회 토큰이 지금 유효한지 본다.
+
+    토큰 만료는 사건이 나기 전에는 아무 데도 안 나타난다. JSON-RPC 는 오류도 HTTP 200
+    으로 돌려주므로 웹 접근 로그에도 성공만 찍힌다. 실제로 2026-08-13 랩에서 만료된
+    토큰으로 며칠을 돌았고, 그 사이 사건은 전부 "지표 미상"으로 기록됐다. 그래서
+    기동 때 한 번 물어본다.
+    """
+    try:
+        zbx = client if client is not None else ZabbixClient(source=source)
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
+    try:
+        async with httpx.AsyncClient() as c:
+            await zbx.call(c, "host.get", {"limit": 1, "output": ["hostid"]})
+        return {"ok": True, "error": ""}
+    except Exception as e:                      # 어떤 실패든 기동을 막지는 않는다
+        return {"ok": False, "error": str(e)}
+
+
 async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
     """병합 인시던트 컨텍스트 — 알림별 Zabbix 조각 + 호스트 단위 로그·보안 1회.
 
@@ -308,8 +328,18 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
     elif any(isinstance(r, dict) for r in per):
         metrics_status = SOURCE_OK
     else:
-        log.warning("Zabbix 수집 전건 실패 host=%s alerts=%d — 미상으로 표시한다",
-                    zbx_host, len(zbx_alerts))
+        # **사유를 반드시 남긴다.** JSON-RPC 는 오류도 HTTP 200 으로 돌려주므로 접근
+        # 로그에는 성공만 찍힌다. 실제로 2026-08-13 랩에서 `API token expired.` 로
+        # 전건 실패했는데 원인이 어디에도 안 남아 있었다. 예외는 gather 가 담아 둔
+        # 채 버려진다.
+        reasons = []
+        for r in per:
+            if isinstance(r, BaseException):
+                t = "%s: %s" % (type(r).__name__, r)
+                if t not in reasons:
+                    reasons.append(t)
+        log.warning("Zabbix 수집 전건 실패 host=%s alerts=%d — 미상으로 표시한다. 사유: %s",
+                    zbx_host, len(zbx_alerts), " / ".join(reasons) or "사유 미상")
         metrics_status = SOURCE_UNAVAILABLE
 
     alerts_ctx = []
