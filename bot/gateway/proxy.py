@@ -25,20 +25,48 @@ PROTOCOL_KEYS = frozenset((
 TOKEN_RE = re.compile(r"\[(?:host|ip|group)-[0-9a-z]+\]")
 
 
+# 토큰의 해시 자릿수. 6자리(16진)는 약 1,678만 가지뿐이라 이름 3,708개에서 실제 충돌이
+# 나왔다(2026-08-13 탐색: host-1422.kinx.net 과 host-3707.kinx.net 이 둘 다 2f64e3).
+# 충돌하면 `_rev` 가 덮여 **역치환이 다른 호스트 이름을 돌려주고 사람은 그것을 사실로
+# 읽는다.** 12자리면 약 2.8×10^14 가지라 이름 1,000개에서 확률이 10억분의 2 아래다.
+TOKEN_HEX = int(os.environ.get("LLM_TOKEN_HEX", "12"))
+
+
 def token_for(kind: str, name: str) -> str:
     """이름에서 결정적으로 만든 토큰 (§23-4)."""
-    h = hashlib.sha256(name.encode("utf-8")).hexdigest()[:6]
+    h = hashlib.sha256(name.encode("utf-8")).hexdigest()[:TOKEN_HEX]
     return "[%s-%s]" % (kind, h)
 
 
+def token_collisions(terms) -> list:
+    """서로 다른 이름이 같은 토큰을 받는 쌍. 자릿수를 넓혀도 원리상 남는다.
+
+    조용히 덮이는 것이 이 결함의 나쁜 점이므로 발견 자체를 남긴다.
+    """
+    seen, hits = {}, []
+    for name, kind in terms:
+        tok = token_for(kind, name)
+        if tok in seen and seen[tok] != name:
+            hits.append((seen[tok], name, tok))
+        else:
+            seen[tok] = name
+    return hits
+
+
 def build_masker() -> masking.Masker:
-    mk = masking.Masker()
+    # IP 도 결정적으로 만든다. 기본 `register()` 는 등록 순서 일련번호라, 1턴에 IP 가
+    # 둘이면 [ip-1]·[ip-2] 인데 3턴에 두 번째만 나오면 그게 [ip-1] 이 된다.
+    # 여러 턴에 걸친 대화에서 같은 토큰이 다른 기계를 가리킨다.
+    mk = masking.Masker(token_fn=token_for)
     for name, kind in nametable.terms():
         if name not in mk._fwd:
             tok = token_for(kind, name)
             mk._fwd[name] = tok
             mk._rev[tok] = name
     mk._re = None
+    for a, b, tok in token_collisions(nametable.terms()):
+        log.error("가명 토큰 충돌 — %r 과 %r 이 둘 다 %s. 역치환이 한쪽을 다른 쪽 이름으로 "
+                  "돌려준다. LLM_TOKEN_HEX 를 넓혀야 한다", a, b, tok)
     return mk
 
 

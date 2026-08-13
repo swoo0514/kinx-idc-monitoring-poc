@@ -278,7 +278,7 @@ def main():
     holmes_eg_checks = _holmes_egress_checks()
     tenant_checks = _tenant_scope_checks() + _contract_checks()
     nametable_checks = _nametable_checks()
-    proxy_checks = _proxy_mask_checks()
+    proxy_checks = _proxy_mask_checks() + _ask_masking_checks()
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
@@ -2968,6 +2968,63 @@ def _evidence_checks() -> int:
         else:
             os.environ["GRAFANA_URL"] = saved_url
     return 11
+
+
+def _ask_masking_checks() -> int:
+    """여러 턴에 걸쳐도 같은 이름이 같은 토큰인가 (대화형 질의의 선결 조건).
+
+    토큰이 턴마다 달라지면 모델은 같은 기계를 다른 기계로 읽는다. 더 나쁜 경우는
+    **같은 토큰이 다른 기계를 가리키는 것**이다 — 그때 사람은 되돌아온 이름을 사실로
+    읽는다.
+    """
+    from . import masking, nametable, proxy
+
+    # ① 이름은 이미 결정적이다. 표를 새로 만들어도 같은 토큰이어야 한다.
+    saved = dict(nametable._terms)
+    try:
+        nametable._terms = {"db-prod-01": "host", "web-01": "host"}
+        a = proxy.build_masker()
+        nametable._terms = {"web-01": "host", "db-prod-01": "host", "새이름": "host"}
+        b = proxy.build_masker()
+        assert a._fwd["db-prod-01"] == b._fwd["db-prod-01"], "표가 바뀌자 토큰이 달라졌다"
+
+        # ② **해시 자릿수가 좁으면 충돌한다.** sha256[:6] 은 16진 6자리 = 약 1,678만
+        #    가지뿐이라 이름 3,708개에서 실제 충돌이 나왔다(2026-08-13 탐색).
+        #    충돌하면 `_rev` 가 덮여 역치환이 **다른 호스트 이름**을 돌려준다.
+        x, y = "host-1422.kinx.net", "host-3707.kinx.net"
+        assert proxy.token_for("host", x) != proxy.token_for("host", y), (
+            "6자리 시절 충돌 쌍이 여전히 같은 토큰이다 — 자릿수를 넓혀야 한다")
+
+        # ③ 그래도 충돌은 원리상 남으므로 **검출**해야 한다. 조용히 덮이면 안 된다.
+        assert hasattr(proxy, "token_collisions"), "충돌 검출 수단이 없다"
+        real = proxy.token_for
+        proxy.token_for = lambda kind, name: "[host-000000000000]"   # 전부 충돌시킨다
+        try:
+            nametable._terms = {"a-host": "host", "b-host": "host"}
+            hits = proxy.token_collisions(nametable.terms())
+            assert hits, "모든 이름이 같은 토큰인데 충돌을 못 잡았다"
+        finally:
+            proxy.token_for = real
+
+        # ④ **IP 는 아직 일련번호다.** 1턴에 두 개가 나오면 [ip-1]·[ip-2] 인데,
+        #    3턴에 두 번째 것만 나오면 그게 [ip-1] 이 된다. 같은 토큰이 다른 기계를
+        #    가리킨다.
+        nametable._terms = {}
+        m1 = proxy.build_masker()
+        m1.mask("10.0.0.1 과 10.0.0.2 에서 오류")
+        m2 = proxy.build_masker()
+        m2.mask("10.0.0.2 만 오류")
+        assert m1._fwd["10.0.0.2"] == m2._fwd["10.0.0.2"], (
+            "같은 IP 가 턴마다 다른 토큰을 받는다: %s vs %s"
+            % (m1._fwd["10.0.0.2"], m2._fwd["10.0.0.2"]))
+
+        # ⑤ 트리아지 경로(요청 단위)는 종전 동작을 유지한다 — 바꿀 이유가 없다.
+        plain = masking.Masker()
+        plain.register("host", "db-prod-01")
+        assert plain._fwd["db-prod-01"] == "[host-1]", plain._fwd
+        return 7
+    finally:
+        nametable._terms = saved
 
 
 def _proxy_mask_checks() -> int:

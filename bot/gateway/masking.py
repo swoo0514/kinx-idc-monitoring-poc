@@ -13,18 +13,25 @@ IP_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 class Masker:
     """요청 단위 가역 마스킹. 맵은 게이트웨이 밖으로 나가지 않음."""
 
-    def __init__(self):
+    def __init__(self, token_fn=None):
         self._fwd = {}   # 원문 → 토큰
         self._rev = {}   # 토큰 → 원문
         self._counts = {}
         self._re = None
         self._lower = {}
+        # 토큰을 만드는 방법. 기본은 등록 순서 일련번호이고, 요청 하나 안에서만
+        # 쓰이므로 그것으로 충분하다. 여러 턴에 걸친 대화에서는 순서가 달라져
+        # 같은 토큰이 다른 대상을 가리키므로, 그 경로가 이름에서 산출하는 함수를 준다.
+        self._token_fn = token_fn
 
     def register(self, kind: str, original: str):
         if original and original not in self._fwd:
-            n = self._counts.get(kind, 0) + 1
-            self._counts[kind] = n
-            tok = f"[{kind}-{n}]"
+            if self._token_fn is not None:
+                tok = self._token_fn(kind, original)
+            else:
+                n = self._counts.get(kind, 0) + 1
+                self._counts[kind] = n
+                tok = f"[{kind}-{n}]"
             self._fwd[original] = tok
             self._rev[tok] = original
             self._re = None
