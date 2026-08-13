@@ -2452,7 +2452,10 @@ def _truncation_checks() -> int:
             pass
 
         def json(self):
-            return {"data": {"result": [{"values": [["1", ln] for ln in self._lines]}]}}
+            # 스트림 하나에 순번을 시각으로. 나노초 문자열이 Loki 형식이다.
+            return {"data": {"result": [{"values": [
+                [str((1700000000 + i) * 10 ** 9), ln]
+                for i, ln in enumerate(self._lines)]}]}}
 
     class _Fake:
         def __init__(self, lines):
@@ -2490,8 +2493,9 @@ def _truncation_checks() -> int:
 
         # ③ 줄이 잘린 개수를 센다 — 스택 추적 꼬리가 사라지는 자리다
         collector.httpx = _Fake(["x" * (collector.LOKI_LINE_MAX + 50), "짧은 줄"])
-        lines, _s, _t, clipped = asyncio.run(collector._loki_logs("h1", 1700000000))
-        assert clipped == 1 and len(lines[0]) == collector.LOKI_LINE_MAX, clipped
+        recs, _s, _t, clipped = asyncio.run(collector._loki_logs("h1", 1700000000))
+        assert clipped == 1, clipped
+        assert max(len(r["line"]) for r in recs) == collector.LOKI_LINE_MAX, recs[:1]
 
         # ④ 전송 형태에 실린다. 수치라 마스킹 대상이 아니다.
         ctx = {"incident": {"host": "h1", "classes": ["disk_space"], "alert_count": 1},
@@ -2506,7 +2510,41 @@ def _truncation_checks() -> int:
             dict(ctx, logs_truncated=False, logs_clipped=0), "SEV2", masking.Masker())
         assert llm.TRUNCATION_RULE not in llm.build_user_prompt(whole)
         assert "logs_truncated" in json.dumps(out, ensure_ascii=False)
-        return 12
+
+        # ⑥ 시각을 살린다. 정렬·증거 범위·"첫 오류 직전"이 전부 이 값을 요구한다.
+        collector.httpx = _Fake(["a", "b", "c"])
+        recs, _s, _t, _c = asyncio.run(collector._loki_logs("h1", 1700000000))
+        assert recs and isinstance(recs[0], dict), recs[:1]
+        assert all("t" in r and "line" in r for r in recs), recs[:1]
+
+        # ⑦ 스트림이 여럿이면 이어 붙인 순서가 시각순이 아니다. 합친 뒤 정렬해야 한다.
+        class _MultiResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": {"result": [
+                    {"values": [["3000000000", "늦은 줄"]]},
+                    {"values": [["1000000000", "이른 줄"]]}]}}
+
+        class _MultiFake:
+            def AsyncClient(self, **_kw):
+                class _C:
+                    async def __aenter__(self):
+                        return self
+
+                    async def __aexit__(self, *a):
+                        return False
+
+                    async def get(self, url, **kw):
+                        return _MultiResp()
+                return _C()
+
+        collector.httpx = _MultiFake()
+        recs, _s, _t, _c = asyncio.run(collector._loki_logs("h1", 1700000000))
+        assert [r["line"] for r in recs] == ["이른 줄", "늦은 줄"], recs
+        assert recs[0]["t"] < recs[1]["t"]
+        return 17
     finally:
         collector.httpx = saved_httpx
         if saved_url is None:

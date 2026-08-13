@@ -450,8 +450,23 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
     return out[:incident.OPEN_LINK_MAX], SOURCE_OK
 
 
+def _loki_ts(ts) -> float:
+    """Loki 는 나노초 문자열을 준다. 못 읽으면 0 — 지어내지 않는다."""
+    try:
+        return int(ts) / 1_000_000_000
+    except (TypeError, ValueError):
+        return 0.0
+
+
 async def _loki_logs(host_label: str, now: int, zbx_host: str = "", source: str = "") -> tuple:
-    """Loki 최근 로그. 반환 (로그 목록, 조회 상태, 창 절단 여부, 줄 잘린 수).
+    """Loki 최근 로그. 반환 (레코드 목록, 조회 상태, 창 절단 여부, 줄 잘린 수).
+
+    레코드는 `{"t": unix초, "line": 줄}` 이다. 시각을 버리면 정렬도 증거 범위도
+    "첫 오류 직전"도 만들 수 없다.
+
+    **합친 뒤 시각으로 정렬한다.** `{host="…"}` 는 스트림이 여럿이라 Loki 응답을 이어
+    붙인 순서는 시각순이 아니다. 지금은 조회 상한과 전송 상한이 같아 결과 집합은 맞지만,
+    둘을 나누는 순간 "최신 순"이 스트림 나열 순서에 좌우된다.
 
     절단은 조회 상태와 별개다. 40줄에서 자른 것도 조회는 성공이므로 상태는 ok 이지만,
     그것만 보내면 모델이 그 40줄에 없는 것을 없는 것으로 읽는다. 사건이 클수록 잘리는
@@ -475,14 +490,17 @@ async def _loki_logs(host_label: str, now: int, zbx_host: str = "", source: str 
             r.raise_for_status()
             out, clipped = [], 0
             for stream in r.json().get("data", {}).get("result", []):
-                for _ts, line in stream.get("values", []):
+                for ts, line in stream.get("values", []):
                     if len(line) > LOKI_LINE_MAX:
                         clipped += 1
-                    out.append(line[:LOKI_LINE_MAX])
+                    out.append({"t": _loki_ts(ts), "line": line[:LOKI_LINE_MAX]})
             if out:
+                out.sort(key=lambda r: r["t"])
                 # 상한을 채웠으면 그 창에 더 있었다고 본다. 정확히 40줄이었을 수도 있으나
                 # 없는 것을 없다고 단언하는 쪽보다 더 있었다고 보는 쪽이 안전하다.
-                return out[:LOKI_LIMIT], SOURCE_OK, len(out) >= LOKI_LIMIT, clipped
+                capped = len(out) >= LOKI_LIMIT
+                # 상한을 넘겼으면 최신 쪽을 남긴다(direction=backward 와 같은 방향).
+                return out[-LOKI_LIMIT:], SOURCE_OK, capped, clipped
             return [], await _loki_name_status(client, url, host_label, now), False, 0
     except Exception as e:
         log.warning("loki query failed host=%s: %s", host_label, e)

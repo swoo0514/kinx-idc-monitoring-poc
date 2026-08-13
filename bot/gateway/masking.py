@@ -105,6 +105,11 @@ def _security_item(s: dict, m) -> dict:
             "path": m(s.get("path")), "change": s.get("change")}
 
 
+def _log_line(rec) -> str:
+    """수집기는 시각을 함께 준다. 전송 형태는 아직 문자열이므로 줄만 꺼낸다."""
+    return rec.get("line", "") if isinstance(rec, dict) else rec
+
+
 def _leaks(text: str) -> bool:
     """가린 뒤에도 아는 이름이 남았는가 — 남으면 본문을 통째로 버린다 (§25-6)."""
     if IP_RE.search(text or ""):
@@ -201,7 +206,7 @@ def build_llm_context(context: dict, sev: str, masker: Masker) -> dict:
             }
             for it in context.get("metrics", []) or []
         ],
-        "logs": [m(line) for line in (context.get("logs") or [])],   # Loki — 라인 내 IP·호스트 마스킹
+        "logs": [m(_log_line(r)) for r in (context.get("logs") or [])],   # Loki — 라인 내 IP·호스트 마스킹
         "security": [_security_item(s, m) for s in (context.get("security") or [])],
         "prejudge": {
             "verdict": (context.get("prejudge") or {}).get("verdict"),
@@ -258,7 +263,7 @@ def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
             "automate": bool(inc.get("automate")),
         },
         "alerts": alerts,
-        "logs": [m(line) for line in (context.get("logs") or [])],
+        "logs": [m(_log_line(r)) for r in (context.get("logs") or [])],
         "security": [_security_item(s, m) for s in (context.get("security") or [])],
         "open_problems": [_open_problem_item(p, m)
                           for p in (context.get("open_problems") or [])],
