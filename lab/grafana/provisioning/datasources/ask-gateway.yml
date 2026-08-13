@@ -1,0 +1,13 @@
+apiVersion: 1
+
+# 게이트웨이로 가는 프록시. 토큰은 Grafana 가 서버 측에서 헤더에 넣는다.
+datasources:
+  - name: Ask Gateway
+    uid: askgw
+    type: kinxidc-ask-datasource
+    access: proxy
+    url: http://host.docker.internal:8800
+    isDefault: false
+    editable: false
+    secureJsonData:
+      gatewayToken: $GATEWAY_TOKEN

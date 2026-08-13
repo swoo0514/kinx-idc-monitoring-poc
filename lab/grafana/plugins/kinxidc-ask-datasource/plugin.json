@@ -1,0 +1,25 @@
+{
+  "type": "datasource",
+  "name": "KINX Ask Gateway",
+  "id": "kinxidc-ask-datasource",
+  "metrics": true,
+  "info": {
+    "description": "게이트웨이 프록시 (앱 라우트 대안 확인용)",
+    "author": { "name": "KINX 서비스운영팀" },
+    "version": "0.0.1",
+    "updated": "2026-08-13"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=11.6.0",
+    "plugins": []
+  },
+  "routes": [
+    {
+      "path": "gw",
+      "url": "http://host.docker.internal:8800",
+      "headers": [
+        { "name": "X-Gateway-Token", "content": "{{ .SecureJsonData.gatewayToken }}" }
+      ]
+    }
+  ]
+}
