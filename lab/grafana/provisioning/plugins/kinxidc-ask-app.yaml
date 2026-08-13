@@ -1,0 +1,10 @@
+apiVersion: 1
+
+# 플러그인 설치 자체는 여기서 하지 않는다(공식). 설치된 앱을 켜고 설정만 넣는다.
+# 토큰은 파일에 적지 않고 컨테이너 환경변수에서 가져온다.
+apps:
+  - type: kinxidc-ask-app
+    org_id: 1
+    disabled: false
+    secureJsonData:
+      gatewayToken: $GATEWAY_TOKEN

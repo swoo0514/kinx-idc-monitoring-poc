@@ -110,11 +110,22 @@ services:
       # 렌더러만 붙이고 생성·발송은 우리 스크립트가 한다. 근거는 DEPLOY_GUIDE "MSP 월간 리포트".
       GF_RENDERING_SERVER_URL: http://grafana-image-renderer:8081/render
       GF_RENDERING_CALLBACK_URL: http://grafana:3000/
+      # 대화형 질의 앱. 사설 서명 전까지는 미서명 로드를 허용한다(공식 문서는 운영
+      # 사용을 권고하지 않으므로 서명 후 이 줄을 뺀다). 근거는 계획서 5단계.
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: kinxidc-ask-app
+      # 프로비저닝의 secureJsonData 가 이 값을 가져간다. 파일에 토큰을 안 적기 위해서다.
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
     ports:
       - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
+      # **하위 경로만 건다.** plugins 를 통째로 마운트하면 GF_INSTALL_PLUGINS 로 깔린
+      # Zabbix·OpenSearch 플러그인이 가려진다.
+      - ./grafana/plugins/kinxidc-ask-app:/var/lib/grafana/plugins/kinxidc-ask-app:ro
+    # 게이트웨이는 컨테이너가 아니라 호스트의 8800 에서 돈다(systemd kinx-gateway).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - zabbix-web
       - loki
