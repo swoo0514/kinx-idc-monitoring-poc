@@ -8,6 +8,7 @@ import asyncio
 import fnmatch
 import logging
 import os
+import re
 import time
 
 import httpx
@@ -464,15 +465,121 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
     return out[:incident.OPEN_LINK_MAX], SOURCE_OK
 
 
+# 등급은 앵커를 요구한다. 부분 문자열로 잡으면 `0 errors`·`error_rate=0`·
+# `ErrorDocument 404` 가 전부 오류가 된다. 줄머리·대괄호·JSON 키·구분자 뒤만 본다.
+_LEVEL_RE = re.compile(
+    r'(?:^|(?<=[\s\[\(\|<{,]))'
+    r'(?:"level"\s*:\s*"|level=|severity=|priority=)?'
+    r'(EMERG|ALERT|CRIT|CRITICAL|FATAL|ERR|ERROR|WARN|WARNING)'
+    r'(?=$|[\s\]\)\|>:,"])', re.IGNORECASE)
+_LEVEL_MAP = {"emerg": "error", "alert": "error", "crit": "error",
+              "critical": "error", "fatal": "error", "err": "error",
+              "error": "error", "warn": "warn", "warning": "warn"}
+
+# 등급 낱말이 없어도 중요한 줄이 있다. 커널 OOM 과 systemd 유닛 실패가 그렇다.
+# 목록은 짧게 두고 실제로 본 문구만 넣는다.
+_CRITICAL_RE = re.compile(
+    r"Out of memory: Kill|oom-kill|segfault|"
+    r"Failed to start |entered failed state|I/O error|EXT4-fs error",
+    re.IGNORECASE)
+
+# 정규화 — 같은 형태를 세기 위한 비교 키다. 절대 전송하지 않는다.
+# 순서가 중요하다. IP → UUID → 긴 hex → 숫자 순으로 걸러야 안쪽이 먼저 먹지 않는다.
+_NORM = (
+    (re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?"), "<TS>"),
+    (re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"), "<IP>"),
+    (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+                re.IGNORECASE), "<UUID>"),
+    (re.compile(r"\b[0-9a-f]{8,}\b", re.IGNORECASE), "<HEX>"),
+    (re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|us|ns|B|KB|MB|GB)\b", re.IGNORECASE), "<QTY>"),
+    (re.compile(r"\b\d{4,}\b"), "<N>"),
+)
+# `key=값` 의 숫자는 변수다(`retry=0`·`pid=5`). 다만 아래 열쇠는 남긴다 — 상태 코드와
+# 종료 코드가 접히면 오류 줄과 정상 줄이 같은 형태가 되어 선별이 통째로 죽는다.
+_KEEP_NUM_KEYS = ("status", "code", "rc", "exit", "errno", "level", "signal")
+_KV_NUM_RE = re.compile(r"\b([A-Za-z_][\w.]*)=(\d+)\b")
+SAME_SHAPE_MAX = 3          # 같은 형태를 몇 줄까지 실을지
+# 몫. 임의값이며 실측으로 조정한다. 남는 몫은 뒤로 넘긴다.
+SELECT_QUOTA = (("error", 14), ("novel", 8), ("pre", 12), ("recent", 6))
+
+
+def log_level(line: str) -> str:
+    """줄이 말하는 등급. 못 뽑으면 빈 문자열 — 미상을 오류로 올리지 않는다."""
+    if _CRITICAL_RE.search(line or ""):
+        return "error"
+    m = _LEVEL_RE.search(line or "")
+    return _LEVEL_MAP.get(m.group(1).lower(), "") if m else ""
+
+
+def log_shape(line: str) -> str:
+    """같은 모양인지 비교하는 키. HTTP 상태 코드·errno 는 남긴다 — 그것이 갈리면
+    오류 줄과 정상 줄이 같은 형태가 되어 선별이 통째로 죽는다."""
+    out = line or ""
+    for rx, tok in _NORM:
+        out = rx.sub(tok, out)
+    return _KV_NUM_RE.sub(
+        lambda m: m.group(0) if m.group(1).lower() in _KEEP_NUM_KEYS
+        else "%s=<N>" % m.group(1), out)
+
+
 def select_logs(records: list, limit: int = None) -> list:
     """조회한 것 중 보낼 것을 고른다.
 
-    지금은 최신 순이다. 등급·신규성으로 고르는 것은 다음 단계이며, 이 함수가 그 자리다.
-    고른 뒤에는 반드시 시각순으로 돌려준다 — 모델이 인접성에서 인과를 만들기 때문이다.
+    최신 순으로만 채우면 오류가 평상시 로그에 묻힌다. 랩 실측에서 정상 260줄에 섞인
+    오류 3줄이 통째로 잘렸다. 반대로 오류만 먼저 채우면 재시도 루프 하나가 전부를
+    먹고 사건 직전 문맥이 사라진다. 그래서 순차가 아니라 몫으로 나눈다.
+
+    고른 뒤에는 반드시 시각순으로 돌려준다. 모델이 인접성에서 인과를 만들기 때문이다.
     """
     limit = LOKI_SEND_LIMIT if limit is None else limit
-    picked = sorted(records, key=lambda r: r["t"])[-limit:]
-    return picked
+    recs = sorted(records, key=lambda r: r["t"])
+    counts = {}
+    for r in recs:
+        s = log_shape(r["line"])
+        counts[s] = counts.get(s, 0) + 1
+
+    def _out(rs, why):
+        # 접은 줄은 개수로 알린다. 안 알리면 260줄이 3줄로 조용히 줄어든다.
+        return [dict(r, n=counts.get(log_shape(r["line"]), 1),
+                     why=r.get("why", why)) for r in rs]
+
+    if len(recs) <= limit:
+        return _out(recs, "all")
+
+    first_err = next((r["t"] for r in recs if log_level(r["line"]) == "error"), None)
+    pools = {
+        "error": [r for r in recs if log_level(r["line"]) == "error"],
+        "novel": [r for r in recs if log_level(r["line"]) == "warn"],
+        "pre": [r for r in recs if first_err is not None and r["t"] < first_err][-40:],
+        "recent": list(reversed(recs)),
+    }
+    picked, seen, shapes = [], set(), {}
+
+    def _take(pool, n):
+        got = 0
+        for r in pool:
+            if got >= n or len(picked) >= limit:
+                break
+            key = (r["t"], r["line"])
+            if key in seen:
+                continue
+            shape = log_shape(r["line"])
+            if shapes.get(shape, 0) >= SAME_SHAPE_MAX:
+                continue
+            seen.add(key)
+            shapes[shape] = shapes.get(shape, 0) + 1
+            picked.append(dict(r, why=name))
+            got += 1
+        return got
+
+    # 몫대로 채우고, 덜 찬 몫은 버리지 않고 뒤로 넘긴다.
+    carry = 0
+    for name, quota in SELECT_QUOTA:
+        want = quota + carry
+        carry = want - _take(pools[name], want)
+    if carry and len(picked) < limit:
+        _take(pools["recent"], limit - len(picked))
+    return _out(sorted(picked, key=lambda r: r["t"]), "recent")
 
 
 def _loki_ts(ts) -> float:

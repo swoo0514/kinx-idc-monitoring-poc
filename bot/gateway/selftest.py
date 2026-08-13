@@ -284,7 +284,8 @@ def main():
                     + _route_record_checks() + _annotation_checks()
                     + _quality_checks() + _prior_checks()
                     + _dashboard_annotation_checks())
-    collect_fail_checks = _collect_failure_checks() + _truncation_checks()
+    collect_fail_checks = (_collect_failure_checks() + _truncation_checks()
+                           + _log_select_checks())
     wrong_srv_checks = _wrong_server_checks()
     evt_time_checks = _event_time_checks()
     open_limit_checks = _open_limit_checks()
@@ -2579,12 +2580,88 @@ def _truncation_checks() -> int:
         # ⑫ 문구가 사실과 어긋나면 안 된다. 선별을 켜면 "가장 최근 것만"은 거짓이 된다.
         assert "가장 최근 것만" not in llm.TRUNCATION_RULE
         return 25
+
+
     finally:
         collector.httpx = saved_httpx
         if saved_url is None:
             os.environ.pop("LOKI_URL", None)
         else:
             os.environ["LOKI_URL"] = saved_url
+
+
+def _log_select_checks() -> int:
+    """무엇을 실을지 — 랩에서 오류 3줄이 정상 260줄에 묻혀 사라졌다 (§1-1-8)."""
+    import json
+
+    from . import collector as c
+
+    def _r(t, line):
+        return {"t": float(t), "line": line}
+
+    # ① 등급 파싱 — 앵커를 요구한다. 부분 문자열로 잡으면 정상 줄이 오류가 된다.
+    assert c.log_level("2026-08-13 10:00:00 ERROR connection reset") == "error"
+    assert c.log_level('{"level":"error","msg":"x"}') == "error"
+    assert c.log_level("[WARN] pool wait 120ms") == "warn"
+    assert c.log_level("kernel: Out of memory: Killed process 1234") == "error"
+    assert c.log_level("systemd: Failed to start nginx.service") == "error"
+    for benign in ("GET /health 200 3ms", "0 errors in last hour",
+                   "error_rate=0", "ErrorDocument 404 /e.html",
+                   "log_level=ERROR is disabled"):
+        assert c.log_level(benign) == "", benign
+
+    # ② 랩 실측 재현 — 정상 260줄에 오류 3줄. 전송 40줄에 오류가 전부 들어와야 한다.
+    recs = [_r(i, "INFO request completed status=200 dur=%dms" % (i % 80))
+            for i in range(200)]
+    recs += [_r(200 + i, "ERROR connection reset by peer upstream=db-pool-%d" % i)
+             for i in range(3)]
+    recs += [_r(300 + i, "INFO request completed status=200 dur=%dms" % (i % 80))
+             for i in range(60)]
+    picked = c.select_logs(recs)
+    assert len(picked) <= c.LOKI_SEND_LIMIT, len(picked)
+    errs = [r for r in picked if "connection reset" in r["line"]]
+    assert len(errs) == 3, "오류 3줄이 안 실렸다: %d" % len(errs)
+
+    # ③ 고른 뒤에는 시각순이다. 모델이 인접성에서 인과를 만들기 때문이다.
+    assert [r["t"] for r in picked] == sorted(r["t"] for r in picked)
+
+    # ④ 접은 줄은 개수로 알린다. 안 알리면 260줄이 3줄로 조용히 줄어든다.
+    info = [r for r in picked if "request completed" in r["line"]]
+    assert info and info[0]["n"] >= 200, info[:1]
+    assert all("why" in r for r in picked), picked[:1]
+
+    # ⑤ 같은 오류가 쏟아져도 40칸을 다 먹지 않는다. 문맥이 남아야 인과를 본다.
+    flood = [_r(i, "ERROR upstream timeout retry=%d" % i) for i in range(300)]
+    flood += [_r(1000 + i, "INFO warmup step %d" % i) for i in range(20)]
+    picked = c.select_logs(flood)
+    same = [r for r in picked if "upstream timeout" in r["line"]]
+    assert len(same) <= c.SAME_SHAPE_MAX, "같은 형태가 %d줄" % len(same)
+    assert any("warmup" in r["line"] for r in picked), "문맥이 통째로 밀렸다"
+
+    # ⑥ 첫 오류 직전 구간이 보존된다 — 원인은 대개 그 앞에 있다
+    seq = [_r(i, "INFO steady %d" % i) for i in range(100)]
+    seq += [_r(200 + i, "ERROR boom %d" % i) for i in range(100)]
+    picked = c.select_logs(seq)
+    pre = [r for r in picked if r["t"] < 200]
+    assert pre, "첫 오류 직전 줄이 하나도 안 남았다"
+
+    # ⑦ 등급 미상이 오류 몫을 먹지 않는다
+    assert c.log_level("something happened") == ""
+
+    # ⑧ 고른 이유와 개수가 전송 형태에 실린다. 안 실리면 모델은 40줄이 전부인 줄 안다.
+    from . import llm, masking
+    ctx = {"incident": {"host": "h1", "classes": ["disk_space"], "alert_count": 1},
+           "host": {}, "alerts": [], "security": [], "sources": {"logs": "ok"},
+           "logs": [{"t": 1700000000.5, "line": "ERROR reset", "why": "error", "n": 137}]}
+    out = masking.build_llm_context(ctx, "SEV2", masking.Masker())
+    item = out["logs"][0]
+    assert item["why"] == "error" and item["n"] == 137, item
+    assert item["t"] == 1700000000, item
+    # 정규화형은 비교 키일 뿐이다. 전송에 섞이면 마스킹을 우회한다.
+    assert "shape" not in item and "<N>" not in json.dumps(item, ensure_ascii=False)
+    # 프롬프트가 이 필드를 설명해야 한다. 안 하면 모델이 n 을 무시한다.
+    assert "`n`" in llm.TRIAGE_SYSTEM and "`why`" in llm.TRIAGE_SYSTEM
+    return 22
 
 
 def _proxy_mask_checks() -> int:

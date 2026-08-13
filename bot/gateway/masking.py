@@ -105,9 +105,22 @@ def _security_item(s: dict, m) -> dict:
             "path": m(s.get("path")), "change": s.get("change")}
 
 
-def _log_line(rec) -> str:
-    """수집기는 시각을 함께 준다. 전송 형태는 아직 문자열이므로 줄만 꺼낸다."""
-    return rec.get("line", "") if isinstance(rec, dict) else rec
+def _log_item(rec, m) -> dict:
+    """로그 1줄의 전송 형태.
+
+    문자열만 보내면 모델은 그 40줄이 창의 전부인 줄 안다. 왜 뽑혔는지(`why`)와 같은
+    형태가 창에 몇 줄이었는지(`n`)를 같이 보낸다. 시각은 줄 사이 간격을 보라고 준다.
+    """
+    if not isinstance(rec, dict):
+        return {"line": m(rec)}
+    out = {"t": int(rec.get("t") or 0), "line": m(rec.get("line", "")),
+           "why": rec.get("why", "")}
+    lvl = rec.get("level") or ""
+    if lvl:
+        out["level"] = lvl
+    if (rec.get("n") or 1) > 1:
+        out["n"] = rec["n"]
+    return out
 
 
 def _leaks(text: str) -> bool:
@@ -206,7 +219,7 @@ def build_llm_context(context: dict, sev: str, masker: Masker) -> dict:
             }
             for it in context.get("metrics", []) or []
         ],
-        "logs": [m(_log_line(r)) for r in (context.get("logs") or [])],   # Loki — 라인 내 IP·호스트 마스킹
+        "logs": [_log_item(r, m) for r in (context.get("logs") or [])],   # Loki — 라인 내 IP·호스트 마스킹
         "security": [_security_item(s, m) for s in (context.get("security") or [])],
         "prejudge": {
             "verdict": (context.get("prejudge") or {}).get("verdict"),
@@ -265,7 +278,7 @@ def _build_incident_context(context: dict, sev: str, masker: Masker) -> dict:
             "automate": bool(inc.get("automate")),
         },
         "alerts": alerts,
-        "logs": [m(_log_line(r)) for r in (context.get("logs") or [])],
+        "logs": [_log_item(r, m) for r in (context.get("logs") or [])],
         "security": [_security_item(s, m) for s in (context.get("security") or [])],
         "open_problems": [_open_problem_item(p, m)
                           for p in (context.get("open_problems") or [])],
