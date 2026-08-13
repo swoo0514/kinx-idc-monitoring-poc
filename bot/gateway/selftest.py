@@ -279,7 +279,7 @@ def main():
     tenant_checks = _tenant_scope_checks() + _contract_checks()
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
-                    + _ask_question_checks())
+                    + _ask_question_checks() + _ask_scope_checks())
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
@@ -3083,6 +3083,57 @@ def _ask_question_checks() -> int:
     finally:
         nametable._terms = saved
         ask.forget_all()
+
+
+def _ask_scope_checks() -> int:
+    """질의가 닿을 수 있는 대상을 서버가 정하는가.
+
+    호출자가 신고한 값은 믿지 않는다. `/v1/messages` 의 테넌트 판정이
+    `metadata.user_id` 로 되어 있는데 그건 호출자가 채우는 값이라 격리 근거가 못 된다.
+    """
+    import os
+
+    from . import ask, incident as inc_mod, registry
+
+    saved_env = os.environ.get("ASK_ALLOWED_REALMS")
+    saved_src = list(registry._SOURCES)
+    saved_map = dict(inc_mod.REALM_MAP)
+    try:
+        registry._SOURCES = [{"name": "zabbix-internal", "realm": "internal"},
+                             {"name": "zabbix-msp", "realm": "msp"},
+                             {"name": "zabbix-etc"}]
+        inc_mod.REALM_MAP = {}
+        os.environ.pop("ASK_ALLOWED_REALMS", None)
+
+        # ① 사내는 허용, MSP 는 거부
+        ok, why = ask.target_allowed("zabbix-internal", "db01")
+        assert ok, why
+        ok, why = ask.target_allowed("zabbix-msp", "db01")
+        assert not ok and why, (ok, why)
+
+        # ② **영역을 안 적은 소스는 거부가 기본이다.** 설정을 빠뜨린 사람이 가장
+        #    위험해지면 안 된다. `registry.realm()` 이 소스 이름을 그대로 돌려주므로
+        #    허용 목록에 없는 값이 되어 자동으로 막힌다.
+        ok, why = ask.target_allowed("zabbix-etc", "db01")
+        assert not ok, "영역 미기재 소스가 통과했다"
+
+        # ③ 허용 목록은 환경변수로 넓힌다. 코드를 고쳐야 넓어지면 안 된다.
+        os.environ["ASK_ALLOWED_REALMS"] = "internal,lab"
+        registry._SOURCES = [{"name": "lab-zbx", "realm": "lab"}]
+        ok, _ = ask.target_allowed("lab-zbx", "node1")
+        assert ok, "허용 목록을 넓혔는데 안 통한다"
+
+        # ④ 허용된 감시 서버 목록도 서버가 만든다
+        names = ask.allowed_sources()
+        assert names == ["lab-zbx"], names
+        return 6
+    finally:
+        registry._SOURCES = saved_src
+        inc_mod.REALM_MAP = saved_map
+        if saved_env is None:
+            os.environ.pop("ASK_ALLOWED_REALMS", None)
+        else:
+            os.environ["ASK_ALLOWED_REALMS"] = saved_env
 
 
 def _proxy_mask_checks() -> int:
