@@ -9,6 +9,7 @@ from . import collector   # 조회 상태 상수(SOURCE_*) 단일 정의 참조
 
 log = logging.getLogger("gateway.slack")
 
+LINK_PAD_S = 900   # 링크 창을 사건 앞뒤로 얼마나 벌릴지
 API = "https://slack.com/api/chat.postMessage"
 
 _SEV_EMOJI = {"SEV1": "🔴", "SEV2": "🟠", "SEV3": "🟡", "SEV4": "🔵", "NONE": "⚪"}
@@ -37,17 +38,26 @@ def _source_note(sources: dict) -> str:
     return "  ·  ".join(parts)
 
 
-def _grafana_link(host: str) -> str:
-    """Slack 카드→Grafana 딥링크. GRAFANA_URL 설정 시만. 그 호스트·최근 창으로 필터(데모 A 재사용)."""
+def _grafana_link(host: str, event_ts: float = 0) -> str:
+    """Slack 카드→Grafana 딥링크. GRAFANA_URL 설정 시만. 그 호스트로 필터(데모 A 재사용).
+
+    창은 **사건 시각 기준 절대 구간**이다. `now-30m` 같은 상대 구간을 쓰면 재기동 후
+    대기 알림을 다시 넣었을 때 엉뚱한 구간이 열린다. 사건 시각을 모르면 그때만 상대
+    구간으로 내려간다.
+    """
     base = os.environ.get("GRAFANA_URL", "").rstrip("/")
     dash = os.environ.get("GRAFANA_DASHBOARD", "kinx-overview")
     if not base or not host:
         return ""
+    if event_ts:
+        frm = int((event_ts - LINK_PAD_S) * 1000)   # Grafana 는 밀리초를 받는다
+        to = int((event_ts + LINK_PAD_S) * 1000)
+        return f"{base}/d/{dash}?var-host={host}&from={frm}&to={to}"
     return f"{base}/d/{dash}?var-host={host}&from=now-30m&to=now"
 
 
 def _blocks(alert_name: str, sev: str, host: str, verdict: str, body: str,
-            sources: dict = None) -> list:
+            sources: dict = None, event_ts: float = 0) -> list:
     head = f"{_SEV_EMOJI.get(sev, '⚪')} [{sev}] {alert_name}"
     context = f"host: {host}  ·  판정: {verdict}"
     blocks = [
@@ -61,7 +71,7 @@ def _blocks(alert_name: str, sev: str, host: str, verdict: str, body: str,
         {"type": "divider"},
         {"type": "section", "text": {"type": "mrkdwn", "text": body[:2900]}},  # Slack section 한도
     ]
-    link = _grafana_link(host)
+    link = _grafana_link(host, event_ts)
     if link:
         blocks.append({"type": "context", "elements": [
             {"type": "mrkdwn",
@@ -145,12 +155,13 @@ def post_digest(alert_name: str, sev: str, host: str, note: str = "") -> dict:
 
 
 def post_triage(alert_name: str, sev: str, host: str, verdict: str, body: str,
-                thread_ts: str = None, sources: dict = None) -> dict:
+                thread_ts: str = None, sources: dict = None,
+                event_ts: float = 0) -> dict:
     """반환의 'ts'는 스레드 앵커 — thread_ts로 되넘기면 같은 스레드에 후속 게시.
     sources: 교차 소스 조회 상태(collect_* 결과의 sources) — 실패 시 카드에 경고 표기."""
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     channel = os.environ.get("SLACK_CHANNEL_ID", "")
-    blocks = _blocks(alert_name, sev, host, verdict, body, sources)
+    blocks = _blocks(alert_name, sev, host, verdict, body, sources, event_ts)
 
     if not token or not channel:
         log.info("[slack skipped: no token] %s / %s / %s\n%s", sev, host, verdict, body)

@@ -9,6 +9,9 @@ from . import (collector, grafana, holmes, incident as incident_mod, keep, llm,
 
 log = logging.getLogger("gateway.triage")
 
+# 선별 규칙이 바뀌면 올린다. 증거에 같이 남겨야 "그때 왜 저 줄이 실렸나"에 답할 수 있다.
+SELECT_POLICY_VERSION = "log-select-v1"
+
 # fire-and-forget 태스크의 강참조. 안 잡으면 GC 로 조용히 사라진다(공식 문서). 가이드 §10.
 _bg_tasks: set = set()
 
@@ -142,6 +145,38 @@ def _record(inc, context, sev, fired, reason, origin, event_ts):
         return None
 
 
+def _evidence(context: dict, reply: dict) -> str:
+    """사람이 원문으로 되짚을 재료 (§25-7). 모델에는 안 간다.
+
+    조회문만으로는 재현이 안 된다. 다시 돌리면 300줄이 나오고 모델이 본 40줄은 못
+    되살린다. 그래서 상한과 정책 판번호를 함께 남긴다 — 그때 왜 저 줄이 실렸는지를
+    사후에 답하려면 필요하다.
+    """
+    import hashlib
+    import json
+    try:
+        sel = [r for r in (context.get("logs") or []) if "line" in r]
+        digest = hashlib.sha256(
+            json.dumps([r["line"] for r in sel], ensure_ascii=False).encode()
+        ).hexdigest()[:16]
+        return json.dumps({
+            "logql": context.get("logs_query", ""),
+            "from": int(context.get("logs_from") or 0),
+            "to": int(context.get("logs_to") or 0),
+            "fetch_limit": collector.LOKI_FETCH_LIMIT,
+            "send_limit": collector.LOKI_SEND_LIMIT,
+            "fetched": context.get("logs_fetched"),
+            "selected": context.get("logs_selected"),
+            "fetch_capped": bool(context.get("logs_fetch_capped")),
+            "clipped": context.get("logs_clipped"),
+            "policy": SELECT_POLICY_VERSION,
+            "digest": digest,
+        }, ensure_ascii=False)
+    except Exception as e:
+        log.warning("증거 참조를 못 만들었다: %s", e)
+        return ""
+
+
 def _finish(jid, fields: dict) -> None:
     try:
         store.finish(jid, fields)
@@ -223,7 +258,7 @@ async def run_incident(inc, force: bool = False) -> dict:
     anchor = getattr(inc, "anchor_ts", "") or None
     posted = await asyncio.to_thread(slack.post_triage, headline, sev, inc.host,
                                      f"{merge_note} · {chronic}", reply["text"], anchor,
-                                     context.get("sources"))
+                                     context.get("sources"), event_ts)
     timings["slack_s"] = round(time.monotonic() - t2, 2)
     # fingerprint 고정 → 심층조사가 별개 알림이 아니라 같은 행에 enrich 된다
     await asyncio.to_thread(keep.push_alert, headline, sev, inc.host, reply["text"],
@@ -250,7 +285,8 @@ async def run_incident(inc, force: bool = False) -> dict:
         "degraded": 1 if reply.get("degraded") else 0,
         "total_s": timings["total_s"], "summary": reply.get("text", ""),
         "change": reply.get("change", ""),
-        "prior_used": 1 if context.get("prior") else 0})
+        "prior_used": 1 if context.get("prior") else 0,
+        "evidence": _evidence(context, reply)})
     # 게이트에서 걸러진 사건은 안 찍는다 — 그쪽이 다수라 타임라인이 우리가 진단한
     # 노이즈와 같은 모양이 된다.
     _spawn_bg(_annotate(jid, inc, sev, headline, f"{merge_note} · {chronic}",

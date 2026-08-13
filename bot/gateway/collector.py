@@ -201,6 +201,10 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
         "logs_selected": len(select_logs(logs)),
         "logs_fetch_capped": logs_capped,
         "logs_clipped": logs_clip,
+        # 사람이 원문으로 되짚을 재료. 화이트리스트에 없어 모델에는 안 간다.
+        "logs_query": '{%s="%s"}' % (LOKI_HOST_LABEL, loki_label) if loki_label else "",
+        "logs_from": now - CORR_WINDOW_S,
+        "logs_to": now,
     }
 
 
@@ -345,6 +349,10 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         "logs_selected": len(select_logs(logs)),
         "logs_fetch_capped": logs_capped,
         "logs_clipped": logs_clip,
+        # 사람이 원문으로 되짚을 재료. 화이트리스트에 없어 모델에는 안 간다.
+        "logs_query": '{%s="%s"}' % (LOKI_HOST_LABEL, loki_label) if loki_label else "",
+        "logs_from": ref - CORR_WINDOW_S,
+        "logs_to": ref,
     }
 
 
@@ -640,10 +648,11 @@ async def _loki_logs(host_label: str, now: int, zbx_host: str = "", source: str 
     if not host_label:   # 호스트 라벨을 못 정하면 조회 자체가 불가 — 성공이 아니다
         log.warning("loki skipped: host label 미해석 (HOST_LABEL_MAP·인터페이스 dns 확인)")
         return [], SOURCE_UNAVAILABLE, False, 0
+    query = '{%s="%s"}' % (LOKI_HOST_LABEL, host_label)
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(f"{url}/loki/api/v1/query_range", params={
-                "query": '{%s="%s"}' % (LOKI_HOST_LABEL, host_label),
+                "query": query,
                 "start": str((now - CORR_WINDOW_S) * 1_000_000_000),
                 "end": str(now * 1_000_000_000),
                 "limit": LOKI_FETCH_LIMIT, "direction": "backward"}, timeout=TIMEOUT_S)

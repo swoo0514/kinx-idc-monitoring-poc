@@ -282,6 +282,7 @@ def main():
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
+                    + _evidence_checks()
                     + _quality_checks() + _prior_checks()
                     + _dashboard_annotation_checks())
     collect_fail_checks = (_collect_failure_checks() + _truncation_checks()
@@ -2681,6 +2682,68 @@ def _log_select_checks() -> int:
     # 프롬프트가 이 필드를 설명해야 한다. 안 하면 모델이 n 을 무시한다.
     assert "`n`" in llm.TRIAGE_SYSTEM and "`why`" in llm.TRIAGE_SYSTEM
     return 26
+
+
+def _evidence_checks() -> int:
+    """원문으로 되짚을 재료를 남기는가 — 사람용이고 모델에는 안 간다 (§25-7)."""
+    import json
+    import os
+    import shutil
+    import tempfile
+
+    from . import masking, prior, slack, store
+
+    # ① 조회 참조가 컨텍스트에 있어도 전송 형태에는 없다. 모델의 분석 재료가 아니다.
+    ctx = {"incident": {"host": "h1", "classes": ["disk_space"], "alert_count": 1},
+           "host": {}, "alerts": [], "security": [], "sources": {"logs": "ok"},
+           "logs": [{"t": 1.0, "line": "a", "why": "recent"}],
+           "logs_query": '{host="h1"}', "logs_from": 1700000000,
+           "logs_to": 1700000900}
+    out = masking.build_llm_context(ctx, "SEV2", masking.Masker())
+    blob = json.dumps(out, ensure_ascii=False)
+    assert "logs_query" not in blob and 'host="h1"' not in blob, blob[:200]
+
+    # ② 판정 이력에 남고, 서술과 같은 시점에 지워진다. Loki 보존이 31일인데 판정 행은
+    #    90일이라, 오래된 참조를 눌러 0건이 나오면 "로그가 없었다"로 읽힌다.
+    d = tempfile.mkdtemp(prefix="evi-")
+    saved = store.PATH
+    try:
+        store.PATH = os.path.join(d, "e.db")
+        store.close()
+        store.init()
+        jid = store.record_judgment({"fingerprint": "fp", "host": "h1",
+                                     "summary": "결론", "evidence": '{"q":"x"}'},
+                                    now=1000.0)
+        assert store.get_judgment(jid)["evidence"], "증거가 안 남았다"
+        store.prune(now=1000.0 + store.SUMMARY_DAYS * 86400 + 10)
+        row = store.get_judgment(jid)
+        assert row and not row["summary"], "서술이 안 지워졌다"
+        assert not row["evidence"], "증거가 서술보다 오래 남았다"
+
+        # ③ 과거 결론 경로에 새 컬럼이 안 섞인다
+        got = prior.select.__doc__ is not None
+        assert got
+        item = masking._prior_item({"summary": "", "match": "동일 사건"}, lambda x: x)
+        assert "evidence" not in item and "logs_query" not in item, item
+    finally:
+        store.close()
+        store.PATH = saved
+        shutil.rmtree(d, ignore_errors=True)
+
+    # ④ Grafana 링크가 사건 시각 기준 절대 창이다. 지금은 게시 시각 기준 상대 창이라
+    #    재기동 후 대기 알림을 다시 넣으면 엉뚱한 구간이 열린다.
+    saved_url = os.environ.get("GRAFANA_URL")
+    os.environ["GRAFANA_URL"] = "http://g.local"
+    try:
+        link = slack._grafana_link("h1", event_ts=1700000000)
+        assert "from=now-" not in link, link
+        assert "1699999" in link or "1700000" in link, link
+    finally:
+        if saved_url is None:
+            os.environ.pop("GRAFANA_URL", None)
+        else:
+            os.environ["GRAFANA_URL"] = saved_url
+    return 11
 
 
 def _proxy_mask_checks() -> int:

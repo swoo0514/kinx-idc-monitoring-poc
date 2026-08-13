@@ -24,7 +24,7 @@ JUDGMENT_COLS = (
     "fingerprint", "ikey", "host", "realm", "source", "classes", "alert_count",
     "sev", "verdict", "gate_fired", "gate_reason", "sources", "origin",
     "event_ts", "provider", "degraded", "total_s", "summary", "change",
-    "prior_used", "annotation_id")
+    "prior_used", "annotation_id", "evidence")
 
 _JUDGMENT_DDL = """
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL,
@@ -32,7 +32,8 @@ _JUDGMENT_DDL = """
   classes TEXT, alert_count INTEGER, sev TEXT, verdict TEXT,
   gate_fired INTEGER, gate_reason TEXT, sources TEXT, origin TEXT,
   event_ts REAL, provider TEXT, degraded INTEGER, total_s REAL,
-  summary TEXT, change TEXT, prior_used INTEGER, annotation_id INTEGER"""
+  summary TEXT, change TEXT, prior_used INTEGER, annotation_id INTEGER,
+  evidence TEXT"""
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS judgment (%s);
@@ -310,7 +311,10 @@ def prune(now: float = None) -> None:
     """행보다 서술을 먼저 지운다 — 지표는 구조화 값만으로 산출된다 (§24-6)."""
     now = time.time() if now is None else now
     cut = now - KEEP_DAYS * 86400
-    _exec("UPDATE judgment SET summary=NULL WHERE ts < ? AND summary IS NOT NULL",
+    # 증거 참조도 서술과 같이 지운다. Loki 보존이 31일인데 판정 행은 90일이라,
+    # 오래된 조회문을 눌러 0건이 나오면 "로그가 없었다"로 읽힌다.
+    _exec("UPDATE judgment SET summary=NULL, evidence=NULL"
+          " WHERE ts < ? AND (summary IS NOT NULL OR evidence IS NOT NULL)",
           (now - SUMMARY_DAYS * 86400,))
     _exec("DELETE FROM judgment WHERE ts < ?", (cut,))
     _exec("DELETE FROM feedback WHERE judgment_id NOT IN (SELECT id FROM judgment)")
