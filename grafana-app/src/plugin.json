@@ -4,7 +4,9 @@
   "name": "Ask",
   "id": "kinxidc-ask-app",
   "info": {
-    "keywords": ["app"],
+    "keywords": [
+      "app"
+    ],
     "description": "",
     "author": {
       "name": "Kinxidc"
@@ -56,7 +58,7 @@
     }
   ],
   "dependencies": {
-    "grafanaDependency": ">=12.3.0",
+    "grafanaDependency": ">=11.6.0",
     "plugins": []
   }
 }
