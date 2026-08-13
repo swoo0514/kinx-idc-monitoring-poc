@@ -69,6 +69,18 @@ TRIAGE_USER = """\
 
 # 스트리밍 미사용 시 SDK 타임아웃 안전 범위 + 트리아지 회신(1500자) 여유
 DEFAULT_MAX_TOKENS = 2048
+# 한 번 실행이 쓸 입력 토큰 상한. 사람이 액수를 모르는 채로 큰 호출이 나가지 않게 막는다.
+BUDGET_TOKENS = 100_000
+
+
+def estimate_input_tokens(runs: int, max_tokens: int) -> int:
+    """이번 실행이 쓸 입력 토큰의 어림값.
+
+    영문·한글이 섞인 프롬프트라 글자당 토큰이 일정하지 않다. 과소평가하면 막는
+    의미가 없으므로 **글자당 1토큰**으로 넉넉히 잡는다.
+    """
+    per_call = len(TRIAGE_SYSTEM) + len(TRIAGE_USER)
+    return per_call * max(runs, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +223,23 @@ def main():
                    help="Claude adaptive thinking 켜고 측정 (기본은 끔=최저지연)")
     p.add_argument("--target", type=float, default=30.0, help="목표 초 (기본 30)")
     p.add_argument("--json-out", help="원시 결과 JSON 저장 경로")
+    p.add_argument("--budget-tokens", type=int, default=BUDGET_TOKENS,
+                   help="이 측정이 쓸 입력 토큰 상한. 넘길 값을 주면 실행 전에 멈춘다")
+    p.add_argument("--i-accept-cost", action="store_true",
+                   help="상한을 넘겨서라도 돌린다고 사람이 명시할 때만")
     args = p.parse_args()
+
+    # 유료 호출은 사람이 액수를 알고 승인한 만큼만 쓴다. 2026-08-13 에 이 도구 밖에서
+    # 같은 성격의 측정을 opus 로 15콜(입력 133만 토큰) 돌려 잔액을 소진시켰고, 그 결과
+    # 게이트웨이의 실제 트리아지가 크레딧 부족으로 죽었다. 곡선의 모양만 필요한
+    # 측정이었으므로 저가 모델과 작은 표본으로 충분했다.
+    est = estimate_input_tokens(args.runs, args.max_tokens)
+    if est > args.budget_tokens and not args.i_accept_cost:
+        raise SystemExit(
+            "예상 입력 %s 토큰이 상한 %s 을 넘는다. 줄이거나 --i-accept-cost 를 붙여라.\n"
+            "  · 모델을 --claude-model 로 낮추면 같은 곡선을 훨씬 싸게 얻는다.\n"
+            "  · --runs 를 줄이거나 큰 입력 구간을 빼라."
+            % (f"{est:,}", f"{args.budget_tokens:,}"))
 
     results = []
     if args.provider in ("claude", "both"):
