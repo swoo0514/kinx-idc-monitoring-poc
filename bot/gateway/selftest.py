@@ -278,7 +278,8 @@ def main():
     holmes_eg_checks = _holmes_egress_checks()
     tenant_checks = _tenant_scope_checks() + _contract_checks()
     nametable_checks = _nametable_checks()
-    proxy_checks = _proxy_mask_checks() + _ask_masking_checks()
+    proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
+                    + _ask_question_checks())
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
@@ -3025,6 +3026,63 @@ def _ask_masking_checks() -> int:
         return 7
     finally:
         nametable._terms = saved
+
+
+def _ask_question_checks() -> int:
+    """사람이 자유롭게 친 질문을 어떻게 다루는가.
+
+    컨텍스트는 `build_llm_context` 화이트리스트가 지켜 준다. 질문 문자열에는 그런
+    보호가 없다 — 사람은 호스트명이든 IP든 계정명이든 아무거나 친다.
+    """
+    from . import ask, nametable
+
+    saved = dict(nametable._terms)
+    try:
+        nametable._terms = {"db-prod-01": "host"}
+        mk = ask.session_masker("s1")
+
+        # ① 이름과 IP 는 가려서 보낸다
+        r = ask.sanitize_question("db-prod-01 이 10.0.0.7 로 못 붙는다", mk)
+        assert r["ok"], r
+        assert "db-prod-01" not in r["text"] and "10.0.0.7" not in r["text"], r["text"]
+
+        # ② **가린 뒤에도 아는 이름이 남으면 보내지 않고 거절한다.** 낱말 경계 밖에
+        #    붙어 있으면 치환기가 못 잡는다. 조용히 내보내는 것보다 되묻는 것이 낫다.
+        r = ask.sanitize_question("xdb-prod-01y 가 이상함", mk)
+        assert not r["ok"] and r["reason"], r
+
+        # ③ 길이 상한. 이력까지 매 턴 다시 마스킹하므로 무한정 받을 수 없다.
+        r = ask.sanitize_question("가" * (ask.QUESTION_MAX_CHARS + 1), mk)
+        assert not r["ok"] and "길이" in r["reason"], r
+
+        # ④ 제어문자는 지운다 — 프롬프트 구조를 흉내 내는 입력을 막는다
+        r = ask.sanitize_question("정상\x00질문\x1b[31m입니다", mk)
+        assert r["ok"] and "\x00" not in r["text"] and "\x1b" not in r["text"], r
+
+        # ⑤ 빈 질문은 거절
+        assert not ask.sanitize_question("   ", mk)["ok"]
+
+        # ⑥ **표에서 이름이 빠져도 앞 턴의 토큰을 되돌릴 수 있어야 한다.**
+        #    이름 표는 1시간마다 다시 만들어진다. 대화 도중 갱신되면 앞 턴에 발행한
+        #    토큰이 표에 없어져 역치환이 안 되고, 사람은 토큰 문자열을 받는다.
+        tok = mk._fwd["db-prod-01"]
+        ask.remember("s1", mk)
+        nametable._terms = {}                      # 표에서 사라졌다
+        mk2 = ask.session_masker("s1")
+        assert mk2.unmask("%s 를 보라" % tok) == "db-prod-01 를 보라", mk2.unmask(tok)
+
+        # ⑦ 다른 세션에는 안 샌다
+        mk3 = ask.session_masker("s2")
+        assert mk3.unmask(tok) == tok, "세션 사이로 역치환 표가 샜다"
+
+        # ⑧ 오래된 세션은 지운다 — 메모리에 무한정 쌓이면 안 된다
+        ask.prune_sessions(now=ask._now() + ask.SESSION_TTL_S + 1)
+        mk4 = ask.session_masker("s1")
+        assert mk4.unmask(tok) == tok, "만료된 세션이 남아 있다"
+        return 11
+    finally:
+        nametable._terms = saved
+        ask.forget_all()
 
 
 def _proxy_mask_checks() -> int:
