@@ -3308,8 +3308,9 @@ def _ask_table_checks() -> int:
 def _ask_loop_checks() -> int:
     """모델이 도구를 고르는 루프가 상한 안에서 도는가."""
     import asyncio
+    import json
 
-    from . import ask, nametable
+    from . import ask, asktools, nametable
 
     saved = dict(nametable._terms)
     try:
@@ -3372,13 +3373,31 @@ def _ask_loop_checks() -> int:
                                     model_fn=lambda *a: called.append(1) or _text("x")))
         assert r.get("error") and not called, r
 
-        # ⑥ 모델이 죽어도 예외를 위로 던지지 않는다
+        # ⑥ **표를 먼저 만들고 질문을 가린다.** 순서가 거꾸로면 이름 표에 없는
+        #    호스트가 질문에서 안 가려진 채 나간다. 랩에서 실제로 그랬다(2026-08-18).
+        seen_q = []
+
+        def capture(system, messages, tools):
+            seen_q.append(messages[-1]["content"])
+            return _text("확인했다")
+
+        nametable._terms = {}          # 이름 표에는 없고 대상 표에만 있는 호스트
+        asyncio.run(ask.run_ask("web-01 로그 봐줘", table=table, model_fn=capture))
+        assert "web-01" not in seen_q[0], "표의 호스트가 질문에서 안 가려졌다: %s" % seen_q[0]
+
+        # ⑦ 호스트 목록 검색은 **실명**으로 맞는다. 사람은 실명으로 묻는다.
+        found = asyncio.run(asktools.run_tool("list_hosts", {"query": "web"},
+                                              {"table": table}))
+        assert found["n"] == 1, found
+        assert "web-01" not in json.dumps(found, ensure_ascii=False), found
+
+        # ⑧ 모델이 죽어도 예외를 위로 던지지 않는다
         def dead(system, messages, tools):
             raise RuntimeError("model down")
 
         r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
         assert r.get("error") and "모델" in r["error"], r
-        return 14
+        return 17
     finally:
         nametable._terms = saved
         ask.forget_all()

@@ -308,16 +308,22 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     now = int(time.time()) if now is None else now
     mk = session_masker(sid or "-")
 
+    # **표를 먼저 만든다.** 표를 만들면서 호스트 이름이 마스커에 등록되므로, 그 뒤에
+    # 질문을 가려야 표에만 있고 이름 표에는 없는 호스트가 질문에서 안 새어 나간다.
+    # 반대 순서로 뒀다가 랩에서 실제로 실명이 나갔다(2026-08-18).
+    if table is None:
+        table = await build_table(mk)
+    else:
+        for ent in table.values():
+            mk.register("host", ent.get("host", ""))
+    if not table:
+        return {"text": "", "trace": [], "rounds": 0, "stopped": "no_targets",
+                "error": "조회할 수 있는 대상이 없다. 감시 서버 연결과 허용 영역을 확인하라"}
+
     clean = sanitize_question(question, mk)
     if not clean["ok"]:
         return {"text": "", "trace": [], "rounds": 0, "stopped": "rejected",
                 "error": clean["reason"]}
-
-    if table is None:
-        table = await build_table(mk)
-    if not table:
-        return {"text": "", "trace": [], "rounds": 0, "stopped": "no_targets",
-                "error": "조회할 수 있는 대상이 없다. 감시 서버 연결과 허용 영역을 확인하라"}
 
     ctx = {
         "table": table, "now": now,
@@ -375,6 +381,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     if stopped in ("rounds", "deadline", "budget") and not text:
         text = ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
                 % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
+    remember(sid or "-", mk)
     return {"text": mk.unmask(text), "trace": trace, "rounds": len(trace),
             "stopped": stopped, "error": ""}
 

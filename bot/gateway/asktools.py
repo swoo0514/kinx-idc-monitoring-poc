@@ -188,10 +188,13 @@ async def run_tool(name: str, args: dict, ctx: dict) -> dict:
 
 async def _tool_list_hosts(args: dict, ctx: dict) -> dict:
     """표에서 만든다. 조회를 안 하므로 라운드를 아낀다."""
+    # **검색은 실명으로 맞춘다.** 사람은 실명으로 묻고 모델은 그 말을 그대로 옮긴다.
+    # 토큰 문자열을 훑으면 아무것도 안 맞는다(2026-08-18 랩 실측). 실명은 여기서만
+    # 쓰이고 결과에는 토큰만 실린다.
     q = str(args.get("query") or "").lower()
     out = []
     for tok, ent in (ctx.get("table") or {}).items():
-        if q and q not in tok.lower():
+        if q and q not in str(ent.get("host", "")).lower():
             continue
         out.append({"host": tok, "axes": sorted(k for k in ("logs", "security")
                                                 if ent.get(k))})
