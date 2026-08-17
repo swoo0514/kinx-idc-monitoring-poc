@@ -281,7 +281,8 @@ def main():
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
                     + _ask_tool_checks() + _ask_dispatch_checks()
-                    + _ask_table_checks() + _ask_loop_checks())
+                    + _ask_table_checks() + _ask_loop_checks()
+                    + _ask_user_checks())
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
@@ -3381,6 +3382,58 @@ def _ask_loop_checks() -> int:
     finally:
         nametable._terms = saved
         ask.forget_all()
+
+
+def _ask_user_checks() -> int:
+    """사용량이 사용자별로 세어지는가.
+
+    공유 토큰 하나로 들어오면 누가 얼마나 썼는지 알 수 없다. 파트·팀원별 관리가
+    필요해지는 순간 이 계수기가 근거가 된다.
+    """
+    import os
+    import shutil
+    import tempfile
+
+    from . import ask, store
+
+    d = tempfile.mkdtemp(prefix="ask-user-")
+    saved_path = store.PATH
+    store.PATH = os.path.join(d, "hist.db")
+    assert store.init(), "검사용 저장소를 열지 못했다"
+    now = 1786600000.0
+    base = store.calls_since(3600, now=now, user="hong")
+    store.record_call("ask", now=now, user="hong")
+    store.record_call("ask", now=now, user="hong")
+    store.record_call("ask", now=now, user="kim")
+
+    # 1) 사용자별로 갈라 센다
+    assert store.calls_since(3600, now=now, user="hong") - base == 2
+    assert store.calls_since(3600, now=now, user="kim") >= 1
+    # 2) 사용자를 안 주면 전체다 — 기존 호출자의 의미가 바뀌면 안 된다
+    assert store.calls_since(3600, now=now) >= 3
+
+    # 3) 신원이 없으면 익명으로 센다. 세지 않으면 상한이 무의미해진다.
+    assert ask.who("") == ask.ANON and ask.who(None) == ask.ANON
+    # 4) 헤더 값을 그대로 믿지 않고 길이와 글자를 다듬는다
+    assert ask.who("a" * 500) == "a" * ask.USER_MAX_CHARS
+    assert chr(10) not in ask.who("hong" + chr(10) + "doe")
+
+    # 5) 사용자 상한이 걸리는가
+    saved = ask.MAX_PER_USER_HOUR
+    try:
+        ask.MAX_PER_USER_HOUR = 1
+        ok, why = ask.user_budget_ok("kim", now=now)
+        assert not ok and why, (ok, why)
+        ask.MAX_PER_USER_HOUR = 10000
+        assert ask.user_budget_ok("kim", now=now)[0]
+    finally:
+        ask.MAX_PER_USER_HOUR = saved
+        # **열어 둔 채 끝내지 않는다.** store.init() 은 이미 열려 있으면 아무것도
+        # 안 하므로, 뒤 검사가 store.PATH 를 바꿔도 무시되고 남의 파일에 쓴다.
+        store.close()
+        store.PATH = saved_path
+        shutil.rmtree(d, ignore_errors=True)
+    return 9
 
 
 def _proxy_mask_checks() -> int:

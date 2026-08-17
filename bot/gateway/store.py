@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS route (
   route TEXT, dup INTEGER);
 CREATE INDEX IF NOT EXISTS route_ts ON route(ts);
 CREATE TABLE IF NOT EXISTS seen (key TEXT PRIMARY KEY, ts REAL NOT NULL);
-CREATE TABLE IF NOT EXISTS call (ts REAL NOT NULL, kind TEXT);
+CREATE TABLE IF NOT EXISTS call (ts REAL NOT NULL, kind TEXT, user TEXT);
 CREATE INDEX IF NOT EXISTS call_ts ON call(ts);
 """
 
@@ -80,6 +80,13 @@ def _migrate(c) -> None:
         log.info("판정 이력 스키마를 판올림했다 — 행 %d개 보존",
                  c.execute("SELECT COUNT(*) FROM judgment").fetchone()[0])
     c.executescript(_SCHEMA)
+    # 이미 있던 call 표에는 user 열이 없다. 없으면 사용자별 계수가 조용히 0이 된다.
+    if "user" not in _columns(c, "call"):
+        try:
+            c.execute("ALTER TABLE call ADD COLUMN user TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
     have = _columns(c, "judgment")
     for name in JUDGMENT_COLS:
         if name in have:
@@ -275,18 +282,32 @@ def seen_once(key: str, ttl_s: float, now: float = None) -> bool:
             return True
 
 
-def record_call(kind: str, now: float = None) -> bool:
+def record_call(kind: str, now: float = None, user: str = "") -> bool:
+    """호출 한 건을 센다. 사용자를 주면 그 이름으로도 셀 수 있다.
+
+    누가 얼마나 썼는지는 공유 토큰 하나로는 알 수 없다. 파트·팀원별 관리가 필요해지는
+    순간 이 열이 근거가 된다.
+    """
     now = time.time() if now is None else now
-    return _exec("INSERT INTO call (ts,kind) VALUES (?,?)", (now, kind)) is True
+    return _exec("INSERT INTO call (ts,kind,user) VALUES (?,?,?)",
+                 (now, kind, user or "")) is True
 
 
-def calls_since(window_s: float, now: float = None, kind: str = "") -> int:
+def calls_since(window_s: float, now: float = None, kind: str = "",
+                user: str = "") -> int:
+    """창 안의 호출 수. 용도나 사용자로 좁힐 수 있다.
+
+    **사용자를 안 주면 전체다.** 기존 호출자(시간당 예산 판정)의 의미가 바뀌면 안 된다.
+    """
     now = time.time() if now is None else now
     sql = "SELECT COUNT(*) AS n FROM call WHERE ts>=? AND ts<=?"
     args = [now - window_s, now]
     if kind:
         sql += " AND kind=?"
         args.append(kind)
+    if user:
+        sql += " AND user=?"
+        args.append(user)
     r = _exec(sql, tuple(args), fetch="one")
     return int(r["n"]) if r else 0
 

@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from . import ask
 from . import collector
 from . import heartbeat
 from . import incident
@@ -212,6 +213,34 @@ def healthz():
             "store": store.status()["open"],
             "annotations": bool(_grafana_state.get("ok")),
             "zabbix": all(_zabbix_state.values()) if _zabbix_state else None}
+
+
+class AskRequest(BaseModel):
+    question: str
+    session: str = ""
+    history: list = []
+
+
+@app.post("/ask")
+async def ask_endpoint(req: AskRequest, request: Request,
+                       x_gateway_token: str = Header(default=""),
+                       x_grafana_user: str = Header(default="")):
+    """사람이 자연어로 묻는 창구 (§27).
+
+    신원은 Grafana 가 프록시하면서 붙이는 헤더로 들어온다. **그 헤더는 Grafana 를 거친
+    요청에서만 믿을 수 있으므로**, 이 포트를 Grafana 만 접근하도록 막는 것이 전제다.
+    """
+    if not _token_ok(x_gateway_token):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    user = ask.who(x_grafana_user)
+    ok, why = ask.user_budget_ok(user)
+    if not ok:
+        return JSONResponse(status_code=429, content={"error": why, "user": user})
+    res = await ask.run_ask(req.question, history=req.history,
+                            sid=req.session or user, user=user)
+    log.info("ask user=%s rounds=%s stopped=%s", user, res.get("rounds"),
+             res.get("stopped"))
+    return res
 
 
 @app.post("/v1/messages")

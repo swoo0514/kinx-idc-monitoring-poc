@@ -293,7 +293,7 @@ def _blocks_text(content) -> str:
 
 
 async def run_ask(question: str, history=None, sid: str = "", table: dict = None,
-                  model_fn=None, clock=None, now: int = None) -> dict:
+                  model_fn=None, clock=None, now: int = None, user: str = "") -> dict:
     """질문 하나에 답한다. 어떤 실패도 예외로 던지지 않는다.
 
     반환 `{"text", "trace", "rounds", "stopped", "error"}`.
@@ -340,7 +340,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
             stopped = "deadline"
             break
         res = await asyncio.to_thread(egress.call_raw, lambda: _model(messages),
-                                      kind="ask")
+                                      kind="ask", user=user)
         if not res["ok"]:
             return {"text": "", "trace": trace, "rounds": len(trace),
                     "stopped": "llm_failed",
@@ -377,3 +377,42 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
                 % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
     return {"text": mk.unmask(text), "trace": trace, "rounds": len(trace),
             "stopped": stopped, "error": ""}
+
+
+# ---------------------------------------------------------------------------
+# 사용자별 사용량
+#
+# 게이트웨이 인증은 공유 토큰 하나다. 그것만으로는 누가 얼마나 썼는지 알 수 없다.
+# 신원은 Grafana 가 프록시하면서 붙이는 `X-Grafana-User` 로 들어온다.
+#
+# **그 헤더는 Grafana 를 거친 요청에서만 믿을 수 있다.** 게이트웨이 포트를 Grafana 만
+# 접근하도록 막지 않으면 누구나 헤더를 지어낸다. 그 방화벽 규칙이 이 계수의 전제다.
+# ---------------------------------------------------------------------------
+
+ANON = "(미상)"
+USER_MAX_CHARS = 64
+MAX_PER_USER_HOUR = int(os.environ.get("ASK_MAX_PER_USER_HOUR", "60"))
+
+_USER_STRIP = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def who(header_value) -> str:
+    """헤더 값을 계수에 쓸 이름으로 다듬는다.
+
+    신원이 없으면 익명으로 **센다**. 안 세면 신원을 안 주는 쪽이 상한을 피해 간다.
+    """
+    name = _USER_STRIP.sub("", str(header_value or "")).strip()
+    return name[:USER_MAX_CHARS] if name else ANON
+
+
+def user_budget_ok(user: str, now: float = None) -> tuple:
+    """이 사용자가 시간당 상한 안에 있는가. 반환 `(가능 여부, 사유)`."""
+    from . import store
+
+    if MAX_PER_USER_HOUR <= 0:
+        return True, ""
+    used = store.calls_since(3600, now=now, kind="ask", user=user)
+    if used >= MAX_PER_USER_HOUR:
+        return False, ("한 시간에 %d회까지 물을 수 있다. 지금까지 %d회 썼다"
+                       % (MAX_PER_USER_HOUR, used))
+    return True, ""

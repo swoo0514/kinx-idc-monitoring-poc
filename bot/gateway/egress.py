@@ -98,7 +98,7 @@ def _hour_ok(exempt: bool, now: float = None, cap: int = None) -> bool:
         return True
 
 
-def _record(kind: str, now: float = None) -> None:
+def _record(kind: str, now: float = None, user: str = "") -> None:
     """실제로 나가기 직전에 센다.
 
     확인과 세는 것을 나눈 이유가 있다. 전에는 확인하면서 같이 셌는데, 그러면 자리를
@@ -110,7 +110,7 @@ def _record(kind: str, now: float = None) -> None:
     (MAX_CONCURRENCY)만큼이라 총량 대비 무시할 수 있다.
     """
     now = time.time() if now is None else now
-    store.record_call(kind or "?", now)
+    store.record_call(kind or "?", now, user=user)
     with _lock:
         _calls[:] = [t for t in _calls if now - t <= 3600]
         _calls.append(now)
@@ -154,7 +154,8 @@ class Blocked(Exception):
 
 
 @contextlib.contextmanager
-def guard(kind: str = "", exempt: bool = False, max_per_hour: int = None):
+def guard(kind: str = "", exempt: bool = False, max_per_hour: int = None,
+          user: str = ""):
     """동시 수·시간당 총량을 걸고 실제 발신 직전에 센다 (§21-2)."""
     if not _hour_ok(exempt, cap=max_per_hour):
         log.warning("시간당 상한 도달 — %d건/1h (용도 %s)",
@@ -168,7 +169,7 @@ def guard(kind: str = "", exempt: bool = False, max_per_hour: int = None):
         raise Blocked(BLOCKED_QUEUE)
     _enter()
     try:
-        yield lambda: _record(kind)
+        yield lambda: _record(kind, user=user)
     finally:
         _leave()
         _sem.release()
@@ -206,7 +207,7 @@ def call(adapters, system: str, user: str, exempt: bool = False,
     return _out("", "none", True, BLOCKED_NONE)
 
 
-def call_raw(fn, exempt: bool = False, kind: str = "") -> dict:
+def call_raw(fn, exempt: bool = False, kind: str = "", user: str = "") -> dict:
     """형태가 다른 호출(도구 사용 등)도 같은 출구를 지나게 한다.
 
     반환 `{"ok", "value", "reason", "elapsed_s"}`. `call()` 과 마찬가지로 예외를
@@ -219,7 +220,7 @@ def call_raw(fn, exempt: bool = False, kind: str = "") -> dict:
                 "elapsed_s": round(time.monotonic() - t0, 2)}
 
     try:
-        with guard(kind, exempt) as record:
+        with guard(kind, exempt, user=user) as record:
             record()
             return _out(True, fn())
     except Blocked as b:
