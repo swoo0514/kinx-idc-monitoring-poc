@@ -727,6 +727,26 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
 
 
 
+def drop_dangling(msgs: list) -> list:
+    """결과가 안 붙은 도구 요청을 끝에서 걷어 낸다.
+
+    상한에 걸려 멈추면 마지막 남는 것이 **모델이 부르려던 도구 요청**이다. 그 요청은
+    실행되지 않았으므로 결과 블록이 없고, 그대로 다시 보내면 Anthropic 이 400 으로
+    거부한다(2026-08-18 랩 실측: `tool_use ids were found without tool_result blocks`).
+    그러면 마무리 호출이 통째로 실패해 사람은 또 답을 못 받는다.
+    """
+    out = list(msgs or [])
+    while out:
+        m = out[-1]
+        blocks = m.get("content")
+        if m.get("role") != "assistant" or not isinstance(blocks, list):
+            break
+        if not any(isinstance(b, dict) and b.get("type") == "tool_use" for b in blocks):
+            break
+        out.pop()
+    return out
+
+
 async def force_answer(system: str, msgs: list, specs: list, user: str,
                        model_fn, exec_tool, trace: list) -> bool:
     """상한에 닿았으면 **한 번만 더** 불러 답을 받는다. 반환은 답을 받았는가.
@@ -745,7 +765,7 @@ async def force_answer(system: str, msgs: list, specs: list, user: str,
     only = [t for t in (specs or []) if t.get("name") == "answer"]
     if not only:
         return False
-    last = msgs + [{"role": "user", "content": CAP_NOTE}]
+    last = drop_dangling(msgs) + [{"role": "user", "content": CAP_NOTE}]
 
     def _model():
         if model_fn is not None:

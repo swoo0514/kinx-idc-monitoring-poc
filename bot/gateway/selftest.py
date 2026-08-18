@@ -4004,7 +4004,18 @@ def _cap_answer_checks() -> int:
 
     r2 = asyncio.run(ask.run_ask("이 구간 어땠어", table=table, model_fn=dead))
     assert "상한" in r2["text"] and "security_alerts" in r2["text"], r2["text"]
-    return 8
+
+    # 결과가 안 붙은 도구 요청은 걷어 내고 보낸다. 그대로 보내면 Anthropic 이 400 으로
+    # 거부하고 마무리 호출이 통째로 실패한다(2026-08-18 랩 실측).
+    hang = [{"role": "user", "content": "질문"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "x",
+                                               "name": "security_alerts", "input": {}}]}]
+    assert len(ask.drop_dangling(hang)) == 1, ask.drop_dangling(hang)
+    done = hang + [{"role": "user", "content": [{"type": "tool_result",
+                                                 "tool_use_id": "x", "content": "{}"}]}]
+    assert len(ask.drop_dangling(done)) == 3
+    assert ask.drop_dangling([]) == []
+    return 12
 
 
 def _ask_dispatch_checks() -> int:
