@@ -259,6 +259,11 @@ async def ask_endpoint(req: AskRequest, request: Request,
     cid = req.convo_id or convo.create(user, req.question)
     stored = convo.load(cid, user)
     hist = [{"role": m["role"], "content": m["content"]} for m in stored] or req.history
+    # 화면이 무엇을 넘겼는지 남긴다. 구간이 안 오면 도구가 최근 창으로 떨어지는데,
+    # 회신만 보면 그것이 화면 탓인지 게이트웨이 탓인지 가릴 수 없다(2026-08-18).
+    log.info("ask panel keys=%s from=%r to=%r",
+             sorted((req.panel or {}).keys()),
+             (req.panel or {}).get("from"), (req.panel or {}).get("to"))
     res = await ask.run_ask(req.question, history=hist,
                             sid=req.session or cid or user, user=user, panel=req.panel)
     convo.append(cid, user, "user", req.question)
