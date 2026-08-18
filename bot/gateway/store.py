@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS route (
 CREATE INDEX IF NOT EXISTS route_ts ON route(ts);
 CREATE TABLE IF NOT EXISTS seen (key TEXT PRIMARY KEY, ts REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS call (ts REAL NOT NULL, kind TEXT, user TEXT);
+CREATE TABLE IF NOT EXISTS usage (
+  ts REAL NOT NULL, kind TEXT, user TEXT, in_tok INTEGER, out_tok INTEGER);
+CREATE INDEX IF NOT EXISTS usage_ts ON usage(ts);
 CREATE INDEX IF NOT EXISTS call_ts ON call(ts);
 """
 
@@ -293,6 +296,34 @@ def record_call(kind: str, now: float = None, user: str = "") -> bool:
                  (now, kind, user or "")) is True
 
 
+def record_tokens(kind: str, user: str, in_tok: int, out_tok: int,
+                  now: float = None) -> bool:
+    """실제로 쓴 토큰 수. **호출 횟수만 세면 짧은 질문과 긴 조사가 같은 한 건이다.**
+
+    응답에 실려 오는 값을 그대로 남긴다(사후 정산). 추정하지 않는다.
+    """
+    now = time.time() if now is None else now
+    return _exec("INSERT INTO usage (ts,kind,user,in_tok,out_tok) VALUES (?,?,?,?,?)",
+                 (now, kind, user or "", int(in_tok or 0), int(out_tok or 0))) is True
+
+
+def tokens_since(window_s: float, now: float = None, kind: str = "",
+                 user: str = "") -> dict:
+    """창 안에 쓴 토큰 합계. 반환 `{"in": n, "out": n}`."""
+    now = time.time() if now is None else now
+    sql = ("SELECT COALESCE(SUM(in_tok),0) AS i, COALESCE(SUM(out_tok),0) AS o"
+           " FROM usage WHERE ts>=? AND ts<=?")
+    args = [now - window_s, now]
+    if kind:
+        sql += " AND kind=?"
+        args.append(kind)
+    if user:
+        sql += " AND user=?"
+        args.append(user)
+    r = _exec(sql, tuple(args), fetch="one")
+    return {"in": int(r["i"]), "out": int(r["o"])} if r else {"in": 0, "out": 0}
+
+
 def calls_since(window_s: float, now: float = None, kind: str = "",
                 user: str = "") -> int:
     """창 안의 호출 수. 용도나 사용자로 좁힐 수 있다.
@@ -365,3 +396,4 @@ def prune(now: float = None) -> None:
     _exec("DELETE FROM feedback WHERE judgment_id NOT IN (SELECT id FROM judgment)")
     _exec("DELETE FROM route WHERE ts < ?", (cut,))
     _exec("DELETE FROM call WHERE ts < ?", (now - 2 * 86400,))
+    _exec("DELETE FROM usage WHERE ts < ?", (now - KEEP_DAYS * 86400,))

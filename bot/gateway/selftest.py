@@ -3610,13 +3610,63 @@ def _ask_loop_checks() -> int:
             ask.FACTS_FILE = saved_path
             ask.load_facts.cache_clear()
 
-        # ⑱ 모델이 죽어도 예외를 위로 던지지 않는다
+        # ⑱ **실제 토큰 수로 센다.** 호출 횟수만 세면 짧은 질문과 긴 조사가 같은
+        #    한 건이다. 응답에 실려 오는 값으로 사후 정산한다.
+        import os as _os
+        import shutil as _sh
+        import tempfile as _tf
+
+        from . import store as st2
+
+        _d = _tf.mkdtemp(prefix="ask-tok-")
+        _saved_p = st2.PATH
+        st2.PATH = _os.path.join(_d, "h.db")
+        assert st2.init(), "검사용 저장소를 열지 못했다"
+
+        def with_usage(system, messages, tools):
+            return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "답"}],
+                    "usage": {"input_tokens": 1200, "output_tokens": 300}}
+
+        base_tok = st2.tokens_since(3600, user="tester")
+        asyncio.run(ask.run_ask("토큰 세기", table=long_tbl, model_fn=with_usage,
+                                user="tester"))
+        got = st2.tokens_since(3600, user="tester")
+        assert got["in"] - base_tok["in"] == 1200, (got, base_tok)
+        assert got["out"] - base_tok["out"] == 300, got
+
+        st2.close()
+        st2.PATH = _saved_p
+        _sh.rmtree(_d, ignore_errors=True)
+
+        # ⑲ **멈추면 그때까지 본 것으로 끝낸다.** 사람이 끊었는데 계속 돌면 비용만 든다.
+        def keeps_going(system, messages, tools):
+            ask.cancel("sess-x")          # 첫 라운드 뒤 사람이 멈춤 단추를 눌렀다
+            return {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "c1", "name": "list_hosts", "input": {}}]}
+
+        r = asyncio.run(ask.run_ask("멈춤", table=long_tbl, model_fn=keeps_going,
+                                    sid="sess-x"))
+        assert r["stopped"] == "cancelled", r["stopped"]
+        assert len(r["trace"]) <= 1, r["trace"]
+        assert r["text"], "멈춰도 사람에게 할 말은 있어야 한다"
+
+        # ⑳ **사람이 보던 패널은 코드가 붙인다.** 모델 판단에 맡기면 안 붙는다
+        #    (2026-08-18 실측: 패널에서 열었는데 그림이 없었다). 라운드도 안 쓴다.
+        r = asyncio.run(ask.run_ask("이 구간 뭐였나", table=long_tbl,
+                                    model_fn=lambda *a: _text("확인했다"),
+                                    panel={"uid": "d1", "panelId": 2,
+                                           "host": "vm-p3-target-002.novalocal",
+                                           "from": 1786589786, "to": 1786604263}))
+        assert r["images"] and r["images"][0]["url"].startswith("/render/d-solo/d1"), r["images"]
+        assert r["rounds"] == 0, "그림을 붙이느라 라운드를 쓰면 안 된다"
+
+        # ㉑ 모델이 죽어도 예외를 위로 던지지 않는다
         def dead(system, messages, tools):
             raise RuntimeError("model down")
 
         r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
         assert r.get("error") and "모델" in r["error"], r
-        return 44
+        return 52
     finally:
         nametable._terms = saved
         ask.forget_all()

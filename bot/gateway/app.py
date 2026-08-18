@@ -219,6 +219,8 @@ class AskRequest(BaseModel):
     question: str
     session: str = ""
     history: list = []
+    # 사람이 보고 있던 패널. 있으면 그 그림을 코드가 붙인다(모델 판단에 안 맡긴다).
+    panel: dict = {}
 
 
 @app.post("/ask")
@@ -237,10 +239,19 @@ async def ask_endpoint(req: AskRequest, request: Request,
     if not ok:
         return JSONResponse(status_code=429, content={"error": why, "user": user})
     res = await ask.run_ask(req.question, history=req.history,
-                            sid=req.session or user, user=user)
+                            sid=req.session or user, user=user, panel=req.panel)
     log.info("ask user=%s rounds=%s stopped=%s", user, res.get("rounds"),
              res.get("stopped"))
     return res
+
+
+@app.post("/ask/cancel")
+def ask_cancel(req: AskRequest, x_gateway_token: str = Header(default="")):
+    """사람이 멈춤 단추를 눌렀다. 다음 라운드에서 멈춘다."""
+    if not _token_ok(x_gateway_token):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    ask.cancel(req.session or "-")
+    return {"ok": True}
 
 
 @app.post("/v1/messages")

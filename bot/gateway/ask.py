@@ -27,6 +27,7 @@ SESSION_TTL_S = 1800
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 _sessions: dict = {}     # sid -> {"rev": {토큰: 원문}, "at": 단조시각}
+_cancelled: set = set()  # 사람이 멈춘 세션. 다음 라운드에서 확인한다.
 _lock = threading.Lock()
 
 
@@ -183,9 +184,25 @@ def prune_sessions(now: float = None) -> int:
     return len(dead)
 
 
+def cancel(sid: str) -> None:
+    """사람이 멈춤 단추를 눌렀다. 다음 라운드에서 멈춘다.
+
+    지금 도는 조회를 중간에 끊지는 않는다. 끊어도 이미 나간 호출의 비용은 그대로이고,
+    받아 놓은 것을 버리면 사람에게 남는 것이 없다.
+    """
+    with _lock:
+        _cancelled.add(str(sid or "-"))
+
+
+def _take_cancel(sid: str) -> bool:
+    with _lock:
+        return bool(_cancelled.discard(sid) if sid in _cancelled else False) or False
+
+
 def forget_all() -> None:
     with _lock:
         _sessions.clear()
+        _cancelled.clear()
 
 
 def sanitize_question(text: str, mk: masking.Masker) -> dict:
@@ -426,7 +443,7 @@ def _blocks_text(content) -> str:
 
 async def run_ask(question: str, history=None, sid: str = "", table: dict = None,
                   model_fn=None, clock=None, now: int = None, user: str = "",
-                  panel_fn=None) -> dict:
+                  panel_fn=None, panel: dict = None) -> dict:
     """질문 하나에 답한다. 어떤 실패도 예외로 던지지 않는다.
 
     반환 `{"text", "trace", "rounds", "stopped", "error"}`.
@@ -474,6 +491,20 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
 
     hist, dropped = trim_history(history)
     images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
+    # **사람이 보고 있던 패널은 코드가 붙인다.** 모델에게 맡기면 안 붙거나 한 라운드를
+    # 더 쓴다. 무엇을 보다가 물었는지는 이미 알고 있으므로 물어볼 이유가 없다.
+    if panel and panel.get("uid") and panel.get("host"):
+        from . import grafana
+        try:
+            images.append({
+                "id": "img-panel",
+                "title": str(panel.get("title") or "보고 있던 패널"),
+                "url": grafana.panel_url(panel["uid"], panel.get("panelId"),
+                                         panel["host"],
+                                         int(panel.get("from") or now - 3600),
+                                         int(panel.get("to") or now))})
+        except Exception as e:
+            log.warning("보던 패널을 못 붙였다: %s", e)
     messages = list(hist)
     if dropped:
         messages.insert(0, {"role": "user", "content": DROP_NOTE})
@@ -492,6 +523,11 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         if tick() - started > DEADLINE_S:
             stopped = "deadline"
             break
+        with _lock:
+            if (sid or "-") in _cancelled:
+                _cancelled.discard(sid or "-")
+                stopped = "cancelled"
+                break
         res = await asyncio.to_thread(egress.call_raw, lambda: _model(messages),
                                       kind="ask", user=user)
         if not res["ok"]:
@@ -499,6 +535,12 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
                     "stopped": "llm_failed",
                     "error": "모델을 부르지 못했다: %s" % res["reason"]}
         reply = res["value"]
+        # **실제로 쓴 토큰으로 센다.** 추정하지 않고 응답에 실려 온 값을 남긴다.
+        u = reply.get("usage") or {}
+        if u:
+            from . import store
+            store.record_tokens("ask", user, u.get("input_tokens"),
+                                u.get("output_tokens"))
         text = _blocks_text(reply.get("content")) or text
         uses = [b for b in (reply.get("content") or [])
                 if isinstance(b, dict) and b.get("type") == "tool_use"]
@@ -537,7 +579,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     else:
         stopped = "rounds"
 
-    if stopped in ("rounds", "deadline", "budget") and not text:
+    if stopped in ("rounds", "deadline", "budget", "cancelled") and not text:
         text = ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
                 % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
     remember(sid or "-", mk)
