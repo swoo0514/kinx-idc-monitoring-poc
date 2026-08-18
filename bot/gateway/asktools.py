@@ -190,7 +190,10 @@ def _target(args: dict, ctx: dict) -> tuple:
     tok = str((args or {}).get("host") or "").strip()
     if not tok:
         return None, _err("host 인자가 없다. list_hosts 로 대상 토큰을 먼저 확인하라")
-    ent = (ctx.get("table") or {}).get(tok)
+    table = ctx.get("table") or {}
+    # **모델은 형식을 바꿔 쓴다.** 대괄호를 떼고 넣는 일이 잦다(2026-08-18 실측).
+    # 형식 때문에 대상을 못 찾는 것은 사람에게 아무 값이 없는 실패다.
+    ent = table.get(tok) or table.get("[%s]" % tok.strip("[]"))
     if not ent:
         return None, _err("알 수 없는 대상이다: %s. list_hosts 에 있는 토큰만 쓸 수 있다" % tok)
     return ent, None

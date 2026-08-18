@@ -3200,12 +3200,20 @@ def _ask_dispatch_checks() -> int:
         "[host-aaa]": {"host": "web-01", "source": "zabbix-internal",
                        "logs": "web-01.example", "security": "web-01.example"},
     }
-    ctx = {"table": table, "now": 1786590000, "zbx": None}
+    async def _logs(q, w, lim):
+        return {"logs": [], "status": "ok"}
+
+    ctx = {"table": table, "now": 1786590000, "zbx": None, "fetch_logs": _logs}
 
     # ① 목록에 없는 도구는 거부한다. 모델이 이름을 지어내도 실행되면 안 된다.
     r = asyncio.run(asktools.run_tool("delete_host", {}, ctx))
     assert r.get("error"), r
     assert "delete_host" in str(r), r
+
+    # ①-b **모델은 형식을 바꿔 쓴다.** 대괄호를 떼고 넣어도 같은 대상으로 본다
+    #      (2026-08-18 랩 실측: host-aaa 로 넣어 '알 수 없는 대상' 으로 튕겼다).
+    r = asyncio.run(asktools.run_tool("host_logs", {"host": "host-aaa"}, ctx))
+    assert not r.get("error"), r
 
     # ② 표에 없는 대상은 거부한다. 표는 허용된 감시 서버에서만 만들어진다.
     r = asyncio.run(asktools.run_tool("host_logs", {"host": "[host-zzz]"}, ctx))
@@ -3235,7 +3243,7 @@ def _ask_dispatch_checks() -> int:
     # ⑦ 판정 이력은 영역으로 걸러 읽는다. 기존 함수를 고치면 품질 지표의 분모가 바뀐다.
     assert hasattr(store, "judgments_in_realms"), "영역 조건이 붙은 읽기 함수가 없다"
     assert store.judgments_in_realms([]) == [], "허용 영역이 없으면 아무것도 안 준다"
-    return 14
+    return 15
 
 
 def _ask_table_checks() -> int:
