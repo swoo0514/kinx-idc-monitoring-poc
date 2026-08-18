@@ -140,8 +140,11 @@ def make_model(system: str, specs: list, user: str, model_fn=None):
             u = reply.get("usage") or {}
             if u:
                 # **실제로 쓴 토큰으로 센다.** 추정하지 않는다.
-                store.record_tokens("ask", user, u.get("input_tokens"),
-                                    u.get("output_tokens"))
+                store.record_tokens(
+                    "ask", user, u.get("input_tokens"), u.get("output_tokens"),
+                    cache_write=u.get("cache_creation_input_tokens") or 0,
+                    cache_read=u.get("cache_read_input_tokens") or 0,
+                    model=reply.get("model") or "")
             return ChatResult(generations=[ChatGeneration(message=to_ai_message(reply))])
 
     return GatewayChat()

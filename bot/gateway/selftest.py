@@ -280,7 +280,7 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks()
+                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks()
                     + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
@@ -3402,6 +3402,64 @@ def _read_source(rel: str) -> str:
     import os
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return io.open(os.path.join(here, rel), encoding="utf-8").read()
+
+
+
+def _cache_checks() -> int:
+    """프롬프트 캐싱이 실제로 걸릴 모양인가.
+
+    캐싱은 접두사 일치다. 앞에서 한 바이트만 달라져도 그 뒤 전부가 캐시에서 빠진다.
+    걸리지 않아도 오류가 나지 않으므로 **조용히 비용만 낸다.** 그래서 모양을 검사로 잠근다.
+    """
+    from . import asktools, llm, store
+
+    # ① 시스템 문구를 블록으로 감싸고 마지막 블록에 표시를 단다. 렌더 순서가
+    #    도구 → 시스템 → 대화라서 이 한 곳이 도구와 시스템을 함께 캐시한다.
+    blocks = llm.cached_system("긴 시스템 문구")
+    assert isinstance(blocks, list) and blocks[-1]["cache_control"]["type"] == "ephemeral"
+    assert blocks[-1]["text"] == "긴 시스템 문구"
+
+    # ② 끌 수 있어야 한다. 최소 길이에 못 미치는 배포에서는 쓰기 값만 더 낸다.
+    import os
+    saved = os.environ.get("LLM_CACHE")
+    try:
+        os.environ["LLM_CACHE"] = "0"
+        assert llm.cached_system("x") == "x", "끄면 문자열 그대로여야 한다"
+    finally:
+        if saved is None:
+            os.environ.pop("LLM_CACHE", None)
+        else:
+            os.environ["LLM_CACHE"] = saved
+
+    # ③ 도구 정의가 같은 표에 대해 같은 바이트다(캐시 접두사의 맨 앞).
+    t = {"[host-b]": {}, "[host-a]": {}}
+    import json
+    a = json.dumps(asktools.build_tool_specs(t), ensure_ascii=False)
+    b = json.dumps(asktools.build_tool_specs(dict(reversed(list(t.items())))),
+                   ensure_ascii=False)
+    assert a == b, "도구 정의가 요청마다 달라진다. 캐시가 한 번도 안 걸린다"
+
+    # ④ **캐시 토큰을 따로 센다.** 읽기는 정가의 0.1배, 쓰기는 1.25배라 입력에 뭉뚱그리면
+    #    절감분이 숫자에 안 나타난다.
+    import tempfile
+    d = tempfile.mkdtemp(prefix="cache-")
+    saved_path = store.PATH
+    try:
+        store.PATH = os.path.join(d, "c.db")
+        store.close()
+        store.init()
+        store.record_tokens("ask", "u", 100, 20, now=1000.0,
+                            cache_write=500, cache_read=4000, model="m1")
+        got = store.tokens_since(3600, now=1001.0, kind="ask")
+        assert got["in"] == 100 and got["out"] == 20, got
+        assert got["cache_read"] == 4000 and got["cache_write"] == 500, got
+        # 옛 호출 방식도 받는다. 기록이 끊기면 비교 자체가 안 된다.
+        store.record_tokens("ask", "u", 10, 5, now=1002.0)
+        assert store.tokens_since(3600, now=1003.0, kind="ask")["in"] == 110
+    finally:
+        store.close()
+        store.PATH = saved_path
+    return 12
 
 
 def _ask_dispatch_checks() -> int:

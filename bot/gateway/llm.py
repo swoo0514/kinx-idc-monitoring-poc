@@ -367,6 +367,23 @@ if __name__ == "__main__":
     print(json.dumps(masker._rev, ensure_ascii=False, indent=1))
 
 
+def cached_system(system: str):
+    """시스템 문구를 캐시 표시가 붙은 블록으로. 끄면 문자열 그대로.
+
+    렌더 순서가 도구 → 시스템 → 대화라서, 시스템 마지막 블록에 표시를 하나 달면 도구
+    정의와 시스템 문구가 함께 캐시된다. 읽기는 정가의 약 0.1배, 쓰기는 1.25배이므로
+    두 번째 라운드부터 이득이다.
+
+    **최소 길이가 모델마다 다르다.** 접두사가 그 아래면 오류 없이 조용히 안 걸리고
+    쓰기 값만 더 낸다. 2026-08-18 랩 실측으로 haiku 4.5 는 4,096 토큰이 최소이고 우리
+    접두사는 7,119 토큰이다. 프롬프트를 줄일 때 이 여유를 확인할 것.
+    """
+    if os.environ.get("LLM_CACHE", "1").strip().lower() in ("0", "false", "no"):
+        return system
+    return [{"type": "text", "text": system,
+             "cache_control": {"type": "ephemeral"}}]
+
+
 def claude_tools(system: str, messages: list, tools: list) -> dict:
     """도구를 쓸 수 있는 호출. 반환은 응답 본문 그대로(content 블록·stop_reason).
 
@@ -376,6 +393,7 @@ def claude_tools(system: str, messages: list, tools: list) -> dict:
     import anthropic
     ad = ClaudeAdapter()
     client = anthropic.Anthropic(timeout=ad.timeout, max_retries=0)
-    resp = client.messages.create(model=ad.model, max_tokens=MAX_TOKENS, system=system,
+    resp = client.messages.create(model=ad.model, max_tokens=MAX_TOKENS,
+                                  system=cached_system(system),
                                   messages=messages, tools=tools)
     return resp.model_dump()

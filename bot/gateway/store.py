@@ -51,7 +51,8 @@ CREATE INDEX IF NOT EXISTS route_ts ON route(ts);
 CREATE TABLE IF NOT EXISTS seen (key TEXT PRIMARY KEY, ts REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS call (ts REAL NOT NULL, kind TEXT, user TEXT);
 CREATE TABLE IF NOT EXISTS usage (
-  ts REAL NOT NULL, kind TEXT, user TEXT, in_tok INTEGER, out_tok INTEGER);
+  ts REAL NOT NULL, kind TEXT, user TEXT, in_tok INTEGER, out_tok INTEGER,
+  cache_write INTEGER, cache_read INTEGER, model TEXT);
 CREATE INDEX IF NOT EXISTS usage_ts ON usage(ts);
 CREATE INDEX IF NOT EXISTS call_ts ON call(ts);
 """
@@ -87,6 +88,17 @@ def _migrate(c) -> None:
     if "user" not in _columns(c, "call"):
         try:
             c.execute("ALTER TABLE call ADD COLUMN user TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+    # 이미 있던 usage 표에는 캐시·모델 열이 없다. 없으면 절감분과 등급별 사용량이
+    # 조용히 0이 되어 비교 자체가 성립하지 않는다.
+    have_usage = _columns(c, "usage")
+    for name in ("cache_write INTEGER", "cache_read INTEGER", "model TEXT"):
+        if name.split()[0] in have_usage:
+            continue
+        try:
+            c.execute("ALTER TABLE usage ADD COLUMN %s" % name)
         except sqlite3.OperationalError as e:
             if "duplicate column" not in str(e).lower():
                 raise
@@ -297,21 +309,33 @@ def record_call(kind: str, now: float = None, user: str = "") -> bool:
 
 
 def record_tokens(kind: str, user: str, in_tok: int, out_tok: int,
-                  now: float = None) -> bool:
+                  now: float = None, cache_write: int = 0, cache_read: int = 0,
+                  model: str = "") -> bool:
     """실제로 쓴 토큰 수. **호출 횟수만 세면 짧은 질문과 긴 조사가 같은 한 건이다.**
 
     응답에 실려 오는 값을 그대로 남긴다(사후 정산). 추정하지 않는다.
+
+    **캐시 토큰을 따로 센다.** 읽기는 정가의 약 0.1배, 쓰기는 1.25배다. 입력에 뭉뚱그리면
+    캐싱으로 아낀 몫이 숫자에 나타나지 않아 절감 여부를 확인할 수 없다. 모델도 함께
+    남긴다 — 등급을 나눈 뒤에는 어느 등급이 얼마를 썼는지가 비교의 전부다.
     """
     now = time.time() if now is None else now
-    return _exec("INSERT INTO usage (ts,kind,user,in_tok,out_tok) VALUES (?,?,?,?,?)",
-                 (now, kind, user or "", int(in_tok or 0), int(out_tok or 0))) is True
+    return _exec("INSERT INTO usage (ts,kind,user,in_tok,out_tok,cache_write,"
+                 "cache_read,model) VALUES (?,?,?,?,?,?,?,?)",
+                 (now, kind, user or "", int(in_tok or 0), int(out_tok or 0),
+                  int(cache_write or 0), int(cache_read or 0), model or "")) is True
 
 
 def tokens_since(window_s: float, now: float = None, kind: str = "",
                  user: str = "") -> dict:
-    """창 안에 쓴 토큰 합계. 반환 `{"in": n, "out": n}`."""
+    """창 안에 쓴 토큰 합계.
+
+    반환 `{"in", "out", "cache_write", "cache_read"}`. 캐시 두 값은 단가가 달라
+    입력과 합치면 절감분이 안 보인다.
+    """
     now = time.time() if now is None else now
-    sql = ("SELECT COALESCE(SUM(in_tok),0) AS i, COALESCE(SUM(out_tok),0) AS o"
+    sql = ("SELECT COALESCE(SUM(in_tok),0) AS i, COALESCE(SUM(out_tok),0) AS o,"
+           " COALESCE(SUM(cache_write),0) AS cw, COALESCE(SUM(cache_read),0) AS cr"
            " FROM usage WHERE ts>=? AND ts<=?")
     args = [now - window_s, now]
     if kind:
@@ -321,7 +345,10 @@ def tokens_since(window_s: float, now: float = None, kind: str = "",
         sql += " AND user=?"
         args.append(user)
     r = _exec(sql, tuple(args), fetch="one")
-    return {"in": int(r["i"]), "out": int(r["o"])} if r else {"in": 0, "out": 0}
+    if not r:
+        return {"in": 0, "out": 0, "cache_write": 0, "cache_read": 0}
+    return {"in": int(r["i"]), "out": int(r["o"]),
+            "cache_write": int(r["cw"]), "cache_read": int(r["cr"])}
 
 
 def calls_since(window_s: float, now: float = None, kind: str = "",
