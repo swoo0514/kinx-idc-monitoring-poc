@@ -1404,8 +1404,8 @@ Times](https://github.com/grafana/grafana-image-renderer/issues/44)), 공식 문
 설정은 `--browser.readiness.prior-wait`(기본 1초)·`--browser.scroll-wait`(기본 50밀리초)
 정도뿐입니다([Troubleshoot image rendering](https://grafana.com/docs/grafana/latest/setup-grafana/image-rendering/troubleshooting/)).
 
-**그래서 줄이지 않고 보이게 했습니다.** 질의 창구가 그림을 그리는 동안 "관측 화면을
-그리는 중입니다 (약 7초)" 를 자리에 둡니다. 빈 칸이면 고장으로 보입니다. 실패하면
-대시보드 링크로 안내합니다.
+**그래서 줄이지 않고 보이게 했습니다.** 그리는 동안 스피너와 "패널 로딩 중" 을 자리에
+둡니다. 빈 칸이면 고장으로 보입니다. 실패하면 "패널을 못 불러왔습니다" 와 대시보드
+링크가 남습니다.
 
 답 자체는 그림을 기다리지 않습니다. 글이 먼저 오고 그림이 뒤따릅니다.

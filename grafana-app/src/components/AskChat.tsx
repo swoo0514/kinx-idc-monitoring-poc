@@ -29,10 +29,10 @@ function PanelShot({ im, s }: { im: Img; s: any }) {
         <div className={s.shotWait}>
           {state === 'loading' ? (
             <>
-              <Spinner size="sm" /> 관측 화면을 그리는 중입니다 (약 7초)
+              <Spinner size="sm" /> 패널 로딩 중
             </>
           ) : (
-            <>화면을 그리지 못했습니다. 아래 링크로 대시보드에서 보십시오.</>
+            <>패널을 못 불러왔습니다</>
           )}
         </div>
       )}
