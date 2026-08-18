@@ -447,11 +447,15 @@ def load_facts() -> str:
 
 # 그림 손잡이. 화면은 그림을 따로 그리므로 본문에 남으면 지저분한 글자일 뿐이다.
 _HANDLE_RE = re.compile(r"\[?img-[0-9a-z]+\]?")
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(\s*\[?img-[0-9a-z]+\]?\s*\)")
 
 
 def strip_handles(text: str) -> str:
     """답에서 그림 손잡이를 걷어 낸다. 앞뒤 공백도 정리한다."""
-    out = _HANDLE_RE.sub("", str(text or ""))
+    # 마크다운 그림 표기는 통째로 걷어 낸다. 손잡이만 빼면 `![image]()` 가 남아
+    # 화면에 "!(image)" 로 찍힌다(2026-08-18 실측). 그림은 따로 붙는다.
+    out = _MD_IMAGE_RE.sub("", str(text or ""))
+    out = _HANDLE_RE.sub("", out)
     # 손잡이가 괄호 안에 있었으면 빈 괄호가 남는다 — "패널()의" 가 화면에 그대로
     # 나왔다(2026-08-18 실측).
     out = re.sub(r"\(\s*\)|\[\s*\]", "", out)
@@ -703,23 +707,42 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
             out = []
             for it in items[:5]:
                 vt = int(it.get("value_type", 3))
-                hist = []
+                raw, kind = [], ""
                 if vt in (0, 3):         # 수치형만 추이가 뜻이 있다
-                    # **구간 전체를 받아 놓고 줄인다.** 상한만큼만 최신순으로 받으면
-                    # 앞부분이 잘려 먼저 난 스파이크를 못 본다(2026-08-18 실측).
-                    hist = await zbx.call(c, "history.get", {
-                        "itemids": it["itemid"], "history": vt,
-                        "time_from": start, "time_till": end, "output": "extend",
-                        "sortfield": "clock", "sortorder": "ASC",
-                        "limit": asktools.HISTORY_FETCH_MAX})
-                raw = [{"t": int(h["clock"]), "v": h["value"]} for h in hist]
+                    if asktools.use_trend(start, end):
+                        # **긴 구간은 추세로 본다.** 이력 보관이 짧아 90일을 이력으로
+                        # 물으면 비거나 잘린다. 추세는 시간 단위 집계라 가볍다.
+                        rows = await zbx.call(c, "trend.get", {
+                            "itemids": it["itemid"], "time_from": start,
+                            "time_till": end, "output": "extend",
+                            "limit": asktools.HISTORY_FETCH_MAX})
+                        rows.sort(key=lambda r: int(r.get("clock", 0)))
+                        # 값은 시간별 **최대**를 쓴다. 평균으로 줄이면 한 시간 안에
+                        # 튄 자리가 묻혀 "정상입니다" 가 나온다.
+                        raw = [{"t": int(r["clock"]), "v": r.get("value_max"),
+                                "avg": r.get("value_avg"), "min": r.get("value_min")}
+                               for r in rows]
+                        kind = "trend"
+                    else:
+                        # **구간 전체를 받아 놓고 줄인다.** 상한만큼만 최신순으로 받으면
+                        # 앞부분이 잘려 먼저 난 스파이크를 못 본다(2026-08-18 실측).
+                        hist = await zbx.call(c, "history.get", {
+                            "itemids": it["itemid"], "history": vt,
+                            "time_from": start, "time_till": end, "output": "extend",
+                            "sortfield": "clock", "sortorder": "ASC",
+                            "limit": asktools.HISTORY_FETCH_MAX})
+                        raw = [{"t": int(h["clock"]), "v": h["value"]} for h in hist]
+                        kind = "history"
                 shown = asktools.downsample(raw)
                 out.append({
                     "name": it.get("name"), "key": it.get("key_"),
                     "units": it.get("units"), "last": it.get("lastvalue"),
-                    # 몇 점을 읽어 몇 점으로 줄였는지 함께 준다. 안 알리면 모델이
-                    # 실린 점이 전부라고 여긴다.
+                    # 몇 점을 읽어 몇 점으로 줄였는지, 그리고 **무엇을 읽었는지** 준다.
+                    # 안 알리면 모델이 실린 점이 전부라고 여기고 간격도 지어낸다.
                     "sampled_from": len(raw), "series": shown,
+                    "source_kind": kind,
+                    "point_meaning": ("1시간 최대값(추세). avg·min 동봉"
+                                      if kind == "trend" else "원본 측정값"),
                 })
     except Exception as e:
         log.warning("지표 조회 실패: %s", e)

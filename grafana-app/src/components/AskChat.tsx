@@ -11,6 +11,13 @@ type Img = { id: string; title: string; url: string };
 type Turn = { role: 'user' | 'assistant'; text: string; trace?: any[]; images?: Img[] };
 type Convo = { id: string; title: string; at: number };
 
+// 마크다운이 물결표 한 쌍을 취소선으로 읽는다. 봇이 "2026-08-12~13" 처럼 기간을
+// 물결표로 적으면 그 뒤 문장까지 통째로 그어진다(2026-08-18 실측). 취소선은 우리
+// 답에 쓸 일이 없으므로 물결표를 글자 그대로 보이게 한다.
+function keepTildes(text: string): string {
+  return String(text || '').replace(/~/g, '\\~');
+}
+
 function ago(at: number): string {
   const m = Math.max(0, (Date.now() / 1000 - at) / 60);
   if (m < 60) {
@@ -171,7 +178,7 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
               {t.role === 'assistant' && <img src={LOGO} alt="" className={s.avatar} />}
               <div className={t.role === 'user' ? s.userBubble : s.botBubble}>
                 {t.role === 'assistant' ? (
-                  <div className={s.md} dangerouslySetInnerHTML={{ __html: renderMarkdown(t.text) }} />
+                  <div className={s.md} dangerouslySetInnerHTML={{ __html: renderMarkdown(keepTildes(t.text)) }} />
                 ) : (
                   <div className={s.plain}>{t.text}</div>
                 )}

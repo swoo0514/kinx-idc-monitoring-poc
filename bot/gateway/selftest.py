@@ -3277,6 +3277,33 @@ def _ask_result_checks() -> int:
                                        max_m=asktools.WINDOW_MAX_WIDE_M)
     assert not cut and b - a == 7 * 86400, (a, b, cut)
 
+    # (3)-b **상대 구간도 잘렸으면 잘렸다고 말한다.** 절대 구간에만 통지를 붙였더니
+    #       90일(window_m=129600)을 물은 요청이 조용히 하루가 됐고, 하루치를 줄인
+    #       24개 점을 모델이 "24일치"로 읽어 "90일간 건강하다"고 답했다(2026-08-18 실측).
+    a, b, cut = asktools.window_bounds({"window_m": 129600}, now=T0)
+    assert cut, "90일을 하루로 자르고도 알리지 않았다"
+    assert b - a == asktools.WINDOW_MAX_M * 60, (a, b)
+    a, b, cut = asktools.window_bounds({"window_m": 60}, now=T0)
+    assert not cut and b - a == 3600, (a, b, cut)
+    # `at` 으로 시점을 줄 때도 마찬가지다
+    a, b, cut = asktools.window_bounds({"at": T0, "window_m": 129600}, now=T0)
+    assert cut, "시점 앞뒤 구간을 자르고도 알리지 않았다"
+
+    # (3)-c **실제로 본 구간을 사람이 읽는 형태로 함께 준다.** 잘렸는지만 알려서는
+    #       모델이 몇 시부터 몇 시까지를 봤는지 모른다.
+    span = asktools.window_label(T0, T0 + 86400)
+    assert "2026" in span and "~" not in span, span
+
+    # (3)-d **긴 구간은 추세(trend)로 본다.** 이력은 보관 기간이 짧아 90일을 물으면
+    #       비거나 잘린다. 사람이 "90일 추이" 를 묻는 것은 정상적인 요구다.
+    assert asktools.zbx_method_ok("trend.get"), "추세 조회를 막고 있다"
+    assert asktools.use_trend(1786500000, 1786500000 + 86400) is False
+    assert asktools.use_trend(1786500000, 1786500000 + 30 * 86400) is True
+    # 지표 조회의 상한은 추세를 볼 수 있는 만큼까지 넓다
+    a, b, cut = asktools.window_bounds({"window_m": 129600}, now=T0,
+                                       max_m=asktools.WINDOW_MAX_TREND_M)
+    assert not cut and b - a == 90 * 86400, (a, b, cut)
+
     # (4) **잘린 사실은 도구 결과에 실린다.** 프롬프트가 아니라 결과에 실어야
     #     모델이 답에 옮긴다.
     note = asktools.cut_note(True, 1440)
@@ -3288,6 +3315,10 @@ def _ask_result_checks() -> int:
     assert ask.strip_handles("패널(img-6598)의 그래프") == "패널의 그래프"
     assert ask.strip_handles("패널 [img-6598] 참고") == "패널 참고"
     assert ask.strip_handles("image-6598 은 그대로") == "image-6598 은 그대로"
+    # 마크다운 그림 표기를 통째로 걷어 낸다. 손잡이만 빼면 `![image]()` 같은 깨진
+    # 표기가 남아 화면에 "!(image)" 로 찍힌다(2026-08-18 실측).
+    assert ask.strip_handles("![image](img-6598)" + chr(10) + "90일 추이") == "90일 추이"
+    assert ask.strip_handles("보기: ![복제 지연]([img-6598])") == "보기:"
     return 24
 
 

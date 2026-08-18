@@ -16,6 +16,11 @@ WINDOW_MAX_M = 1440
 # 건수 상한이 있어 구간을 넓혀도 무겁지 않은 조회(보안 경보·문제 목록). 사람이 보는
 # 대시보드 구간이 7일인 일이 흔한데 하루로 자르면 그 화면을 설명하지 못한다.
 WINDOW_MAX_WIDE_M = 10080
+# 추세(trend)는 시간 단위로 집계돼 있어 긴 구간도 가볍다. Zabbix 기본 보관도 이력보다
+# 훨씬 길다. "90일 추이" 는 사람이 흔히 묻는 것이라 그만큼은 볼 수 있어야 한다.
+WINDOW_MAX_TREND_M = 129600
+# 이 길이를 넘으면 이력 대신 추세를 본다. 이력 보관이 짧아 그보다 길면 비거나 잘린다.
+TREND_FROM_S = 2 * 86400
 
 # 문자열 필터 상한. 길면 질의가 무거워지고, 정규식으로 쓰려는 시도이기도 하다.
 FILTER_MAX_CHARS = 80
@@ -31,7 +36,8 @@ FILTER_MAX_TERMS = 5
 # 도구가 쓰는 Zabbix 메서드. `.get` 이어도 이 목록 밖이면 거부한다 — 읽기 전용이라고
 # 다 열어 주면 사용자·설정 조회까지 나간다.
 ZBX_METHODS = frozenset((
-    "host.get", "item.get", "history.get", "problem.get", "trigger.get", "event.get",
+    "host.get", "item.get", "history.get", "trend.get", "problem.get", "trigger.get",
+    "event.get",
 ))
 
 
@@ -108,10 +114,35 @@ def window_bounds(args: dict, now: int, max_m: int = 0) -> tuple:
         # 보고 있는 화면의 오른쪽 끝이 통째로 빠지고, 방금 난 일을 못 본다.
         return max(a, b - cap), b, (b - a) > cap
     at = parse_when((args or {}).get("at"))
-    win = min(clamp_window((args or {}).get("window_m")) * 60, cap)
+    asked = raw_window_s((args or {}).get("window_m"))
+    win = min(clamp_window((args or {}).get("window_m"), cap // 60) * 60, cap)
+    # **상대 구간도 잘렸으면 잘렸다고 말한다.** 절대 구간에만 통지를 붙였더니 90일을
+    # 물은 요청이 조용히 하루가 됐고, 모델은 하루치를 90일치로 알고 답했다(실측).
+    cut = asked > win
     if at is not None:                     # 그 시각을 가운데 두고 앞뒤로
-        return at - win // 2, at + win // 2, False
-    return now - win, now, False
+        return at - win // 2, at + win // 2, cut
+    return now - win, now, cut
+
+
+def raw_window_s(minutes) -> int:
+    """사람이 실제로 요청한 창 길이(초). 상한을 적용하기 전 값이다."""
+    try:
+        m = int(minutes)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, m) * 60
+
+
+def window_label(start: int, end: int) -> str:
+    """실제로 본 구간을 사람이 읽는 형태로.
+
+    잘렸는지만 알려서는 모델이 몇 시부터 몇 시까지를 봤는지 모른다. 물결표는 쓰지
+    않는다 — 화면의 마크다운이 취소선으로 읽는다.
+    """
+    import datetime
+    def fmt(t):
+        return datetime.datetime.utcfromtimestamp(int(t)).strftime("%Y-%m-%d %H:%M")
+    return "%s → %s UTC" % (fmt(start), fmt(end))
 
 
 def cut_note(cut: bool, max_m: int) -> str:
@@ -126,15 +157,24 @@ def cut_note(cut: bool, max_m: int) -> str:
             "구간은 확인하지 않았다 — 없다고 답하지 마라." % (span, span))
 
 
-def clamp_window(minutes) -> int:
-    """조회 기간을 상한 안으로. 0 이나 이상한 값은 기본값으로."""
+def use_trend(start: int, end: int) -> bool:
+    """이 구간을 이력으로 볼까 추세로 볼까."""
+    return (int(end) - int(start)) > TREND_FROM_S
+
+
+def clamp_window(minutes, max_m: int = 0) -> int:
+    """조회 기간을 상한 안으로. 0 이나 이상한 값은 기본값으로.
+
+    상한은 도구마다 다르다. 여기서 기본 상한을 고정하면 도구가 넓힌 상한이 무시된다.
+    """
+    cap = int(max_m or WINDOW_MAX_M)
     try:
         m = int(minutes)
     except (TypeError, ValueError):
-        return WINDOW_DEFAULT_M
+        return min(WINDOW_DEFAULT_M, cap)
     if m <= 0:
-        return WINDOW_DEFAULT_M
-    return min(m, WINDOW_MAX_M)
+        return min(WINDOW_DEFAULT_M, cap)
+    return min(m, cap)
 
 
 def check_filter(text: str) -> tuple:
@@ -414,15 +454,18 @@ def _hint_if_empty(name: str, out):
     return out
 
 
-def _add_cut(out, cut: bool, max_m: int):
-    """구간을 잘랐다는 사실을 도구 결과에 얹는다.
+def _add_cut(out, cut: bool, max_m: int, start: int = 0, end: int = 0):
+    """**실제로 본 구간**과, 잘랐다면 잘랐다는 사실을 도구 결과에 얹는다.
 
     프롬프트가 아니라 결과에 실어야 모델이 답에 옮긴다. 이미 안내가 있으면 뒤에 붙인다.
     """
-    note = cut_note(cut, max_m)
-    if not note or not isinstance(out, dict):
+    if not isinstance(out, dict):
         return out
-    out["note"] = (str(out.get("note") or "") + " " + note).strip()
+    if start and end:
+        out["window_utc"] = window_label(start, end)
+    note = cut_note(cut, max_m)
+    if note:
+        out["note"] = (str(out.get("note") or "") + " " + note).strip()
     return out
 
 
@@ -460,7 +503,7 @@ async def _tool_host_logs(args: dict, ctx: dict) -> dict:
     q = build_logql(label, args.get("contains") or "")
     a, b, cut = window_bounds(args, int(ctx["now"]))
     out = await ctx["fetch_logs"](q, a, b, int(args.get("limit") or LOG_LIMIT_DEFAULT))
-    return _add_cut(out, cut, WINDOW_MAX_M)
+    return _add_cut(out, cut, WINDOW_MAX_M, a, b)
 
 
 async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
@@ -473,7 +516,7 @@ async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
                 "note": "이 호스트에는 보안 에이전트가 없다. 없다는 뜻이 아니다"}
     a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M)
     body = build_wazuh_query(agent, a, b, args.get("min_level") or 0)
-    return _add_cut(await ctx["fetch_security"](body), cut, WINDOW_MAX_WIDE_M)
+    return _add_cut(await ctx["fetch_security"](body), cut, WINDOW_MAX_WIDE_M, a, b)
 
 
 async def _tool_past_judgments(args: dict, ctx: dict) -> dict:
@@ -493,9 +536,9 @@ async def _tool_host_metrics(args: dict, ctx: dict) -> dict:
     ent, err = _target(args, ctx)
     if err:
         return err
-    a, b, cut = window_bounds(args, int(ctx["now"]))
+    a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_TREND_M)
     out = await ctx["fetch_metrics"](ent, str(args.get("match") or ""), a, b)
-    return _add_cut(out, cut, WINDOW_MAX_M)
+    return _add_cut(out, cut, WINDOW_MAX_TREND_M, a, b)
 
 
 async def _tool_open_problems(args: dict, ctx: dict) -> dict:
