@@ -96,7 +96,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:11.6.16
+    image: grafana/grafana:12.3.0
     container_name: kinx-grafana
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
@@ -115,6 +115,9 @@ services:
       GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: kinxidc-ask-app,kinxidc-ask-datasource
       # 프로비저닝의 secureJsonData 가 이 값을 가져간다. 파일에 토큰을 안 적기 위해서다.
       GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
+      GF_FEATURE_TOGGLES_ENABLE: extensionSidebar
+      # 프록시가 로그인 사용자를 게이트웨이까지 넘긴다. 사용량을 사람별로 세는 근거다.
+      GF_DATAPROXY_SEND_USER_HEADER: "true"
     ports:
       - "3000:3000"
     volumes:

@@ -7,7 +7,7 @@ const GATEWAY = '/api/datasources/proxy/uid/askgw/gw';
 // 패널 메뉴에서 넘어오는 맥락. 무엇을 보고 물었는지를 첫 질문에 싣는다.
 export type PanelContext = { pluginId?: string; panelId?: number; timeRange?: any };
 
-export function AskBody({ onDismiss, context }: { onDismiss: () => void; context?: PanelContext }) {
+export function AskBody({ onDismiss, context, embedded }: { onDismiss: () => void; context?: PanelContext; embedded?: boolean }) {
   const [q, setQ] = useState('');
   const [ans, setAns] = useState('');
   const [err, setErr] = useState('');
@@ -30,8 +30,8 @@ export function AskBody({ onDismiss, context }: { onDismiss: () => void; context
     }
   };
 
-  return (
-    <Drawer title="관제 질의" size="md" onClose={onDismiss}>
+  const inner = (
+    <>
       <TextArea
         rows={3}
         placeholder="예: 이 호스트가 지금 왜 느린가"
@@ -43,6 +43,14 @@ export function AskBody({ onDismiss, context }: { onDismiss: () => void; context
       </Button>
       {err && <Alert title="실패">{err}</Alert>}
       {ans && <TextArea rows={12} value={ans} readOnly style={{ marginTop: 12 }} />}
+    </>
+  );
+  if (embedded) {
+    return <div style={{ padding: 8 }}>{inner}</div>;
+  }
+  return (
+    <Drawer title="관제 질의" size="md" onClose={onDismiss}>
+      {inner}
     </Drawer>
   );
 }

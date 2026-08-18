@@ -22,7 +22,7 @@
   "includes": [
     {
       "type": "page",
-      "name": "Page One",
+      "name": "관제 질의",
       "path": "/a/%PLUGIN_ID%/one",
       "addToNav": true,
       "defaultNav": true
@@ -65,11 +65,13 @@
     "addedLinks": [
       {
         "targets": [
+          "grafana/dashboard/panel/menu",
           "grafana/dashboard/panel/menu/v1"
         ],
         "title": "봇에게 묻기",
         "description": "이 패널을 보고 관제 질의 창구를 연다"
       }
     ]
-  }
+  },
+  "preload": true
 }

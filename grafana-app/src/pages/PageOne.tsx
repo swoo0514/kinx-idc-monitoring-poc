@@ -1,40 +1,27 @@
-import React, { useState } from 'react';
-import { Button, TextArea, Alert } from '@grafana/ui';
-import { PluginPage, getBackendSrv } from '@grafana/runtime';
+import React from 'react';
+import { PluginPage } from '@grafana/runtime';
+import { AskChat } from '../components/AskChat';
 
-// 게이트웨이로 가는 길. 토큰은 Grafana 가 서버 쪽에서 헤더에 넣으므로 여기에는 없다.
-const GATEWAY = '/api/datasources/proxy/uid/askgw/gw';
+// 패널에서 넘어오면 무엇을 보고 물었는지가 주소에 실려 온다. 그 값을 첫 질문에 미리
+// 넣어 두면 사람이 "이 패널" 이 무엇인지 다시 설명하지 않아도 된다.
+function prefillFromQuery(): string {
+  const p = new URLSearchParams(window.location.search);
+  const panel = p.get("panel");
+  const from = p.get("from");
+  const to = p.get("to");
+  const dash = p.get("dash");
+  if (!panel) {
+    return "";
+  }
+  const when = from && to ? ` (구간 ${from} ~ ${to})` : "";
+  const where = dash ? ` 대시보드 "${dash}" 의` : "";
+  return `지금${where} "${panel}" 패널을 보고 있습니다${when}. 이 구간에 무슨 일이 있었는지 확인해 주십시오.`;
+}
 
-function PageOne() {
-  const [out, setOut] = useState('');
-  const [err, setErr] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const check = async () => {
-    setBusy(true);
-    setErr('');
-    try {
-      const res = await getBackendSrv().get(`${GATEWAY}/healthz`);
-      setOut(JSON.stringify(res, null, 2));
-    } catch (e: any) {
-      setErr(String(e?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
+export default function PageOne() {
   return (
     <PluginPage>
-      <div>
-        <p>게이트웨이 연결 확인</p>
-        <Button onClick={check} disabled={busy}>
-          {busy ? '확인 중' : '상태 조회'}
-        </Button>
-        {err && <Alert title="조회 실패">{err}</Alert>}
-        {out && <TextArea rows={8} value={out} readOnly />}
-      </div>
+      <AskChat prefill={prefillFromQuery()} />
     </PluginPage>
   );
 }
-
-export default PageOne;
