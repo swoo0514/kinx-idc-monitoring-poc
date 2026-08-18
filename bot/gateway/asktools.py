@@ -95,7 +95,7 @@ def parse_when(value):
         return None
 
 
-def window_bounds(args: dict, now: int, max_m: int = 0) -> tuple:
+def window_bounds(args: dict, now: int, max_m: int = 0, default_span=None) -> tuple:
     """조회 구간 `(시작, 끝, 잘렸는가)`. 절대 구간이 있으면 그것을, 없으면 상대 창을.
 
     구간 길이는 상한 안으로 자른다. 뒤집혀 오면 바로잡는다 — 사람이 끌어 놓은 순서를
@@ -107,6 +107,13 @@ def window_bounds(args: dict, now: int, max_m: int = 0) -> tuple:
     cap = int(max_m or WINDOW_MAX_M) * 60
     a = parse_when((args or {}).get("from"))
     b = parse_when((args or {}).get("to"))
+    # **사람이 보던 구간을 모델에게 받아 적으라고 시키지 않는다.** 화면이 이미 넘겨 준
+    # 값이 있는데 모델이 인자로 안 옮기면 조용히 최근 창으로 떨어진다. 2026-08-18 실측:
+    # 8월 11~13일 패널을 보고 물었는데 최근 1시간만 조회하고 "과거 구간 조회가
+    # 불가능합니다" 라고 답했다. 모델이 구간을 직접 주면 그쪽이 이긴다.
+    if (a is None and b is None and default_span
+            and not (args or {}).get("window_m") and not (args or {}).get("at")):
+        a, b = int(default_span[0]), int(default_span[1])
     if a is not None and b is not None:
         if a > b:
             a, b = b, a
@@ -374,7 +381,8 @@ def _host_prop(desc: str, tokens=None) -> dict:
 
 _WINDOW_PROPS = {
     "window_m": {"type": "integer",
-                 "description": "지금부터 거슬러 볼 분. 90일이면 129600"},
+                 "description": ("지금부터 거슬러 볼 분. 90일이면 129600. 셋 다 비우면 "
+                                 "사람이 화면에서 보고 있는 구간을 본다")},
     "from": {"type": "string", "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
     "to": {"type": "string", "description": "절대 구간 끝"},
 }
@@ -626,7 +634,8 @@ async def _tool_host_logs(args: dict, ctx: dict) -> dict:
     if not ok:
         return _err(why)
     q = build_logql(label, args.get("contains") or "")
-    a, b, cut = window_bounds(args, int(ctx["now"]))
+    a, b, cut = window_bounds(args, int(ctx["now"]),
+                              default_span=ctx.get("panel_span"))
     out = await ctx["fetch_logs"](q, a, b, int(args.get("limit") or LOG_LIMIT_DEFAULT))
     return _add_cut(out, cut, WINDOW_MAX_M, a, b, args)
 
@@ -639,7 +648,8 @@ async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
     if not agent:
         return {"alerts": [], "status": "disabled",
                 "note": "이 호스트에는 보안 에이전트가 없다. 없다는 뜻이 아니다"}
-    a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M)
+    a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
+                              default_span=ctx.get("panel_span"))
     body = build_wazuh_query(agent, a, b, args.get("min_level") or 0)
     return _add_cut(await ctx["fetch_security"](body), cut, WINDOW_MAX_WIDE_M, a, b, args)
 
@@ -661,7 +671,8 @@ async def _tool_host_metrics(args: dict, ctx: dict) -> dict:
     ent, err = _target(args, ctx)
     if err:
         return err
-    a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_TREND_M)
+    a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_TREND_M,
+                              default_span=ctx.get("panel_span"))
     out = note_if_no_points(
         await ctx["fetch_metrics"](ent, str(args.get("match") or ""), a, b))
     return _add_cut(out, cut, WINDOW_MAX_TREND_M, a, b, args)
@@ -679,7 +690,8 @@ async def _tool_panel_image(args: dict, ctx: dict) -> dict:
     ent, err = _target(args, ctx)
     if err:
         return err
-    a, b, _cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M)
+    a, b, _cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
+                               default_span=ctx.get("panel_span"))
     return await ctx["fetch_panel"](ent, str(args.get("match") or ""), a, b)
 
 

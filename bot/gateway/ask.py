@@ -551,8 +551,15 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         return {"text": "", "trace": [], "rounds": 0, "images": [], "stopped": "rejected",
                 "error": clean["reason"]}
 
+    # 사람이 보던 구간. 화면이 넘겨 주므로 모델에게 받아 적으라고 시키지 않는다.
+    panel_span = None
+    pf = asktools.parse_when((panel or {}).get("from"))
+    pt = asktools.parse_when((panel or {}).get("to"))
+    if pf is not None and pt is not None and pf < pt:
+        panel_span = (pf, pt)
+
     ctx = {
-        "table": table, "now": now,
+        "table": table, "now": now, "panel_span": panel_span,
         "fetch_logs": lambda q, a, b, lim: fetch_logs(q, a, b, lim, mk),
         "fetch_security": lambda body: fetch_security(body, mk),
         "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
@@ -568,9 +575,13 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     # 적었다.
     viewing = ""
     if panel and panel.get("uid"):
+        span = ""
+        if panel_span:
+            span = " 조회 구간은 %s 이며 도구가 기본으로 그 구간을 본다." % (
+                asktools.window_label(*panel_span))
         viewing = ("[사람이 보고 있는 패널] %s — 이 화면을 그림으로 붙이려면 "
-                   "panel_image 를 부르면 된다." + chr(10)
-                   ) % mk.mask(str(panel.get("title") or "제목 없음"))
+                   "panel_image 를 부르면 된다.%s" + chr(10)
+                   ) % (mk.mask(str(panel.get("title") or "제목 없음")), span)
 
     hist, dropped = trim_history(history)
     # **이력도 가린다.** 화면은 사람이 읽는 글(실명으로 되돌린 것)을 이력으로

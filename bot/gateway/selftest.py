@@ -280,7 +280,8 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _item_rank_checks() + _registry_fill_checks() + _proxy_gate_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
+                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _item_rank_checks() + _registry_fill_checks() + _proxy_gate_checks()
+                    + _panel_window_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
                     + _panel_route_checks()
                     + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
@@ -3887,6 +3888,73 @@ def _proxy_gate_checks() -> int:
     src = inspect.getsource(proxy.handle)
     assert "tenant_scoped" not in src, "호출자 신고 값이 아직 판정에 쓰인다"
     return 6
+
+
+
+def _panel_window_checks() -> int:
+    """사람이 보던 구간이 도구까지 가는가.
+
+    화면은 `from`·`to` 를 이미 넘겨 준다. 그런데 도구는 모델이 그 값을 인자로 **다시 적어
+    넣기를** 기다린다. 모델이 안 적으면 조용히 기본 창(최근 1시간)으로 떨어진다.
+    2026-08-18 실측: 8월 11일~13일 패널을 보고 물었는데 최근 1시간만 조회하고 "과거 구간
+    조회가 불가능합니다" 라고 답했다. 붙은 그림도 최근 1시간이었다.
+
+    구간을 쥐고 있으면서 모델에게 받아 적으라고 시키지 않는다.
+    """
+    from . import asktools
+
+    T0, T1 = 1786475892, 1786627941      # 2026-08-11 19:18 ~ 08-13 13:32
+    default = (T0, T1)
+
+    # ① 모델이 아무 구간도 안 주면 화면이 준 구간을 쓴다.
+    a, b, cut = asktools.window_bounds({}, now=1787000000,
+                                       max_m=asktools.WINDOW_MAX_WIDE_M,
+                                       default_span=default)
+    assert (a, b) == default, (a, b)
+
+    # ② 모델이 구간을 주면 그쪽이 이긴다. 사람이 "어제는?" 하고 물을 수 있다.
+    a, b, cut = asktools.window_bounds({"window_m": 60}, now=1787000000,
+                                       default_span=default)
+    assert b == 1787000000 and a == 1787000000 - 3600, (a, b)
+    a, b, cut = asktools.window_bounds({"from": T0, "to": T0 + 600}, now=1787000000,
+                                       default_span=default)
+    assert (a, b) == (T0, T0 + 600), (a, b)
+
+    # ③ 화면 구간이 상한보다 길면 잘리고, 잘렸다고 말한다.
+    a, b, cut = asktools.window_bounds({}, now=1787000000, max_m=60,
+                                       default_span=(T0, T1))
+    assert cut and b - a == 3600, (a, b, cut)
+
+    # ④ 화면 구간이 없으면 예전대로 최근 창을 본다.
+    a, b, cut = asktools.window_bounds({}, now=1787000000)
+    assert b == 1787000000, (a, b)
+
+    # ⑤ **실경로로 확인한다.** 위 넷은 함수를 직접 부르는 검사라, `run_ask` 가 화면
+    #    구간을 컨텍스트에 안 넣으면 전부 통과하면서 실제로는 최근 1시간이 그려진다.
+    #    2026-08-18 에 패널 번호 수정이 중복 대입에 묻혀 죽었던 것과 같은 모양이다.
+    import asyncio
+
+    from . import ask
+
+    table = {ask.proxy.token_for("host", "web-01"):
+             {"host": "web-01", "source": "zabbix-internal",
+              "logs": "web-01.example", "security": "web-01.example"}}
+    tok = list(table)[0]
+
+    def model(system, messages, tools):
+        if len(messages) == 1:                 # 구간을 인자로 **안 적는다**
+            return {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "t1", "name": "panel_image",
+                 "input": {"host": tok}}]}
+        return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
+
+    r = asyncio.run(ask.run_ask("이 구간에 무슨 일 있었어", table=table, model_fn=model,
+                                panel={"uid": "kinx-overview", "panelId": 12, "title": "t",
+                                       "from": "2026-08-11T19:18:12.679Z",
+                                       "to": "2026-08-13T13:32:21.164Z"}))
+    url = (r.get("images") or [{}])[0].get("url", "")
+    assert "from=%d" % (T0 * 1000) in url and "to=%d" % (T1 * 1000) in url, url
+    return 9
 
 
 def _ask_dispatch_checks() -> int:
