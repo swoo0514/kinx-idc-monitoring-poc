@@ -647,7 +647,11 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
             return model_fn(system_prompt(), msgs, specs)
         return llm.claude_tools(system_prompt(), msgs, specs)
 
-    for _round in range(MAX_ROUNDS):
+    for _round in range(MAX_ROUNDS + 1):
+        # 답 도구는 조회가 아니라 마무리라 상한에 세지 않는다. 두 엔진이 같은 셈법을 쓴다.
+        if asktools.query_count(trace) >= MAX_ROUNDS:
+            stopped = "rounds"
+            break
         if tick() - started > DEADLINE_S:
             stopped = "deadline"
             break

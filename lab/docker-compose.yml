@@ -118,6 +118,9 @@ services:
       GF_FEATURE_TOGGLES_ENABLE: extensionSidebar
       # 프록시가 로그인 사용자를 게이트웨이까지 넘긴다. 사용량을 사람별로 세는 근거다.
       GF_DATAPROXY_SEND_USER_HEADER: "true"
+      # 질의 한 건이 도구를 여러 번 부르면 30초(기본)를 넘는다. 넘으면 사람은
+      # 게이트웨이가 멀쩡히 답하는 중에 502 Bad Gateway 를 본다(2026-08-18 실측).
+      GF_DATAPROXY_TIMEOUT: "180"
     ports:
       - "3000:3000"
     volumes:

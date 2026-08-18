@@ -3306,6 +3306,12 @@ def _ask_result_checks() -> int:
                                        max_m=asktools.WINDOW_MAX_TREND_M)
     assert not cut and b - a == 90 * 86400, (a, b, cut)
 
+    # (3)-d-2 **`at` 을 없앤다.** 모델이 90일 추이를 물을 때 window_m 대신 at 을 고르고
+    #         엉뚱한 시점을 반복해서 라운드를 태웠다(2026-08-18 랩 실측 두 번). from/to 가
+    #         특정 시점을, window_m 이 최근 기간을 덮으므로 at 은 덫이기만 하다.
+    for t in asktools.build_tool_specs({"[h]": {}}):
+        assert "at" not in t["input_schema"]["properties"], t["name"]
+
     # (3)-e **못 읽은 시각을 말해 준다.** 조용히 기본 창으로 떨어지면 모델은 잘못 물은
     #       줄 모르고 같은 실수를 반복한다. 2026-08-18 랩 실측: `at: 90` → `at: 7776000`
     #       으로 네 번 되풀이하며 라운드를 다 썼다.
@@ -3559,6 +3565,13 @@ def _graph_state_checks() -> int:
     for good in ("", "budget", "llm_failed"):
         assert graph.check_state(dict(ok, stopped=good)) == "", good
 
+    # ④-b **답 도구는 조회 상한에 안 센다.** 답은 조사가 아니라 마무리다. 세면 조사할 수
+    #      있는 횟수가 하나 줄고, 그만큼 답이 얕아진다(2026-08-18 실측: rounds 로 끝났다).
+    from . import asktools
+    assert asktools.query_count([{"tool": "host_logs"}, {"tool": "answer"}]) == 1
+    assert asktools.query_count([{"tool": "answer"}]) == 0
+    assert asktools.query_count([]) == 0
+
     # ⑤ 분기 판단이 그래프 없이 돈다. 클로저 안에 있으면 단위 검사를 못 한다.
     class _Msg:
         tool_calls = [{"name": "host_logs"}]
@@ -3569,7 +3582,8 @@ def _graph_state_checks() -> int:
     assert graph.should_continue({"messages": [_Msg()], "trace": []},
                                  max_calls=6, stop_now=lambda: False,
                                  answered=lambda: True) is False
-    assert graph.should_continue({"messages": [_Msg()], "trace": [1, 2, 3]},
+    three = [{"tool": "host_logs"}] * 3
+    assert graph.should_continue({"messages": [_Msg()], "trace": three},
                                  max_calls=3, stop_now=lambda: False,
                                  answered=lambda: False) is False
     assert graph.should_continue({"messages": [_Msg()], "trace": []},

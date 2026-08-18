@@ -379,9 +379,7 @@ def build_tool_specs(table: dict = None) -> list:
                    host=_host_prop("조회할 호스트 토큰", toks),
                    match={"type": "string",
                           "description": "아이템 이름·키에 든 문자열 "
-                                         "(예: replication, cpu, memory)"},
-                   at={"type": "integer",
-                       "description": "특정 시각을 볼 때 그 유닉스 초. 그 앞뒤 창을 본다"}),
+                                         "(예: replication, cpu, memory)"}),
               ["host"]),
         _spec("open_problems", "그 호스트에 지금 열려 있는 문제(Zabbix). 비우면 전체.",
               {"host": _host_prop("비우면 전체", toks)}),
@@ -434,6 +432,15 @@ def check_answer(args: dict, images, windows) -> tuple:
     if not str(a.get("summary") or "").strip():
         return False, "summary 가 비어 있다"
     return True, ""
+
+
+def query_count(trace) -> int:
+    """조회 횟수. **답 도구는 안 센다.**
+
+    답은 조사가 아니라 마무리다. 상한에 세면 조사할 수 있는 횟수가 하나 줄고 그만큼
+    답이 얕아진다(2026-08-18 실측: 답을 부르려다 rounds 로 끝났다).
+    """
+    return sum(1 for t in (trace or []) if (t or {}).get("tool") != "answer")
 
 
 def _err(msg: str) -> dict:

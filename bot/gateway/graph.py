@@ -198,7 +198,9 @@ def should_continue(state: dict, max_calls: int, stop_now, answered) -> bool:
         return False
     if stop_now():                       # 시간 상한·사람이 누른 멈춤
         return False
-    return len(state.get("trace") or []) < max_calls
+    from . import asktools
+
+    return asktools.query_count(state.get("trace")) < max_calls
 
 
 def build(system: str, specs: list, user: str, run_tool, model_fn=None,
