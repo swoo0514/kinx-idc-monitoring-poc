@@ -382,6 +382,10 @@ ASK_SYSTEM = """\
   조회해 비었을 수 있다.
 - **로그에서 여러 낱말 중 하나를 찾을 때는 contains 에 `failed|invalid user` 처럼
   세로줄로 이어라.** 다섯 개까지 된다.
+- **답은 answer 도구로 낸다.** 조사가 끝나면 산문으로 쓰지 말고 answer 를 불러라.
+  `summary` 에 결론, `findings` 에 조회로 확인한 근거, `window_utc` 에는 도구가 돌려준
+  구간을 그대로 옮기고, 그림을 붙였으면 `image_ids` 에 panel_image 가 준 id 를 적는다.
+  조회를 안 했으면 `window_utc` 는 비운다. 지어내면 거부되고 다시 물어야 한다.
 - 대상 토큰을 모르면 list_hosts 를 먼저 부른다.
 - **사람이 절대 시각을 말하면 window_m 이 아니라 from·to 로 넘겨라.** "8월 13일 12시",
   "어제 새벽" 처럼 특정 시점을 가리키는 질문에 상대 창을 쓰면 엉뚱한 날을 보게 된다.
@@ -448,6 +452,32 @@ def load_facts() -> str:
 # 그림 손잡이. 화면은 그림을 따로 그리므로 본문에 남으면 지저분한 글자일 뿐이다.
 _HANDLE_RE = re.compile(r"\[?img-[0-9a-z]+\]?")
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(\s*\[?img-[0-9a-z]+\]?\s*\)")
+
+
+def chosen_images(images: list, answer: dict) -> list:
+    """화면에 붙일 그림. 답이 고른 것만 붙인다.
+
+    답 도구를 안 쓰고 글로 끝낸 경우에는 만든 것을 전부 붙인다. 예전 동작이다.
+    """
+    picked = (answer or {}).get("image_ids")
+    if not answer or picked is None:
+        return images
+    keep = set(picked)
+    return [im for im in images if im.get("id") in keep]
+
+
+def render_answer(args: dict) -> str:
+    """답 도구의 필드를 사람이 읽는 글로. 손잡이와 구간을 산문에서 뺀 대가로 여기서 만든다."""
+    a = args or {}
+    parts = [str(a.get("summary") or "").strip()]
+    for f in (a.get("findings") or []):
+        line = str(f).strip()
+        if line:
+            parts.append("- " + line)
+    win = str(a.get("window_utc") or "").strip()
+    if win:
+        parts.append("조회 구간: " + win)
+    return (chr(10)).join(p for p in parts if p)
 
 
 def strip_handles(text: str) -> str:
@@ -561,9 +591,13 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     # 같은 조회를 두 번 하지 않는다. 라운드와 비용을 태우고, 결과가 같으므로 얻는 것도 없다.
     called = {}
     text = ""
+    # 이번 요청의 도구 정의. 대상 토큰이 스키마에 박히므로 표 밖의 이름은 표현할 수 없다.
+    specs = asktools.build_tool_specs(table)
+    # 답 도구가 참조할 수 있는 값. 턴 중에 생기므로 스키마가 아니라 코드가 지킨다.
+    made_images, seen_windows, final = set(), set(), {}
 
-    async def exec_tool(name, args, seen, idx):
-        """도구 한 번. 반환 `(화면에 붙일 그림, 모델에 줄 결과, 직렬화한 글자)`.
+    async def _exec_query(name, args, seen, idx):
+        """조회 도구 한 번. 반환 `(화면에 붙일 그림, 모델에 줄 결과, 직렬화한 글자)`.
 
         **두 엔진이 이 함수를 함께 쓴다.** 중복 차단·그림 분리·마스킹이 한 곳에 있어야
         엔진을 갈아 끼울 때 한쪽만 빠지지 않는다.
@@ -579,19 +613,33 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         if isinstance(out, dict) and out.get("url"):
             # **주소는 모델에 주지 않는다.** 대시보드 식별자와 호스트 실명이 들어 있다.
             image = out
+            made_images.add(out.get("id"))
             out = {"image": out.get("id"), "title": mk.mask(out.get("title", "")),
-                   "note": "화면에 붙였다. 답에 이 id 를 적어라"}
+                   "note": "화면에 붙였다. answer 의 image_ids 에 이 id 를 적어라"}
+        if isinstance(out, dict) and out.get("window_utc"):
+            seen_windows.add(out["window_utc"])
         return image, out, _json.dumps(out, ensure_ascii=False)
+
+    async def exec_tool(name, args, seen, idx):
+        """도구 하나. 답 도구는 조회가 아니라 마무리라서 따로 본다."""
+        if name == "answer":
+            ok, why = asktools.check_answer(args, made_images, seen_windows)
+            if not ok:
+                return None, {"error": why}, _json.dumps({"error": why}, ensure_ascii=False)
+            final.update(args or {})
+            out = {"ok": True, "note": "답을 받았다. 더 부르지 마라"}
+            return None, out, _json.dumps(out, ensure_ascii=False)
+        return await _exec_query(name, args, seen, idx)
 
     if engine_name() == "graph":
         return await _run_graph(
             system_prompt(), messages, mk, sid, user, exec_tool, model_fn,
-            started, tick)
+            started, tick, specs, final, made_images)
 
     def _model(msgs):
         if model_fn is not None:
-            return model_fn(system_prompt(), msgs, asktools.TOOL_SPECS)
-        return llm.claude_tools(system_prompt(), msgs, asktools.TOOL_SPECS)
+            return model_fn(system_prompt(), msgs, specs)
+        return llm.claude_tools(system_prompt(), msgs, specs)
 
     for _round in range(MAX_ROUNDS):
         if tick() - started > DEADLINE_S:
@@ -638,6 +686,9 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
             results.append({"type": "tool_result", "tool_use_id": u.get("id"),
                             "content": blob})
         messages = messages + [{"role": "user", "content": results}]
+        if final:
+            text = render_answer(final)
+            break
         if stopped == "budget":
             break
     else:
@@ -649,7 +700,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     remember(sid or "-", mk)
     return {"text": strip_handles(mk.unmask(text)), "trace": trace,
             "rounds": len(trace),
-            "images": images, "stopped": stopped, "error": ""}
+            "images": chosen_images(images, final), "stopped": stopped, "error": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -830,7 +881,8 @@ def engine_name() -> str:
 
 
 async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
-                     exec_tool, model_fn, started: float, tick) -> dict:
+                     exec_tool, model_fn, started: float, tick,
+                     specs=None, final=None, made_images=None) -> dict:
     """LangGraph 로 도는 경로. 반환 계약은 기존 반복문과 같다.
 
     상한·멈춤·마스킹·도구는 전부 우리 것을 그대로 쓴다. 프레임워크가 맡는 것은 모델과
@@ -859,29 +911,35 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
         # 이력의 assistant 는 글만 남아 있다. 도구 호출 이력은 다시 싣지 않는다.
         lc.append(AIMessage(content=m["content"]) if m["role"] == "assistant"
                   else HumanMessage(content=m["content"]))
-    app = G.build(system, asktools.TOOL_SPECS, user, exec_tool, model_fn,
-                  guard=guard, result_bytes=RESULT_BYTES, max_calls=MAX_ROUNDS)
+    app = G.build(system, specs if specs is not None else asktools.TOOL_SPECS,
+                  user, exec_tool, model_fn,
+                  guard=guard, result_bytes=RESULT_BYTES, max_calls=MAX_ROUNDS,
+                  answered=lambda: bool(final))
     state = {"messages": lc, "trace": [], "images": [], "spent": 0, "called": {},
              "stopped": "", "error": ""}
     try:
         # 노드가 라운드마다 둘이라 프레임워크 상한은 넉넉히 두고, 실제 제한은 우리
         # `route` 가 건다. 프레임워크 상한에 먼저 닿으면 사람이 이유를 못 읽는다.
-        final = await app.ainvoke(state, {"recursion_limit": MAX_ROUNDS * 2 + 4})
+        out = await app.ainvoke(state, {"recursion_limit": MAX_ROUNDS * 2 + 4})
     except Exception as e:
         log.warning("그래프 실행 실패: %s", e)
         return {"text": "", "trace": [], "rounds": 0, "images": [],
                 "stopped": "llm_failed", "error": "질의를 끝내지 못했다: %s" % e}
-    trace = final.get("trace") or []
-    if final.get("stopped") == "llm_failed":
+    trace = out.get("trace") or []
+    if out.get("stopped") == "llm_failed":
         return {"text": "", "trace": trace, "rounds": len(trace),
-                "images": final.get("images") or [], "stopped": "llm_failed",
-                "error": "모델을 부르지 못했다: %s" % final.get("error", "")}
+                "images": out.get("images") or [], "stopped": "llm_failed",
+                "error": "모델을 부르지 못했다: %s" % out.get("error", "")}
     text = ""
-    for m in reversed(final.get("messages") or []):
-        if isinstance(m, AIMessage) and isinstance(m.content, str) and m.content.strip():
-            text = m.content
-            break
-    stopped = _stop["why"] or final.get("stopped") or "end_turn"
+    if final:
+        # 답 도구로 받았으면 그것이 답이다. 산문에서 손잡이를 걷어 낼 일이 없다.
+        text = render_answer(final)
+    else:
+        for m in reversed(out.get("messages") or []):
+            if isinstance(m, AIMessage) and isinstance(m.content, str) and m.content.strip():
+                text = m.content
+                break
+    stopped = _stop["why"] or out.get("stopped") or "end_turn"
     if stopped == "end_turn" and len(trace) >= MAX_ROUNDS:
         stopped = "rounds"
     if stopped in ("rounds", "deadline", "budget", "cancelled") and not text:
@@ -889,5 +947,6 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
                 % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
     remember(sid or "-", mk)
     return {"text": strip_handles(mk.unmask(text)), "trace": trace,
-            "rounds": len(trace), "images": final.get("images") or [],
+            "rounds": len(trace),
+            "images": chosen_images(out.get("images") or [], final),
             "stopped": stopped, "error": ""}

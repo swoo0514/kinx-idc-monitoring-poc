@@ -268,119 +268,129 @@ JUDGMENT_DAYS_DEFAULT = 7
 # days 를 분 상한(1440)에 통과시켜 30일이 1일이 됐다(2026-08-18 실측).
 JUDGMENT_DAYS_MAX = 90
 
-TOOL_SPECS = [
-    {
-        "name": "list_hosts",
-        "description": "질의할 수 있는 호스트 목록. 대상 토큰을 모를 때 먼저 부른다.",
+# 값이 정해져 있는 인자는 스키마로 묶는다.
+#
+# 프롬프트로 "없는 이름을 쓰지 마라" 라고 부탁하는 것과, 스키마가 값의 집합을 좁히는
+# 것은 다르다. 부탁은 지켜지기도 하고 안 지켜지기도 하지만 스키마는 표현 자체를 막는다.
+#
+# **묶는 자리를 고르는 기준은 캐시다.** 도구 정의는 프롬프트 맨 앞에 놓이므로, 정의가
+# 바뀌면 그 뒤 전부가 캐시에서 빠진다. 그래서 요청 내내 안 바뀌는 값(호스트 토큰)만
+# enum 으로 묶고, 턴 중에 생기는 값(그림 손잡이·조회 구간)은 코드가 검증한다.
+
+def _host_prop(desc: str, tokens=None) -> dict:
+    p = {"type": "string", "description": desc}
+    if tokens:
+        # 정렬은 필수다. 순서가 흔들리면 접두사 바이트가 달라져 캐시가 한 번도 안 걸린다.
+        p["enum"] = sorted(tokens)
+    return p
+
+
+_WINDOW_PROPS = {
+    "window_m": {"type": "integer", "description": "지금부터 거슬러 볼 분"},
+    "from": {"type": "string", "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
+    "to": {"type": "string", "description": "절대 구간 끝"},
+}
+
+
+def _spec(name: str, desc: str, props: dict, required=None) -> dict:
+    """도구 하나. 목록 밖 인자를 아예 못 넣게 스키마대로 검증시킨다."""
+    return {
+        "name": name,
+        "description": desc,
+        "strict": True,
         "input_schema": {
             "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "이름에 포함된 문자열로 좁힌다"},
-            },
+            "properties": props,
+            "required": list(required or []),
+            "additionalProperties": False,
         },
-    },
-    {
-        "name": "host_logs",
-        "description": "그 호스트의 로그. 기간과 문자열 필터로 좁힌다. 정규식은 못 쓴다.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "host": {"type": "string", "description": "list_hosts 가 준 호스트 토큰"},
-                "window_m": {"type": "integer", "description": "지금부터 거슬러 볼 분"},
-                "from": {"type": "string",
-                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
-                "to": {"type": "string", "description": "절대 구간 끝"},
-                "from": {"type": "string",
-                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
-                "to": {"type": "string", "description": "절대 구간 끝"},
-                "from": {"type": "string",
-                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
-                "to": {"type": "string", "description": "절대 구간 끝"},
-                "contains": {"type": "string",
+    }
+
+
+def build_tool_specs(table: dict = None) -> list:
+    """이번 요청의 도구 정의. 대상 표에서 고를 수 있는 토큰을 스키마에 박는다.
+
+    표가 비면 enum 을 넣지 않는다. 빈 enum 은 모든 값을 막아 도구를 죽인다.
+    """
+    toks = list(table or {})
+    return [
+        _spec("list_hosts", "질의할 수 있는 호스트 목록. 대상 토큰을 모를 때 먼저 부른다.",
+              {"query": {"type": "string", "description": "이름에 포함된 문자열로 좁힌다"}}),
+        _spec("host_logs",
+              "그 호스트의 로그. 기간과 문자열 필터로 좁힌다. 정규식은 못 쓴다.",
+              dict(_WINDOW_PROPS,
+                   host=_host_prop("조회할 호스트 토큰", toks),
+                   contains={"type": "string",
                              "description": "이 문자열이 든 줄만. 세로줄로 이으면 "
-                                            "그중 하나라도 든 줄(failed|timeout), 5개까지"},
-            },
-            "required": ["host"],
-        },
-    },
-    {
-        "name": "security_alerts",
-        "description": "그 호스트의 보안 경보. 레벨 하한으로 좁힌다.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "host": {"type": "string"},
-                "window_m": {"type": "integer"},
-                "from": {"type": "string", "description": "절대 구간 시작"},
-                "to": {"type": "string", "description": "절대 구간 끝"},
-                "min_level": {"type": "integer", "description": "0~15"},
-            },
-            "required": ["host"],
-        },
-    },
-    {
-        "name": "host_metrics",
-        "description": ("그 호스트의 Zabbix 지표. 이름 조각으로 아이템을 고르고 값의 "
-                        "추이를 본다. 복제 지연·CPU·메모리처럼 수치로 보는 것은 여기서 본다."),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "host": {"type": "string", "description": "list_hosts 가 준 호스트 토큰"},
-                "match": {"type": "string",
-                          "description": "아이템 이름·키에 든 문자열 (예: replication, cpu, memory)"},
-                "window_m": {"type": "integer", "description": "지금부터 거슬러 볼 분"},
-                "from": {"type": "string",
-                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
-                "to": {"type": "string", "description": "절대 구간 끝"},
-                "from": {"type": "string",
-                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
-                "to": {"type": "string", "description": "절대 구간 끝"},
-                "from": {"type": "string",
-                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
-                "to": {"type": "string", "description": "절대 구간 끝"},
-                "at": {"type": "integer",
-                       "description": "특정 시각을 볼 때 그 유닉스 초. 그 앞뒤 창을 본다"},
-            },
-            "required": ["host"],
-        },
-    },
-    {
-        "name": "open_problems",
-        "description": "그 호스트에 지금 열려 있는 문제(Zabbix). 비우면 전체.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"host": {"type": "string"}},
-        },
-    },
-    {
-        "name": "panel_image",
-        "description": ("그 호스트의 관측 화면(패널)을 그림으로 붙인다. 사람이 보고 있는 "
-                        "그래프를 답과 함께 보여 줄 때 쓴다. 반환된 id 를 답에 적으면 "
-                        "화면에 그림이 붙는다."),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "host": {"type": "string"},
-                "match": {"type": "string",
-                          "description": "패널 제목에 든 문자열 (예: CPU, 복제, 로그)"},
-                "from": {"type": "string"}, "to": {"type": "string"},
-                "window_m": {"type": "integer"},
-            },
-            "required": ["host"],
-        },
-    },
-    {
-        "name": "past_judgments",
-        "description": "봇이 전에 내린 판정 기록. 같은 일이 반복되는지 볼 때 쓴다.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "host": {"type": "string", "description": "비우면 전체"},
-                "days": {"type": "integer"},
-            },
-        },
-    },
-]
+                                            "그중 하나라도 든 줄(failed|timeout), 5개까지"}),
+              ["host"]),
+        _spec("security_alerts", "그 호스트의 보안 경보. 레벨 하한으로 좁힌다.",
+              dict(_WINDOW_PROPS,
+                   host=_host_prop("조회할 호스트 토큰", toks),
+                   min_level={"type": "integer", "description": "0~15"}),
+              ["host"]),
+        _spec("host_metrics",
+              "그 호스트의 Zabbix 지표. 이름 조각으로 아이템을 고르고 값의 추이를 본다. "
+              "복제 지연·CPU·메모리처럼 수치로 보는 것은 여기서 본다.",
+              dict(_WINDOW_PROPS,
+                   host=_host_prop("조회할 호스트 토큰", toks),
+                   match={"type": "string",
+                          "description": "아이템 이름·키에 든 문자열 "
+                                         "(예: replication, cpu, memory)"},
+                   at={"type": "integer",
+                       "description": "특정 시각을 볼 때 그 유닉스 초. 그 앞뒤 창을 본다"}),
+              ["host"]),
+        _spec("open_problems", "그 호스트에 지금 열려 있는 문제(Zabbix). 비우면 전체.",
+              {"host": _host_prop("비우면 전체", toks)}),
+        _spec("panel_image",
+              "그 호스트의 관측 화면(패널)을 그림으로 붙인다. 사람이 보고 있는 그래프를 "
+              "답과 함께 보여 줄 때 쓴다. 반환된 id 를 answer 의 image_ids 에 적는다.",
+              dict(_WINDOW_PROPS,
+                   host=_host_prop("조회할 호스트 토큰", toks),
+                   match={"type": "string",
+                          "description": "패널 제목에 든 문자열 (예: CPU, 복제, 로그)"}),
+              ["host"]),
+        _spec("past_judgments", "봇이 전에 내린 판정 기록. 같은 일이 반복되는지 볼 때 쓴다.",
+              {"host": _host_prop("비우면 전체", toks),
+               "days": {"type": "integer", "description": "며칠 전까지. 최대 90"}}),
+        _spec("answer",
+              "사람에게 줄 최종 답. 조사가 끝나면 이 도구로 답한다. 산문에 그림 손잡이나 "
+              "조회 구간을 적지 말고 여기 필드에 넣는다.",
+              {"summary": {"type": "string", "description": "결론 한두 문장"},
+               "window_utc": {"type": "string",
+                              "description": "조회 결과가 알려 준 구간을 그대로 옮긴다. "
+                                             "조회를 안 했으면 비운다"},
+               "findings": {"type": "array", "items": {"type": "string"},
+                            "description": "근거 항목. 조회로 확인한 것만"},
+               "image_ids": {"type": "array", "items": {"type": "string"},
+                             "description": "panel_image 가 준 id 만"}},
+              ["summary"]),
+    ]
+
+
+# 기존 호출자를 위한 기본 정의. 표를 못 만든 경우에도 도구는 있어야 한다.
+TOOL_SPECS = build_tool_specs()
+
+
+def check_answer(args: dict, images, windows) -> tuple:
+    """답 도구의 인자를 검증한다. 반환 `(통과 여부, 사유)`.
+
+    턴 중에 생기는 값은 enum 으로 묶을 수 없다. 묶으면 도구 정의가 라운드마다 바뀌어
+    캐시가 죽는다. 대신 여기서 본다. 위반은 예외가 아니라 도구 결과로 돌려주어 모델이
+    스스로 고치게 한다.
+    """
+    a = args or {}
+    for iid in (a.get("image_ids") or []):
+        if iid not in (images or set()):
+            return False, ("%s 는 이번에 만든 그림이 아니다. panel_image 가 준 id 만 "
+                           "적을 수 있다" % iid)
+    win = str(a.get("window_utc") or "").strip()
+    if win and win not in (windows or set()):
+        return False, ("%r 은 조회 결과가 알려 준 구간이 아니다. 도구가 돌려준 "
+                       "window_utc 를 그대로 옮겨라" % win)
+    if not str(a.get("summary") or "").strip():
+        return False, "summary 가 비어 있다"
+    return True, ""
 
 
 def _err(msg: str) -> dict:

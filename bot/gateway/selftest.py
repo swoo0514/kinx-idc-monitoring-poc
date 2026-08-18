@@ -280,7 +280,8 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_result_checks() + _ask_dispatch_checks()
+                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks()
+                    + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -3323,6 +3324,86 @@ def _ask_result_checks() -> int:
     return 24
 
 
+
+def _tool_schema_checks() -> int:
+    """도구 스키마가 모델이 고를 수 있는 값을 얼마나 좁히는가.
+
+    프롬프트로 "지어내지 마라" 라고 부탁하는 것과, 스키마가 값의 집합을 좁히는 것은
+    다르다. 부탁은 지켜지기도 하고 안 지켜지기도 하지만 스키마는 표현 자체를 막는다.
+    2026-08-18 랩에서 봇이 없는 보관 정책을 지어내고 24개 점을 "24일치" 로 읽었다.
+
+    **접두사 안정성도 여기서 지킨다.** 도구 정의는 프롬프트 맨 앞에 놓이므로 바이트가
+    흔들리면 캐시가 영영 안 걸린다.
+    """
+    import json
+
+    from . import asktools
+
+    table = {"[host-b]": {"host": "b1"}, "[host-a]": {"host": "a1"}}
+
+    # ① 대상 토큰을 enum 으로 묶는다. 표에 없는 이름은 표현할 수 없다.
+    specs = asktools.build_tool_specs(table)
+    by_name = {t["name"]: t for t in specs}
+    for name in ("host_logs", "host_metrics", "security_alerts", "panel_image"):
+        enum = by_name[name]["input_schema"]["properties"]["host"].get("enum")
+        assert enum == ["[host-a]", "[host-b]"], (name, enum)
+
+    # ② **같은 표는 같은 바이트를 만든다.** 정렬을 빠뜨리면 매 요청 접두사가 달라져
+    #    캐시가 한 번도 안 걸린다(조용히 실패한다).
+    other = {"[host-a]": {"host": "a1"}, "[host-b]": {"host": "b1"}}   # 순서만 다름
+    assert (json.dumps(specs, ensure_ascii=False, sort_keys=True)
+            == json.dumps(asktools.build_tool_specs(other), ensure_ascii=False,
+                          sort_keys=True))
+
+    # ③ 표가 비면 enum 을 넣지 않는다. 빈 enum 은 모든 값을 막아 도구를 죽인다.
+    for t in asktools.build_tool_specs({}):
+        for prop in t["input_schema"].get("properties", {}).values():
+            assert prop.get("enum") != [], t["name"]
+
+    # ④ 인자를 스키마대로 검증하게 한다. 목록 밖 인자는 아예 못 넣는다.
+    for t in specs:
+        assert t.get("strict") is True, t["name"]
+        assert t["input_schema"].get("additionalProperties") is False, t["name"]
+
+    # ⑤ **답도 도구로 받는다.** 산문으로 받으면 손잡이가 글자로 남고 구간이 지어내진다.
+    ans = by_name["answer"]
+    props = ans["input_schema"]["properties"]
+    for field in ("summary", "window_utc", "findings", "image_ids"):
+        assert field in props, field
+    assert "summary" in ans["input_schema"]["required"]
+
+    # ⑥ 턴 중에 생기는 값(그림 손잡이·조회 구간)은 enum 으로 못 묶는다. 묶으면 도구
+    #    정의가 라운드마다 바뀌어 캐시가 죽는다. 그래서 **코드가 검증한다.**
+    seen_windows = {"2026-08-15 04:44 → 2026-08-18 04:44 UTC"}
+    ok, why = asktools.check_answer(
+        {"summary": "정상", "window_utc": "2026-08-15 04:44 → 2026-08-18 04:44 UTC",
+         "image_ids": ["img-1234"]},
+        images={"img-1234"}, windows=seen_windows)
+    assert ok, why
+    ok, why = asktools.check_answer(
+        {"summary": "정상", "image_ids": ["img-9999"]},
+        images={"img-1234"}, windows=seen_windows)
+    assert not ok and "img-9999" in why, why
+    ok, why = asktools.check_answer(
+        {"summary": "정상", "window_utc": "지난 90일"},
+        images=set(), windows=seen_windows)
+    assert not ok and why, "조회한 적 없는 구간을 통과시켰다"
+    # 구간을 안 적는 것은 허용한다. 조회를 안 한 질문도 있다.
+    assert asktools.check_answer({"summary": "정상"}, images=set(), windows=set())[0]
+
+    # ⑦ 중복 키가 없다. 같은 키를 여러 번 쓰면 마지막 것만 남아 조용히 사라진다.
+    src = _read_source("gateway/asktools.py")
+    assert src.count('"description": "절대 구간 시작. ISO8601 또는 유닉스 초"') <= 2,         "from/to 정의가 중복돼 있다"
+    return 22
+
+
+def _read_source(rel: str) -> str:
+    import io
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return io.open(os.path.join(here, rel), encoding="utf-8").read()
+
+
 def _ask_dispatch_checks() -> int:
     """도구를 실제로 부를 때 무엇을 막는가.
 
@@ -3512,6 +3593,37 @@ def _ask_loop_checks() -> int:
         r = asyncio.run(ask.run_ask("무슨 호스트가 있나", table=table, model_fn=model))
         assert r["text"] == "web-01 이 원인이다", r
         assert [t["tool"] for t in r["trace"]] == ["list_hosts"], r["trace"]
+
+        # ①-b **답을 도구로 받는다.** 산문으로 받으면 손잡이가 글자로 남고 구간이
+        #      지어내진다(2026-08-18 실측).
+        def answers(system, messages, tools):
+            return {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "t1", "name": "answer",
+                 "input": {"summary": "복제는 정상이다",
+                           "findings": ["지연 0초", "IO/SQL 모두 Yes"]}}]}
+
+        r = asyncio.run(ask.run_ask("복제 상태", table=table, model_fn=answers))
+        assert "복제는 정상이다" in r["text"], r["text"]
+        assert "지연 0초" in r["text"], r["text"]
+        assert r["stopped"] == "end_turn", r["stopped"]
+
+        # ①-c **없는 그림 손잡이는 되돌려 고치게 한다.** 예외로 끝내면 사람은 답 대신
+        #      오류를 본다.
+        seen = {"n": 0}
+
+        def bad_then_good(system, messages, tools):
+            seen["n"] += 1
+            if seen["n"] == 1:
+                return {"stop_reason": "tool_use", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "answer",
+                     "input": {"summary": "보라", "image_ids": ["img-9999"]}}]}
+            return {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "t2", "name": "answer",
+                 "input": {"summary": "다시 보라"}}]}
+
+        r = asyncio.run(ask.run_ask("그림", table=table, model_fn=bad_then_good))
+        assert r["text"].startswith("다시 보라"), r["text"]
+        assert any(t.get("error") for t in r["trace"]), r["trace"]
 
         # ② **라운드 상한.** 모델이 계속 도구만 불러도 멈추고, 멈춘 이유를 남긴다.
         def loop_forever(system, messages, tools):

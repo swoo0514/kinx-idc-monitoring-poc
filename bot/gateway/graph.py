@@ -156,7 +156,8 @@ class ModelBlocked(Exception):
 # ---------------------------------------------------------------------------
 
 def build(system: str, specs: list, user: str, run_tool, model_fn=None,
-          guard=None, result_bytes: int = 60000, max_calls: int = 6):
+          guard=None, result_bytes: int = 60000, max_calls: int = 6,
+          answered=None):
     """`(state) -> state` 로 도는 그래프를 만든다.
 
     노드는 둘이다. 모델에게 묻는 자리와 도구를 실행하는 자리.
@@ -177,6 +178,8 @@ def build(system: str, specs: list, user: str, run_tool, model_fn=None,
 
     model = make_model(system, specs, user, model_fn)
     stop_now = guard or (lambda: False)
+    # 답 도구를 받았으면 더 돌 이유가 없다. 판단은 도구 실행부가 하고 여기서는 묻기만 한다.
+    got_answer = answered or (lambda: False)
 
     class State(TypedDict, total=False):
         """상태에 담는 것은 **노드 사이를 오가는 값**뿐이다.
@@ -227,7 +230,7 @@ def build(system: str, specs: list, user: str, run_tool, model_fn=None,
                 "spent": spent, "called": called, "stopped": stopped}
 
     def route(state: State) -> str:
-        if state.get("stopped"):
+        if state.get("stopped") or got_answer():
             return END
         last = state["messages"][-1]
         if not getattr(last, "tool_calls", None):
