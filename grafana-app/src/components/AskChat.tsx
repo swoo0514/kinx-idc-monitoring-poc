@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, TextArea, Alert, Spinner, Icon, useStyles2 } from '@grafana/ui';
+import { TextArea, Alert, Spinner, Icon, useStyles2 } from '@grafana/ui';
 import { getBackendSrv } from '@grafana/runtime';
 import { GrafanaTheme2, renderMarkdown } from '@grafana/data';
 import { css } from '@emotion/css';
@@ -30,7 +30,13 @@ export function AskChat({ prefill, compact }: { prefill?: string; compact?: bool
     setTurns((t) => [...t, { role: 'user', text }]);
     setBusy(true);
     try {
-      const res: any = await getBackendSrv().post(`${GATEWAY}/ask`, { question: text });
+      // 서버가 창으로 잘라 쓴다. 화면은 가진 것을 보내고 자르기는 한 곳에서만 한다.
+      const history = turns.map((t) => ({ role: t.role, content: t.text }));
+      const res: any = await getBackendSrv().post(`${GATEWAY}/ask`, {
+        question: text,
+        history,
+        session: 'ui',
+      });
       if (res?.error) {
         setErr(res.error);
       }
@@ -98,22 +104,24 @@ export function AskChat({ prefill, compact }: { prefill?: string; compact?: bool
         </Alert>
       )}
       <div className={s.composer}>
-        <TextArea
-          rows={compact ? 2 : 3}
-          value={q}
-          placeholder="질문을 입력하고 Enter"
-          className={s.input}
-          onChange={(e) => setQ(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-        />
-        <Button onClick={send} disabled={busy} icon="message" size="lg">
-          보내기
-        </Button>
+        <div className={s.inputBox}>
+          <TextArea
+            rows={compact ? 2 : 3}
+            value={q}
+            placeholder="질문을 입력하고 Enter"
+            className={s.input}
+            onChange={(e) => setQ(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <button className={s.sendBtn} onClick={send} disabled={busy} title="보내기">
+            <Icon name="arrow-up" size="lg" />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -157,6 +165,22 @@ const getStyles = (theme: GrafanaTheme2) => ({
     h1,h2,h3,h4{font-size:16px;margin:${theme.spacing(1.5)} 0 ${theme.spacing(0.5)};}`,
   trace: css`margin-top:${theme.spacing(1.5)};display:flex;flex-wrap:wrap;gap:5px;`,
   chip: css`font-size:12px;padding:2px 8px;border-radius:10px;background:${theme.colors.background.canvas};border:1px solid ${theme.colors.border.weak};color:${theme.colors.text.secondary};`,
-  composer: css`display:flex;gap:${theme.spacing(1)};align-items:flex-end;padding:${theme.spacing(1.5)};border-top:1px solid ${theme.colors.border.weak};`,
-  input: css`font-size:15px;`,
+  composer: css`padding:${theme.spacing(1.5)};border-top:1px solid ${theme.colors.border.weak};`,
+  // 입력창과 단추를 한 상자로 본다. 단추가 밖에 있으면 시선이 두 군데로 갈린다.
+  inputBox: css`
+    position:relative;border:1px solid ${theme.colors.border.medium};
+    border-radius:12px;background:${theme.colors.background.primary};
+    &:focus-within{border-color:${theme.colors.border.strong};}`,
+  input: css`
+    font-size:15px;line-height:1.6;border:none;background:transparent;resize:none;
+    padding:${theme.spacing(1.25, 6, 1.25, 1.75)};
+    &:focus{box-shadow:none;outline:none;}`,
+  // 강조색을 쓰지 않는다. 화면이 어두운 무채색이라 파란 단추만 튄다.
+  sendBtn: css`
+    position:absolute;right:8px;bottom:8px;width:34px;height:34px;
+    display:flex;align-items:center;justify-content:center;
+    border:1px solid ${theme.colors.border.medium};border-radius:9px;cursor:pointer;
+    background:${theme.colors.background.secondary};color:${theme.colors.text.primary};
+    &:hover:not(:disabled){background:${theme.colors.background.canvas};}
+    &:disabled{opacity:.45;cursor:default;}`,
 });

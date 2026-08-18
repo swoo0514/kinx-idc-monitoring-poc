@@ -1,6 +1,7 @@
 import React, { Suspense, lazy } from 'react';
 import { AppPlugin } from '@grafana/data';
 import { LoadingPlaceholder } from '@grafana/ui';
+import { getTemplateSrv } from '@grafana/runtime';
 import type { AppConfigProps } from './components/AppConfig/AppConfig';
 
 const App = lazy(() => import('./components/App/App'));
@@ -33,8 +34,15 @@ export const plugin = new AppPlugin<{}>()
       if (!context) {
         return {};
       }
+      // 패널 제목에는 $host 같은 변수가 그대로 들어 있다. 대시보드의 현재 값으로
+      // 풀어서 넘긴다 — 안 풀면 프롬프트에 "$host" 라는 글자가 그대로 실린다.
+      const srv = getTemplateSrv();
       const q = new URLSearchParams();
-      q.set('panel', String(context.title ?? context.id ?? ''));
+      q.set('panel', String(srv.replace(String(context.title ?? context.id ?? ''))));
+      const host = srv.replace('$host');
+      if (host && host !== '$host') {
+        q.set('host', host);
+      }
       if (context.dashboard && context.dashboard.title) {
         q.set('dash', String(context.dashboard.title));
       }
