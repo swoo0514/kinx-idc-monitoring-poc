@@ -3802,6 +3802,40 @@ def _registry_fill_checks() -> int:
         assert registry.duplicates() == [("zabbix-internal", "node1")],             registry.duplicates()
         registry._ENTRIES = [{"name": "node1", "source": "zabbix-internal"}]
         assert registry.duplicates() == []
+
+        # ④ **명부 파일을 실제로 적재해 본다.** `_ENTRIES` 를 직접 넣는 검사만 있으면
+        #    적재 경로가 한 번도 안 지나간다. 2026-08-18 에 그 안에서 이름 오류가 났는데
+        #    검사는 전부 통과했다.
+        import os
+        import tempfile
+        d = tempfile.mkdtemp(prefix="reg-")
+        path = os.path.join(d, "hosts.yml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("hosts:" + chr(10))
+            f.write("  - name: node1" + chr(10))
+            f.write("    source: zabbix-internal" + chr(10))
+            f.write("    loki: vm-a.example" + chr(10))
+        saved_path = registry.PATH
+        try:
+            registry.PATH = path
+            registry._load()
+            assert registry.status()["error"] == "", registry.status()
+            assert registry.label("zabbix-internal", "node1", "logs") == "vm-a.example"
+        finally:
+            registry.PATH = saved_path
+            registry._load()
+
+        # ⑤ **불러오는 순간에 적재가 성공하는가.** 모듈을 새로 불러야 보인다. 위 검사는
+        #    이미 불러온 모듈에서 `_load()` 를 다시 부르므로 임포트 시점 오류를 못 본다.
+        import subprocess
+        import sys as _sys
+        code = ("import os,sys;os.environ['HOST_REGISTRY_FILE']=%r;"
+                "sys.path.insert(0,%r);"
+                "from gateway import registry;"
+                "e=registry.status()['error'];"
+                "print('ERR:'+e if e else 'OK')" % (path, os.getcwd()))
+        r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True)
+        assert "OK" in (r.stdout or ""), (r.stdout, r.stderr[-300:])
     finally:
         registry._ENTRIES = saved
     return 6

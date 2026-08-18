@@ -61,8 +61,6 @@ def _load():
         log.error("호스트 명부 로드 실패 %s: %s — 환경변수 설정으로 동작한다", PATH, e)
 
 
-_load()
-
 
 def status() -> dict:
     """진단용. 명부를 실제로 읽었는지 사람이 확인할 수 있어야 한다."""
@@ -166,3 +164,8 @@ def axis_on(source: str, host: str, axis: str):
     """이 호스트에 그 축이 있는가. 명부에 안 적혔으면 None(모름 → 기존 규칙)."""
     v = entry(source, host).get(axis)
     return None if v is None else bool(v)
+
+
+# **적재는 파일 끝에서 한다.** 위쪽에 두면 아직 정의되지 않은 함수를 부르게 되고,
+# 그 실패는 try 안에서 잡혀 "명부 로드 실패" 한 줄로만 지나간다(2026-08-18 실측).
+_load()
