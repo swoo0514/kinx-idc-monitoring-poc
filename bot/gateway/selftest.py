@@ -3526,13 +3526,37 @@ def _ask_loop_checks() -> int:
         assert "/render/" not in blob, "이미지 주소가 모델에 갔다"
         assert "vm-p3-target-002" not in blob, "실명이 모델에 갔다"
 
-        # ⑬ 모델이 죽어도 예외를 위로 던지지 않는다
+        # ⑬ **같은 조회를 두 번 하지 않는다.** 오늘 list_hosts 를 세 번 부르며
+        #    라운드를 태웠다. 두 번째부터는 실행하지 않고 이미 불렀다고 돌려준다.
+        dup = []
+
+        def cap6(system, messages, tools):
+            dup.append(1)
+            if len(dup) <= 3:
+                return {"stop_reason": "tool_use", "content": [
+                    {"type": "tool_use", "id": "d%d" % len(dup), "name": "list_hosts",
+                     "input": {}}]}
+            return _text("끝")
+
+        r = asyncio.run(ask.run_ask("반복", table=long_tbl, model_fn=cap6))
+        repeats = [t for t in r["trace"] if "이미" in (t["error"] or "")]
+        assert repeats, "같은 조회가 그대로 다시 실행됐다: %s" % r["trace"]
+
+        # ⑭ **빈 결과에 다음 수를 알려 준다.** 그냥 비어 있으면 모델이 포기한다.
+        empty = asyncio.run(asktools.run_tool("list_hosts", {"query": "없는이름"},
+                                              {"table": long_tbl}))
+        assert empty.get("hint"), empty
+
+        # ⑮ 프롬프트가 범위를 못 박는가 — 관측과 무관한 질문에는 답을 아낀다
+        assert "관측" in ask.ASK_SYSTEM and "범위" in ask.ASK_SYSTEM, "범위 규칙이 없다"
+
+        # ⑯ 모델이 죽어도 예외를 위로 던지지 않는다
         def dead(system, messages, tools):
             raise RuntimeError("model down")
 
         r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
         assert r.get("error") and "모델" in r["error"], r
-        return 32
+        return 36
     finally:
         nametable._terms = saved
         ask.forget_all()

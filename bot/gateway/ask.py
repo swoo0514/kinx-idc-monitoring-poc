@@ -323,6 +323,9 @@ ASK_SYSTEM = """\
 
 규칙:
 - 호스트는 [host-...] 같은 가명 토큰으로만 지칭한다. 실명을 지어내지 마라.
+- **범위를 지킨다.** 너는 이 회사의 관측 데이터(지표·로그·보안 기록)에 대해서만
+  답한다. 관측과 무관한 질문(일반 지식·잡담·다른 주제)에는 답하지 말고, 무엇을 물어야
+  하는지 한 문장으로 알려 준 뒤 끝내라. 길게 사양하지 마라.
 - 대상 토큰을 모르면 list_hosts 를 먼저 부른다.
 - **사람이 절대 시각을 말하면 window_m 이 아니라 from·to 로 넘겨라.** "8월 13일 12시",
   "어제 새벽" 처럼 특정 시점을 가리키는 질문에 상대 창을 쓰면 엉뚱한 날을 보게 된다.
@@ -418,6 +421,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         messages.insert(0, {"role": "user", "content": DROP_NOTE})
     messages.append({"role": "user", "content": clean["text"]})
     trace, spent, stopped = [], 0, "end_turn"
+    # 같은 조회를 두 번 하지 않는다. 라운드와 비용을 태우고, 결과가 같으므로 얻는 것도 없다.
+    called = {}
     text = ""
 
     def _model(msgs):
@@ -445,7 +450,14 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         results = []
         for u in uses:
             # 모델이 준 인자는 토큰 상태 그대로 쓴다. 도구가 표에서 실명을 찾는다.
-            out = await asktools.run_tool(u.get("name", ""), u.get("input") or {}, ctx)
+            key = _json.dumps([u.get("name", ""), u.get("input") or {}],
+                              ensure_ascii=False, sort_keys=True)
+            if key in called:
+                out = {"error": "이미 같은 조회를 했다. 그 결과를 쓰고 다음으로 넘어가라",
+                       "previous_round": called[key]}
+            else:
+                called[key] = len(trace) + 1
+                out = await asktools.run_tool(u.get("name", ""), u.get("input") or {}, ctx)
             if isinstance(out, dict) and out.get("url"):
                 # **주소는 모델에 주지 않는다.** 대시보드 식별자와 호스트 실명이 들어 있다.
                 images.append(out)

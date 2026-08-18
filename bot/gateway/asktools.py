@@ -315,12 +315,42 @@ async def run_tool(name: str, args: dict, ctx: dict) -> dict:
         return _err("그런 도구는 없다: %s. 쓸 수 있는 것은 %s"
                     % (name, ", ".join(sorted(_TOOLS))))
     try:
-        return await fn(args or {}, ctx)
+        out = await fn(args or {}, ctx)
+        return _hint_if_empty(name, out)
     except ValueError as e:                      # 조립기가 막은 인자
         return _err(str(e))
     except Exception as e:                       # 조회 실패는 없음이 아니다
         log.warning("도구 %s 실패: %s", name, e)
         return _err("조회하지 못했다(%s). 이 결과를 '없음'으로 읽지 마라" % type(e).__name__)
+
+
+# 빈 결과에 붙일 다음 수. **그냥 비어 있으면 모델이 포기한다** — 오늘 랩에서
+# "찾을 수 없습니다" 로 끝난 자리가 이것이다. 조회는 성공했으니 다르게 물어보게 한다.
+_EMPTY_HINT = {
+    "host_logs": "그 창에 로그가 없다. 기간을 넓히거나 contains 를 빼고 다시 보라",
+    "host_metrics": "그 조건에 맞는 아이템이 없다. match 를 넓히거나 빼고 다시 보라",
+    "security_alerts": "그 창에 경보가 없다. min_level 을 낮추거나 기간을 넓혀 보라",
+    "open_problems": "지금 열린 문제가 없다. 지난 일을 보려면 past_judgments 를 써라",
+    "past_judgments": "그 기간에 판정 기록이 없다. days 를 늘려 보라",
+}
+_LIST_KEYS = ("logs", "metrics", "alerts", "problems", "judgments", "hosts")
+
+
+def _hint_if_empty(name: str, out):
+    """비어 있는데 조회는 성공한 경우에만 다음 수를 붙인다.
+
+    조회가 실패한 경우에는 붙이지 않는다 — 그건 '없다' 가 아니라 '못 봤다' 이고,
+    이미 그렇게 표시하고 있다.
+    """
+    if not isinstance(out, dict) or out.get("error") or out.get("hint"):
+        return out
+    if out.get("status") not in (None, "ok"):
+        return out
+    for k in _LIST_KEYS:
+        if k in out and not out[k]:
+            out["hint"] = _EMPTY_HINT.get(name, "다른 조건으로 다시 물어보라")
+            break
+    return out
 
 
 async def _tool_list_hosts(args: dict, ctx: dict) -> dict:
@@ -337,6 +367,9 @@ async def _tool_list_hosts(args: dict, ctx: dict) -> dict:
         # 안 알리면 모델이 "이 호스트는 지표가 없다"고 단정한다(2026-08-18 실측).
         axes = ["metrics"] + sorted(k for k in ("logs", "security") if ent.get(k))
         out.append({"host": tok, "axes": axes})
+    if not out:
+        return {"hosts": [], "n": 0,
+                "hint": "그 이름에 맞는 호스트가 없다. query 를 비우고 전체를 받아 보라"}
     return {"hosts": out[:100], "n": len(out)}
 
 
