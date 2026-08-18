@@ -3247,6 +3247,19 @@ def _ask_dispatch_checks() -> int:
     r = asyncio.run(asktools.run_tool("host_logs", {"host": "host-aaa"}, ctx))
     assert not r.get("error"), r
 
+    # ①-c **대상을 찾는 규칙은 도구마다 다르면 안 된다.** 대괄호 완화를 한 곳에만
+    #      넣었더니 past_judgments·open_problems 가 같은 값을 거부했다(2026-08-18 실측).
+    async def _j(host, days):
+        return {"judgments": [], "status": "ok"}
+
+    async def _p(ent):
+        return {"problems": [], "status": "ok"}
+
+    ctx2 = dict(ctx, fetch_judgments=_j, fetch_problems=_p)
+    for tool_name in ("past_judgments", "open_problems"):
+        r = asyncio.run(asktools.run_tool(tool_name, {"host": "host-aaa"}, ctx2))
+        assert not r.get("error"), (tool_name, r)
+
     # ② 표에 없는 대상은 거부한다. 표는 허용된 감시 서버에서만 만들어진다.
     r = asyncio.run(asktools.run_tool("host_logs", {"host": "[host-zzz]"}, ctx))
     assert r.get("error") and "대상" in r["error"], r
@@ -3275,7 +3288,7 @@ def _ask_dispatch_checks() -> int:
     # ⑦ 판정 이력은 영역으로 걸러 읽는다. 기존 함수를 고치면 품질 지표의 분모가 바뀐다.
     assert hasattr(store, "judgments_in_realms"), "영역 조건이 붙은 읽기 함수가 없다"
     assert store.judgments_in_realms([]) == [], "허용 영역이 없으면 아무것도 안 준다"
-    return 15
+    return 17
 
 
 def _ask_table_checks() -> int:

@@ -294,15 +294,23 @@ def _err(msg: str) -> dict:
     return {"error": msg}
 
 
+def _lookup(tok: str, ctx: dict):
+    """토큰 하나를 표에서 찾는다. **대상을 찾는 규칙은 한 곳에만 둔다.**
+
+    대괄호 완화를 `_target` 에만 넣었더니 past_judgments·open_problems 가 같은 값을
+    거부했다(2026-08-18 실측). 규칙이 도구마다 다르면 어느 도구는 되고 어느 도구는
+    안 되는 상태가 조용히 생긴다.
+    """
+    table = ctx.get("table") or {}
+    return table.get(tok) or table.get("[%s]" % str(tok).strip("[]"))
+
+
 def _target(args: dict, ctx: dict) -> tuple:
     """인자의 호스트 토큰을 표에서 찾는다. 반환 `(항목, 오류)`."""
     tok = str((args or {}).get("host") or "").strip()
     if not tok:
         return None, _err("host 인자가 없다. list_hosts 로 대상 토큰을 먼저 확인하라")
-    table = ctx.get("table") or {}
-    # **모델은 형식을 바꿔 쓴다.** 대괄호를 떼고 넣는 일이 잦다(2026-08-18 실측).
-    # 형식 때문에 대상을 못 찾는 것은 사람에게 아무 값이 없는 실패다.
-    ent = table.get(tok) or table.get("[%s]" % tok.strip("[]"))
+    ent = _lookup(tok, ctx)
     if not ent:
         return None, _err("알 수 없는 대상이다: %s. list_hosts 에 있는 토큰만 쓸 수 있다" % tok)
     return ent, None
@@ -404,9 +412,9 @@ async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
 
 async def _tool_past_judgments(args: dict, ctx: dict) -> dict:
     tok = str(args.get("host") or "").strip()
-    ent = (ctx.get("table") or {}).get(tok) if tok else None
+    ent = _lookup(tok, ctx) if tok else None
     if tok and not ent:
-        return _err("알 수 없는 대상이다: %s" % tok)
+        return _err("알 수 없는 대상이다: %s. list_hosts 로 확인하라" % tok)
     days = clamp_window(int(args.get("days") or JUDGMENT_DAYS_DEFAULT) * 1440) // 1440
     return await ctx["fetch_judgments"](ent.get("host") if ent else "", max(days, 1))
 
@@ -421,9 +429,9 @@ async def _tool_host_metrics(args: dict, ctx: dict) -> dict:
 
 async def _tool_open_problems(args: dict, ctx: dict) -> dict:
     tok = str(args.get("host") or "").strip()
-    ent = (ctx.get("table") or {}).get(tok) if tok else None
+    ent = _lookup(tok, ctx) if tok else None
     if tok and not ent:
-        return _err("알 수 없는 대상이다: %s" % tok)
+        return _err("알 수 없는 대상이다: %s. list_hosts 로 확인하라" % tok)
     return await ctx["fetch_problems"](ent)
 
 
