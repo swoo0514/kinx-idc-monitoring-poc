@@ -1013,8 +1013,13 @@ async def fetch_panel(entry: dict, match: str, start: int, end: int,
             # 주면 모델이 골라서 다시 부른다. 안 주면 "특정하지 못했다" 로 끝난다.
             titles = [mask(t) for t in grafana.panel_titles(dash)]
             if titles:
-                return {"error": "그 대시보드의 패널 목록이다. match 에 하나를 골라 넣어라",
-                        "panels": titles}
+                # **오류로 돌려주지 않는다.** 오류로 주면 모델이 같은 인자로 다시
+                # 부른다(2026-08-18 실측: 똑같은 호출을 세 번 했다). 목록은 성공한
+                # 조회 결과이고, 다음에 무엇을 할지만 적는다.
+                return {"panels": titles,
+                        "note": ("그 대시보드의 패널 목록이다. 그림을 붙이려면 이 중 "
+                                 "하나를 match 에 적고 dashboard 는 그대로 두어 다시 "
+                                 "불러라. 목록에 없으면 없는 것이다")}
         return {"error": "그 조건에 맞는 패널을 못 찾았다. match 나 dashboard 를 바꿔 보라",
                 "dashboards": [mask(t) for t in grafana.dashboard_titles()]}
     # **화면이 준 호스트 값을 먼저 쓴다.** 대시보드 변수의 실제 현재 값이다. Zabbix 축

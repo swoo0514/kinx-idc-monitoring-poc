@@ -3763,7 +3763,8 @@ def _panel_route_checks() -> int:
             out = asyncio.run(ask.fetch_panel({"host": "web-01"}, "없는패널", 1, 2,
                                               dash="월간 리포트",
                                               masker=ask.proxy.build_masker()))
-            assert out.get("panels"), out
+            assert out.get("panels") and not out.get("error"), out
+            assert "match 에 적고" in out.get("note", ""), out
             out2 = asyncio.run(ask.fetch_panel({"host": "web-01"}, "없는패널", 1, 2))
             assert out2.get("dashboards") == ["KINX 통합 관제"], out2
         finally:
@@ -3775,7 +3776,7 @@ def _panel_route_checks() -> int:
     finally:
         grafana.find_panel = saved_find
         nametable._terms = saved_terms
-    return 15
+    return 16
 
 
 
