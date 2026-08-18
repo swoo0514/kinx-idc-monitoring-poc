@@ -83,23 +83,32 @@ def resolve_mentions(text: str, table: dict) -> str:
     for frag in sorted(set(_WORDY.findall(out)), key=len, reverse=True):
         low = frag.lower()
         hits = [tok for tok, ent in (table or {}).items()
-                if low in str(ent.get("host", "")).lower()]
+                if any(low in str(ent.get(k) or "").lower()
+                       for k in ("host", "logs", "security"))]
         if len(hits) == 1:
             out = out.replace(frag, hits[0])
     return out
 
 
-def _alias(mk, name: str) -> None:
-    """도메인 접미사를 뗀 짧은 이름을 **같은 토큰**에 묶는다.
+def _alias(mk, name: str, *others) -> None:
+    """한 기계의 여러 이름을 **같은 토큰**에 묶는다.
 
-    사람은 `vm-a.novalocal` 을 `vm-a` 로 줄여 친다. 안 묶으면 그 조각이 안 가려진 채
-    모델로 가고, 모델은 그 문자열을 도구 인자로 넣어 '알 수 없는 대상' 으로 튕긴다.
+    두 가지를 함께 다룬다.
+
+    사람은 `vm-a.novalocal` 을 `vm-a` 로 줄여 친다. 그리고 **같은 기계를 축마다 다르게
+    부른다** — Zabbix 는 `node1`, Loki 와 Wazuh 는 FQDN 이다. 패널이 넘기는 값은 축
+    이름이라, Zabbix 이름만 등록하면 안 가려진 채 나가고 대상도 못 찾는다.
+
     새 토큰을 만들지 않고 기존 토큰을 가리키게 해야 같은 기계로 읽힌다.
     """
-    short = str(name or "").split(".")[0]
-    if short and short != name and short not in mk._fwd:
-        mk._fwd[short] = mk._fwd[name]
-        mk._re = None
+    base = mk._fwd.get(name)
+    if not base:
+        return
+    for other in (name,) + tuple(others):
+        for cand in (other, str(other or "").split(".")[0]):
+            if cand and cand != name and cand not in mk._fwd:
+                mk._fwd[cand] = base
+                mk._re = None
 
 
 async def build_table(masker: masking.Masker = None, client_factory=None) -> dict:
@@ -133,13 +142,12 @@ async def build_table(masker: masking.Masker = None, client_factory=None) -> dic
             if not name:
                 continue
             mk.register("host", name)
-            _alias(mk, name)
+            # 축마다 이름이 다를 수 있다. 못 풀면 빈 값이고 그건 '없음'이 아니다.
+            logs = collector._resolve_label(name, h, source, "logs")
+            sec = collector._resolve_label(name, h, source, "security")
+            _alias(mk, name, logs, sec)
             table[mk._fwd[name]] = {
-                "host": name,
-                "source": source,
-                # 축마다 이름이 다를 수 있다. 못 풀면 빈 값이고 그건 '없음'이 아니다.
-                "logs": collector._resolve_label(name, h, source, "logs"),
-                "security": collector._resolve_label(name, h, source, "security"),
+                "host": name, "source": source, "logs": logs, "security": sec,
             }
     return table
 
@@ -469,7 +477,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     else:
         for ent in table.values():
             mk.register("host", ent.get("host", ""))
-            _alias(mk, ent.get("host", ""))
+            _alias(mk, ent.get("host", ""), ent.get("logs", ""), ent.get("security", ""))
     if not table:
         return {"text": "", "trace": [], "rounds": 0, "images": [], "stopped": "no_targets",
                 "error": "조회할 수 있는 대상이 없다. 감시 서버 연결과 허용 영역을 확인하라"}

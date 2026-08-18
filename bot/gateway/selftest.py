@@ -3686,13 +3686,33 @@ def _ask_loop_checks() -> int:
                       "content": "vm-p3-target-002.novalocal 은 정상입니다"}]))
         assert "vm-p3-target-002.novalocal" not in seen6[0],             "이력의 실명이 모델에 갔다: %s" % seen6[0][:200]
 
-        # ㉒ 모델이 죽어도 예외를 위로 던지지 않는다
+        # ㉒ **한 기계의 세 이름을 모두 가린다.** Zabbix 는 node1, Loki·Wazuh 는 FQDN
+        #    으로 부른다. 패널이 넘기는 것은 축 이름이라 Zabbix 이름만 등록하면
+        #    안 가려진 채 나가고 대상도 못 찾는다(2026-08-18 실측).
+        three = {ask.proxy.token_for("host", "node1"):
+                 {"host": "node1", "source": "zabbix-internal",
+                  "logs": "vm-target-001.novalocal",
+                  "security": "vm-target-001.novalocal"}}
+        seen7 = []
+
+        def cap8(system, messages, tools):
+            seen7.append(str(messages[-1]["content"]))
+            return _text("확인")
+
+        nametable._terms = {}
+        asyncio.run(ask.run_ask("vm-target-001.novalocal 로그 봐줘", table=three,
+                                model_fn=cap8))
+        assert "vm-target-001" not in seen7[0], "축 이름이 안 가려졌다: %s" % seen7[0]
+        # 그리고 그 이름이 같은 대상으로 풀려야 도구를 부를 수 있다
+        assert ask.proxy.token_for("host", "node1") in seen7[0], seen7[0]
+
+        # ㉓ 모델이 죽어도 예외를 위로 던지지 않는다
         def dead(system, messages, tools):
             raise RuntimeError("model down")
 
         r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
         assert r.get("error") and "모델" in r["error"], r
-        return 54
+        return 56
     finally:
         nametable._terms = saved
         ask.forget_all()
