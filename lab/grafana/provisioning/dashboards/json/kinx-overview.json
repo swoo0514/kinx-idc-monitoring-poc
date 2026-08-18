@@ -1,1775 +1,1775 @@
 {
-  "annotations": {
-    "list": [
-      {
-        "builtIn": 1,
-        "datasource": {
-          "type": "grafana",
-          "uid": "-- Grafana --"
-        },
-        "enable": true,
-        "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
-        "name": "Annotations & Alerts",
-        "type": "dashboard"
-      },
-      {
-        "datasource": {
-          "type": "grafana",
-          "uid": "-- Grafana --"
-        },
-        "enable": true,
-        "hide": false,
-        "iconColor": "purple",
-        "name": "봇 판정 · CPU 사용률",
-        "target": {
-          "limit": 100,
-          "matchAny": false,
-          "tags": [
-            "kinx-bot",
-            "cpu_io_pressure"
-          ],
-          "type": "tags"
-        },
-        "filter": {
-          "exclude": false,
-          "ids": [
-            3
-          ]
-        }
-      },
-      {
-        "datasource": {
-          "type": "grafana",
-          "uid": "-- Grafana --"
-        },
-        "enable": true,
-        "hide": false,
-        "iconColor": "purple",
-        "name": "봇 판정 · 메모리 압박",
-        "target": {
-          "limit": 100,
-          "matchAny": false,
-          "tags": [
-            "kinx-bot",
-            "memory_pressure"
-          ],
-          "type": "tags"
-        },
-        "filter": {
-          "exclude": false,
-          "ids": [
-            3
-          ]
-        }
-      },
-      {
-        "datasource": {
-          "type": "grafana",
-          "uid": "-- Grafana --"
-        },
-        "enable": true,
-        "hide": false,
-        "iconColor": "purple",
-        "name": "봇 판정 · 복제 지연",
-        "target": {
-          "limit": 100,
-          "matchAny": false,
-          "tags": [
-            "kinx-bot",
-            "replication"
-          ],
-          "type": "tags"
-        },
-        "filter": {
-          "exclude": false,
-          "ids": [
-            10
-          ]
-        }
-      },
-      {
-        "datasource": {
-          "type": "grafana",
-          "uid": "-- Grafana --"
-        },
-        "enable": true,
-        "hide": false,
-        "iconColor": "purple",
-        "name": "봇 판정 · 인증 활동",
-        "target": {
-          "limit": 100,
-          "matchAny": false,
-          "tags": [
-            "kinx-bot",
-            "auth_security"
-          ],
-          "type": "tags"
-        },
-        "filter": {
-          "exclude": false,
-          "ids": [
-            12
-          ]
-        }
-      }
-    ]
-  },
-  "editable": true,
-  "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
-  "links": [],
-  "panels": [
-    {
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "id": 1,
-      "options": {
-        "code": {
-          "language": "plaintext",
-          "showLineNumbers": false,
-          "showMiniMap": false
-        },
-        "content": "## KINX 통합 관제\n메트릭(Zabbix) · 로그(Loki) · 보안(Wazuh)을 같은 타임라인에서 봅니다.",
-        "mode": "markdown"
-      },
-      "pluginVersion": "11.6.16",
-      "title": "",
-      "type": "text"
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
     },
-    {
-      "datasource": {
-        "type": "grafana-opensearch-datasource",
-        "uid": "wazuh"
-      },
-      "description": "팀 현행 컷라인(레벨 10+)을 넘은 이벤트만. 레벨은 우리 통합 눈금(SEV)으로 표시해 Slack·봇 카드와 같은 언어를 쓴다 — 매핑 원본은 docs/02-design/severity-normalization.md. agent.name 을 클릭하면 그 호스트로 대시보드가 좁혀진다.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green"
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "agent.name"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 204
-              },
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "targetBlank": false,
-                    "title": "이 호스트 로그 보기",
-                    "url": "/d/kinx-overview?var-host=${__value.raw}&from=${__from}&to=${__to}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "rule.level"
-            },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "options": {
-                      "from": 14,
-                      "result": {
-                        "color": "dark-red",
-                        "index": 0,
-                        "text": "SEV1 즉시"
-                      },
-                      "to": 15
-                    },
-                    "type": "range"
-                  },
-                  {
-                    "options": {
-                      "from": 10,
-                      "result": {
-                        "color": "red",
-                        "index": 1,
-                        "text": "SEV2 알림"
-                      },
-                      "to": 13
-                    },
-                    "type": "range"
-                  },
-                  {
-                    "options": {
-                      "from": 7,
-                      "result": {
-                        "color": "orange",
-                        "index": 2,
-                        "text": "SEV3 다이제스트"
-                      },
-                      "to": 9
-                    },
-                    "type": "range"
-                  },
-                  {
-                    "options": {
-                      "from": 3,
-                      "result": {
-                        "color": "text",
-                        "index": 3,
-                        "text": "SEV4 화면만"
-                      },
-                      "to": 6
-                    },
-                    "type": "range"
-                  },
-                  {
-                    "options": {
-                      "from": 0,
-                      "result": {
-                        "color": "text",
-                        "index": 4,
-                        "text": "NONE"
-                      },
-                      "to": 2
-                    },
-                    "type": "range"
-                  }
-                ]
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 3
-      },
-      "id": 5,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true,
-        "sortBy": []
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "alias": "",
-          "bucketAggs": [
-            {
-              "field": "@timestamp",
-              "id": "2",
-              "settings": {
-                "interval": "auto"
-              },
-              "type": "date_histogram"
-            }
-          ],
-          "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "wazuh"
-          },
-          "format": "table",
-          "luceneQueryType": "RawData",
-          "metrics": [
-            {
-              "id": "1",
-              "settings": {
-                "order": "desc",
-                "size": "500",
-                "useTimeRange": true
-              },
-              "type": "raw_data"
-            }
-          ],
-          "query": "rule.level:>=10 AND agent.name:/$host/",
-          "queryType": "lucene",
-          "refId": "A",
-          "timeField": "@timestamp"
-        }
-      ],
-      "title": "보안 이벤트 (Wazuh) — 레벨 10+ 개별 (agent.name 클릭 → 그 호스트 로그)",
-      "transformations": [
-        {
-          "id": "filterFieldsByName",
-          "options": {
-            "include": {
-              "pattern": "^(@timestamp|agent\\.name|rule\\.level|rule\\.description|rule\\.id|syscheck\\.path)$"
-            }
-          }
-        }
-      ],
-      "type": "table"
+    "enable": true,
+    "hide": true,
+    "iconColor": "rgba(0, 211, 255, 1)",
+    "name": "Annotations & Alerts",
+    "type": "dashboard"
+   },
+   {
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
     },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 11,
-        "w": 24,
-        "x": 0,
-        "y": 11
-      },
-      "id": 2,
-      "options": {
-        "dedupStrategy": "none",
-        "enableInfiniteScrolling": false,
-        "enableLogDetails": true,
-        "prettifyLogMessage": false,
-        "showCommonLabels": false,
-        "showLabels": false,
-        "showTime": true,
-        "sortOrder": "Descending",
-        "wrapLogMessage": true
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "direction": "backward",
-          "editorMode": "code",
-          "expr": "{host=~\"$host\"}",
-          "queryType": "range",
-          "refId": "A"
-        }
-      ],
-      "title": "로그 (Loki)",
-      "type": "logs"
+    "enable": true,
+    "hide": false,
+    "iconColor": "purple",
+    "name": "봇 판정 · CPU 사용률 · 자원 압박",
+    "target": {
+     "limit": 100,
+     "matchAny": false,
+     "tags": [
+      "kinx-bot",
+      "cpu_io_pressure"
+     ],
+     "type": "tags"
     },
-    {
-      "datasource": {
-        "type": "alexanderzobnin-zabbix-datasource",
-        "uid": "zabbix"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green"
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 22
-      },
-      "id": 3,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "application": {
-            "filter": ""
-          },
-          "countTriggersBy": "",
-          "datasource": {
-            "type": "alexanderzobnin-zabbix-datasource",
-            "uid": "zabbix"
-          },
-          "evaltype": "0",
-          "functions": [],
-          "group": {
-            "filter": "/.*/"
-          },
-          "host": {
-            "filter": "/$host/"
-          },
-          "item": {
-            "filter": "CPU utilization"
-          },
-          "itemTag": {
-            "filter": "component: cpu"
-          },
-          "macro": {
-            "filter": ""
-          },
-          "options": {
-            "count": false,
-            "disableDataAlignment": false,
-            "showDisabledItems": false,
-            "skipEmptyValues": false,
-            "useTrends": "default",
-            "useZabbixValueMapping": false
-          },
-          "proxy": {
-            "filter": ""
-          },
-          "queryType": "0",
-          "refId": "A",
-          "resultFormat": "time_series",
-          "schema": 12,
-          "table": {
-            "skipEmptyValues": false
-          },
-          "tags": {
-            "filter": ""
-          },
-          "textFilter": "",
-          "trigger": {
-            "filter": ""
-          }
-        }
-      ],
-      "title": "메트릭 (Zabbix) — $host CPU 사용률",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "alexanderzobnin-zabbix-datasource",
-        "uid": "zabbix"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 1,
-            "showPoints": "auto",
-            "spanNulls": false
-          },
-          "mappings": [],
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 38
-      },
-      "id": 10,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "application": {
-            "filter": ""
-          },
-          "countTriggersBy": "",
-          "datasource": {
-            "type": "alexanderzobnin-zabbix-datasource",
-            "uid": "zabbix"
-          },
-          "evaltype": "0",
-          "functions": [],
-          "group": {
-            "filter": "/.*/"
-          },
-          "host": {
-            "filter": "/$host/"
-          },
-          "item": {
-            "filter": "/.*Seconds Behind Master.*/"
-          },
-          "itemTag": {
-            "filter": ""
-          },
-          "macro": {
-            "filter": ""
-          },
-          "options": {
-            "count": false,
-            "disableDataAlignment": false,
-            "showDisabledItems": false,
-            "skipEmptyValues": false,
-            "useTrends": "default",
-            "useZabbixValueMapping": false
-          },
-          "proxy": {
-            "filter": ""
-          },
-          "queryType": "0",
-          "refId": "A",
-          "resultFormat": "time_series",
-          "schema": 12,
-          "table": {
-            "skipEmptyValues": false
-          },
-          "tags": {
-            "filter": ""
-          },
-          "textFilter": "",
-          "trigger": {
-            "filter": ""
-          }
-        }
-      ],
-      "title": "메트릭 (Zabbix) — $host 복제 지연(초, Seconds Behind Master)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "grafana-opensearch-datasource",
-        "uid": "wazuh"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "links": [
-            {
-              "targetBlank": true,
-              "title": "Wazuh 대시보드에서 심층 조사",
-              "url": "https://1.201.177.127/app/threat-hunting#/overview/?tab=general&tabView=dashboard&_a=(filters:!(),query:(language:kuery,query:''))&_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-24h,to:now))"
-            }
-          ],
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green"
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 30
-      },
-      "id": 4,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "alias": "",
-          "bucketAggs": [
-            {
-              "field": "@timestamp",
-              "id": "2",
-              "settings": {
-                "interval": "auto"
-              },
-              "type": "date_histogram"
-            }
-          ],
-          "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "wazuh"
-          },
-          "format": "table",
-          "luceneQueryType": "Metric",
-          "metrics": [
-            {
-              "id": "1",
-              "type": "count"
-            }
-          ],
-          "query": "rule.level:>=10 AND agent.name:/$host/",
-          "queryType": "lucene",
-          "refId": "A",
-          "timeField": "@timestamp"
-        }
-      ],
-      "title": "보안 (Wazuh) — 레벨 10+",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "grafana-opensearch-datasource",
-        "uid": "wazuh"
-      },
-      "description": "SCA(CIS 벤치마크) 준수 점수. 요약 이벤트는 스캔할 때만 생성돼 매우 드물다(랩 실측 전체 7건). 그래서 추세선이 아니라 최신값 stat 으로 그리고, 패널 자체에 timeFrom 30d 를 걸어 대시보드 시간 범위와 무관하게 항상 최신값을 잡는다. 요약 룰 ID 는 점수 구간마다 달라지므로(랩 실측 19003) ID 대신 data.sca.score 존재 여부로 거른다.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "max": 100,
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red"
-              },
-              {
-                "color": "orange",
-                "value": 50
-              },
-              {
-                "color": "green",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 49
-      },
-      "id": 6,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name"
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "alias": "",
-          "bucketAggs": [
-            {
-              "field": "agent.name",
-              "id": "3",
-              "settings": {
-                "min_doc_count": "1",
-                "order": "desc",
-                "orderBy": "_term",
-                "size": "10"
-              },
-              "type": "terms"
-            },
-            {
-              "field": "@timestamp",
-              "id": "2",
-              "settings": {
-                "interval": "auto",
-                "min_doc_count": "0"
-              },
-              "type": "date_histogram"
-            }
-          ],
-          "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "wazuh"
-          },
-          "format": "table",
-          "luceneQueryType": "Metric",
-          "metrics": [
-            {
-              "field": "data.sca.score",
-              "id": "1",
-              "type": "avg"
-            }
-          ],
-          "query": "rule.groups:sca AND _exists_:data.sca.score AND agent.name:/$host/",
-          "queryType": "lucene",
-          "refId": "A",
-          "timeField": "@timestamp"
-        }
-      ],
-      "timeFrom": "30d",
-      "title": "설정 준수율 (Wazuh SCA) — CIS 벤치마크 점수 (최근 30일 최신 스캔)",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "grafana-opensearch-datasource",
-        "uid": "wazuh-states"
-      },
-      "description": "취약점 재고는 시계열이 아니라 '지금 이 호스트가 안고 있는 CVE' 스냅샷이다. 별도 인덱스(wazuh-states-vulnerabilities-*)를 쓰며, 매니저에 indexer connector가 배선돼야 데이터가 생긴다.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text"
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 49
-      },
-      "id": 8,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": true
-        },
-        "showHeader": true,
-        "sortBy": []
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "alias": "",
-          "bucketAggs": [
-            {
-              "field": "vulnerability.severity",
-              "id": "2",
-              "settings": {
-                "min_doc_count": "0",
-                "order": "desc",
-                "orderBy": "_count",
-                "size": "10"
-              },
-              "type": "terms"
-            }
-          ],
-          "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "wazuh-states"
-          },
-          "format": "table",
-          "luceneQueryType": "Metric",
-          "metrics": [
-            {
-              "id": "1",
-              "type": "count"
-            }
-          ],
-          "query": "agent.name:/$host/",
-          "queryType": "lucene",
-          "refId": "A",
-          "timeField": "vulnerability.detected_at"
-        }
-      ],
-      "timeFrom": "90d",
-      "title": "취약점 재고 (Wazuh) — $host 심각도별 CVE 수 (최근 90일 탐지분)",
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "grafana-opensearch-datasource",
-        "uid": "wazuh"
-      },
-      "description": "FIM(파일 무결성) 변경 이력. 레벨 10+ 패널에는 이 이벤트가 뜨지 않는다 — FIM 기본 레벨이 5~7이라 컷라인 아래이기 때문이다.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": true,
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text"
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "경로"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 420
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "변경"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 90
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "시각"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 180
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "심각도"
-            },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "options": {
-                      "from": 14,
-                      "result": {
-                        "color": "dark-red",
-                        "index": 0,
-                        "text": "SEV1 즉시"
-                      },
-                      "to": 15
-                    },
-                    "type": "range"
-                  },
-                  {
-                    "options": {
-                      "from": 10,
-                      "result": {
-                        "color": "red",
-                        "index": 1,
-                        "text": "SEV2 알림"
-                      },
-                      "to": 13
-                    },
-                    "type": "range"
-                  },
-                  {
-                    "options": {
-                      "from": 7,
-                      "result": {
-                        "color": "orange",
-                        "index": 2,
-                        "text": "SEV3 다이제스트"
-                      },
-                      "to": 9
-                    },
-                    "type": "range"
-                  },
-                  {
-                    "options": {
-                      "from": 3,
-                      "result": {
-                        "color": "text",
-                        "index": 3,
-                        "text": "SEV4 화면만"
-                      },
-                      "to": 6
-                    },
-                    "type": "range"
-                  },
-                  {
-                    "options": {
-                      "from": 0,
-                      "result": {
-                        "color": "text",
-                        "index": 4,
-                        "text": "NONE"
-                      },
-                      "to": 2
-                    },
-                    "type": "range"
-                  }
-                ]
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 57
-      },
-      "id": 7,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true,
-        "sortBy": []
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "alias": "",
-          "bucketAggs": [
-            {
-              "field": "@timestamp",
-              "id": "2",
-              "settings": {
-                "interval": "auto"
-              },
-              "type": "date_histogram"
-            }
-          ],
-          "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "wazuh"
-          },
-          "format": "table",
-          "luceneQueryType": "RawData",
-          "metrics": [
-            {
-              "id": "1",
-              "settings": {
-                "order": "desc",
-                "size": "200",
-                "useTimeRange": true
-              },
-              "type": "raw_data"
-            }
-          ],
-          "query": "rule.groups:syscheck AND agent.name:/$host/",
-          "queryType": "lucene",
-          "refId": "A",
-          "timeField": "@timestamp"
-        }
-      ],
-      "title": "파일 변경 이력 (Wazuh FIM) — $host",
-      "transformations": [
-        {
-          "id": "filterFieldsByName",
-          "options": {
-            "include": {
-              "pattern": "^(@timestamp|syscheck\\.path|syscheck\\.event|rule\\.level|rule\\.description)$"
-            }
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {},
-            "includeByName": {},
-            "indexByName": {
-              "@timestamp": 0,
-              "rule.description": 4,
-              "rule.level": 3,
-              "syscheck.event": 2,
-              "syscheck.path": 1
-            },
-            "renameByName": {
-              "@timestamp": "시각",
-              "rule.description": "설명",
-              "rule.level": "심각도",
-              "syscheck.event": "변경",
-              "syscheck.path": "경로"
-            }
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "alexanderzobnin-zabbix-datasource",
-        "uid": "zabbix"
-      },
-      "description": "인증서 만료 재고. 도메인 하나당 Zabbix 호스트 하나이며 ansible/certificates.yml 로 생성한다. 긴급도 판단과 알림은 표준 템플릿의 트리거({$CERT.EXPIRY.WARN})가 맡고, 이 패널은 전수 현황을 본다. 클릭하면 전용 대시보드(kinx-certificates)로 이동한다 — 활성 문제(만료 임박·유효하지 않음·점검 불가)와 전수 재고를 같이 본다.",
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [],
-          "unit": "dateTimeFromNow",
-          "links": [
-            {
-              "targetBlank": false,
-              "title": "인증서 전용 대시보드에서 전수 보기",
-              "url": "/d/kinx-certificates/kinx?var-group=$__all"
-            }
-          ]
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 81
-      },
-      "id": 11,
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name"
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "application": {
-            "filter": ""
-          },
-          "datasource": {
-            "type": "alexanderzobnin-zabbix-datasource",
-            "uid": "zabbix"
-          },
-          "functions": [
-            {
-              "def": {
-                "category": "Transform",
-                "defaultParams": [
-                  100
-                ],
-                "name": "scale",
-                "params": [
-                  {
-                    "name": "factor",
-                    "options": [
-                      100,
-                      0.01,
-                      10,
-                      -1
-                    ],
-                    "type": "float"
-                  }
-                ]
-              },
-              "params": [
-                "1000"
-              ],
-              "text": "scale(1000)"
-            }
-          ],
-          "group": {
-            "filter": "/.*/"
-          },
-          "host": {
-            "filter": "/.*/"
-          },
-          "item": {
-            "filter": "/Expires on/"
-          },
-          "itemTag": {
-            "filter": ""
-          },
-          "macro": {
-            "filter": ""
-          },
-          "options": {
-            "showDisabledItems": false,
-            "skipEmptyValues": false,
-            "useTrends": "default",
-            "useZabbixValueMapping": false
-          },
-          "proxy": {
-            "filter": ""
-          },
-          "queryType": "0",
-          "refId": "A",
-          "resultFormat": "time_series",
-          "schema": 12,
-          "table": {
-            "skipEmptyValues": false
-          },
-          "tags": {
-            "filter": ""
-          },
-          "textFilter": "",
-          "trigger": {
-            "filter": ""
-          }
-        }
-      ],
-      "title": "인증서 만료 재고 (Zabbix) — 도메인별 만료 시점",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "grafana-opensearch-datasource",
-        "uid": "wazuh"
-      },
-      "description": "로그인 성공과 실패를 나란히 본다. 레벨 10+ 패널에서는 실패가 누적 임계를 넘긴 뒤에야 한 줄로 보이는데, 이 패널은 그 전 단계를 보여준다. 실패가 쌓인 뒤 성공이 찍히는 패턴이 침해 신호다.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "bars",
-            "fillOpacity": 60,
-            "lineWidth": 1,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": []
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "실패"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "성공"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 65
-      },
-      "id": 12,
-      "options": {
-        "legend": {
-          "calcs": [
-            "sum"
-          ],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "alias": "실패",
-          "bucketAggs": [
-            {
-              "field": "@timestamp",
-              "id": "2",
-              "settings": {
-                "interval": "auto",
-                "min_doc_count": "0"
-              },
-              "type": "date_histogram"
-            }
-          ],
-          "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "wazuh"
-          },
-          "format": "table",
-          "luceneQueryType": "Metric",
-          "metrics": [
-            {
-              "id": "1",
-              "type": "count"
-            }
-          ],
-          "query": "rule.groups:authentication_failed AND agent.name:/$host/",
-          "queryType": "lucene",
-          "refId": "A",
-          "timeField": "@timestamp"
-        },
-        {
-          "alias": "성공",
-          "bucketAggs": [
-            {
-              "field": "@timestamp",
-              "id": "2",
-              "settings": {
-                "interval": "auto",
-                "min_doc_count": "0"
-              },
-              "type": "date_histogram"
-            }
-          ],
-          "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "wazuh"
-          },
-          "format": "table",
-          "luceneQueryType": "Metric",
-          "metrics": [
-            {
-              "id": "1",
-              "type": "count"
-            }
-          ],
-          "query": "rule.groups:authentication_success AND agent.name:/$host/",
-          "queryType": "lucene",
-          "refId": "B",
-          "timeField": "@timestamp"
-        }
-      ],
-      "title": "인증 활동 (Wazuh) — $host 로그인 실패/성공",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "grafana-opensearch-datasource",
-        "uid": "wazuh"
-      },
-      "description": "에이전트 연결·중단 이력. 룰 501/503/504/505/506 은 전부 레벨 3(SEV4)이라 팀 컷라인(10) 아래여서 알림이 가지 않는다 — 그래서 화면으로 본다. 끊긴 시간은 그 호스트가 무감시인 시간이다. 룰 번호 대신 설명 컬럼만 둔다(번호는 읽는 데 도움이 안 됨). $host 필터를 일부러 걸지 않는다: 어느 호스트가 빠졌는지는 그 호스트를 선택하지 않은 상태에서 알아야 한다.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": true,
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text"
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "시각"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 180
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "이벤트"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 280
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 65
-      },
-      "id": 13,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true,
-        "sortBy": []
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "alias": "",
-          "bucketAggs": [
-            {
-              "field": "@timestamp",
-              "id": "2",
-              "settings": {
-                "interval": "auto",
-                "min_doc_count": "0"
-              },
-              "type": "date_histogram"
-            }
-          ],
-          "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "wazuh"
-          },
-          "format": "table",
-          "luceneQueryType": "RawData",
-          "metrics": [
-            {
-              "id": "1",
-              "settings": {
-                "order": "desc",
-                "size": "100",
-                "useTimeRange": true
-              },
-              "type": "raw_data"
-            }
-          ],
-          "query": "rule.id:(501 OR 503 OR 504 OR 505 OR 506)",
-          "queryType": "lucene",
-          "refId": "A",
-          "timeField": "@timestamp"
-        }
-      ],
-      "title": "에이전트 수명주기 (Wazuh) — 연결·중단 이력 (전체 호스트)",
-      "transformations": [
-        {
-          "id": "filterFieldsByName",
-          "options": {
-            "include": {
-              "pattern": "^(@timestamp|agent\\.name|rule\\.id|rule\\.description)$"
-            }
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "rule.id": true
-            },
-            "includeByName": {},
-            "indexByName": {
-              "@timestamp": 0,
-              "agent.name": 1,
-              "rule.description": 2
-            },
-            "renameByName": {
-              "@timestamp": "시각",
-              "agent.name": "호스트",
-              "rule.description": "이벤트"
-            }
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "grafana-opensearch-datasource",
-        "uid": "wazuh"
-      },
-      "description": "Wazuh 룰셋이 자체적으로 달고 나오는 PCI DSS 요건 태그를 집계한다. 우리가 만든 매핑이 아니다 (룰 550 = pci_dss_11.5). 요건 계열: 2.x = 시스템 구성 표준, 10.x = 감사 로그 기록·보관, 11.x = 보안 시스템 정기 점검. 세부 항목(10.2.5 등)의 정확한 표준 문구는 PCI DSS 원문 확인이 필요하므로 여기서는 번호만 표시한다. 랩 실측 검산: 2.2=671 이 SCA 이벤트 수와 정확히 일치, 11.5 는 FIM. 컴플라이언스는 호스트 단위가 아니라 조직 단위로 보므로 $host 필터를 걸지 않는다.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text"
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 73
-      },
-      "id": 14,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": true
-        },
-        "showHeader": true,
-        "sortBy": []
-      },
-      "pluginVersion": "11.6.16",
-      "targets": [
-        {
-          "alias": "",
-          "bucketAggs": [
-            {
-              "field": "rule.pci_dss",
-              "id": "3",
-              "settings": {
-                "min_doc_count": "1",
-                "order": "desc",
-                "orderBy": "_count",
-                "size": "15"
-              },
-              "type": "terms"
-            }
-          ],
-          "datasource": {
-            "type": "grafana-opensearch-datasource",
-            "uid": "wazuh"
-          },
-          "format": "table",
-          "luceneQueryType": "Metric",
-          "metrics": [
-            {
-              "id": "1",
-              "type": "count"
-            }
-          ],
-          "query": "_exists_:rule.pci_dss",
-          "queryType": "lucene",
-          "refId": "A",
-          "timeField": "@timestamp"
-        }
-      ],
-      "title": "PCI DSS 요건별 이벤트 (Wazuh) — 룰셋 기본 태그 집계 (전체 호스트)",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {},
-            "includeByName": {},
-            "indexByName": {
-              "Count": 1,
-              "rule.pci_dss": 0
-            },
-            "renameByName": {
-              "Count": "이벤트 수",
-              "rule.pci_dss": "PCI DSS 요건"
-            }
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 24,
-        "x": 0,
-        "y": 46
-      },
-      "id": 15,
-      "options": {
-        "code": {
-          "language": "plaintext",
-          "showLineNumbers": false,
-          "showMiniMap": false
-        },
-        "content": "## 보안 축 상세 — Wazuh 모듈별\n위쪽은 데모 A 의 3축 통합 화면(메트릭·로그·보안을 같은 타임라인에), 아래는 **보안 축을 모듈별로 펼친 것**입니다.\n\n심각도는 통합 눈금 **SEV** 로 표시합니다 — `SEV1 즉시` / `SEV2 알림`(팀 컷라인 10+) / `SEV3 다이제스트` / `SEV4 화면만`. Slack 카드·봇 회신과 같은 언어입니다(원본: `docs/02-design/severity-normalization.md`).\n\n**FIM·SCA 기본 레벨은 5~9(SEV3·SEV4)라 알림으로 가지 않습니다.** 그래서 여기서 봅니다. 컷라인 위로 올린 것은 인증·권한 핵심 파일 변경과 SCA 회귀 둘뿐입니다.",
-        "mode": "markdown"
-      },
-      "pluginVersion": "11.6.16",
-      "title": "",
-      "type": "text"
+    "filter": {
+     "exclude": false,
+     "ids": [
+      3
+     ]
     }
-  ],
-  "preload": false,
-  "refresh": "30s",
-  "schemaVersion": 41,
-  "tags": [
-    "kinx",
-    "overview"
-  ],
-  "templating": {
-    "list": [
-      {
-        "allValue": ".+",
-        "current": {
-          "text": "vm-target-001.novalocal",
-          "value": "vm-target-001.novalocal"
-        },
-        "datasource": {
-          "type": "loki",
-          "uid": "loki"
-        },
-        "definition": "",
-        "includeAll": true,
-        "name": "host",
-        "options": [],
-        "query": {
-          "label": "host",
-          "refId": "LokiVariableQueryEditor-VariableQuery",
-          "stream": "",
-          "type": 1
-        },
-        "refresh": 1,
-        "regex": "",
-        "type": "query"
-      }
+   },
+   {
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": false,
+    "iconColor": "purple",
+    "name": "봇 판정 · CPU 사용률 · 메모리",
+    "target": {
+     "limit": 100,
+     "matchAny": false,
+     "tags": [
+      "kinx-bot",
+      "memory_pressure"
+     ],
+     "type": "tags"
+    },
+    "filter": {
+     "exclude": false,
+     "ids": [
+      3
+     ]
+    }
+   },
+   {
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": false,
+    "iconColor": "purple",
+    "name": "봇 판정 · 복제 지연 · 복제",
+    "target": {
+     "limit": 100,
+     "matchAny": false,
+     "tags": [
+      "kinx-bot",
+      "replication"
+     ],
+     "type": "tags"
+    },
+    "filter": {
+     "exclude": false,
+     "ids": [
+      10
+     ]
+    }
+   },
+   {
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": false,
+    "iconColor": "purple",
+    "name": "봇 판정 · 인증 활동 · 인증·보안",
+    "target": {
+     "limit": 100,
+     "matchAny": false,
+     "tags": [
+      "kinx-bot",
+      "auth_security"
+     ],
+     "type": "tags"
+    },
+    "filter": {
+     "exclude": false,
+     "ids": [
+      12
+     ]
+    }
+   }
+  ]
+ },
+ "editable": true,
+ "fiscalYearStartMonth": 0,
+ "graphTooltip": 0,
+ "links": [],
+ "panels": [
+  {
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 3,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "id": 1,
+   "options": {
+    "code": {
+     "language": "plaintext",
+     "showLineNumbers": false,
+     "showMiniMap": false
+    },
+    "content": "## KINX 통합 관제\n메트릭(Zabbix) · 로그(Loki) · 보안(Wazuh)을 같은 타임라인에서 봅니다.",
+    "mode": "markdown"
+   },
+   "pluginVersion": "11.6.16",
+   "title": "",
+   "type": "text"
+  },
+  {
+   "datasource": {
+    "type": "grafana-opensearch-datasource",
+    "uid": "wazuh"
+   },
+   "description": "팀 현행 컷라인(레벨 10+)을 넘은 이벤트만. 레벨은 우리 통합 눈금(SEV)으로 표시해 Slack·봇 카드와 같은 언어를 쓴다 — 매핑 원본은 docs/02-design/severity-normalization.md. agent.name 을 클릭하면 그 호스트로 대시보드가 좁혀진다.",
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "filterable": false,
+      "inspect": false
+     },
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green"
+       },
+       {
+        "color": "red",
+        "value": 80
+       }
+      ]
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "agent.name"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 204
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "targetBlank": false,
+          "title": "이 호스트 로그 보기",
+          "url": "/d/kinx-overview?var-host=${__value.raw}&from=${__from}&to=${__to}"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "rule.level"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "options": {
+           "from": 14,
+           "result": {
+            "color": "dark-red",
+            "index": 0,
+            "text": "SEV1 즉시"
+           },
+           "to": 15
+          },
+          "type": "range"
+         },
+         {
+          "options": {
+           "from": 10,
+           "result": {
+            "color": "red",
+            "index": 1,
+            "text": "SEV2 알림"
+           },
+           "to": 13
+          },
+          "type": "range"
+         },
+         {
+          "options": {
+           "from": 7,
+           "result": {
+            "color": "orange",
+            "index": 2,
+            "text": "SEV3 다이제스트"
+           },
+           "to": 9
+          },
+          "type": "range"
+         },
+         {
+          "options": {
+           "from": 3,
+           "result": {
+            "color": "text",
+            "index": 3,
+            "text": "SEV4 화면만"
+           },
+           "to": 6
+          },
+          "type": "range"
+         },
+         {
+          "options": {
+           "from": 0,
+           "result": {
+            "color": "text",
+            "index": 4,
+            "text": "NONE"
+           },
+           "to": 2
+          },
+          "type": "range"
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       },
+       {
+        "id": "custom.width",
+        "value": 130
+       }
+      ]
+     }
     ]
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 3
+   },
+   "id": 5,
+   "options": {
+    "cellHeight": "sm",
+    "footer": {
+     "countRows": false,
+     "fields": "",
+     "reducer": [
+      "sum"
+     ],
+     "show": false
+    },
+    "showHeader": true,
+    "sortBy": []
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "alias": "",
+     "bucketAggs": [
+      {
+       "field": "@timestamp",
+       "id": "2",
+       "settings": {
+        "interval": "auto"
+       },
+       "type": "date_histogram"
+      }
+     ],
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh"
+     },
+     "format": "table",
+     "luceneQueryType": "RawData",
+     "metrics": [
+      {
+       "id": "1",
+       "settings": {
+        "order": "desc",
+        "size": "500",
+        "useTimeRange": true
+       },
+       "type": "raw_data"
+      }
+     ],
+     "query": "rule.level:>=10 AND agent.name:/$host/",
+     "queryType": "lucene",
+     "refId": "A",
+     "timeField": "@timestamp"
+    }
+   ],
+   "title": "보안 이벤트 (Wazuh) — 레벨 10+ 개별 (agent.name 클릭 → 그 호스트 로그)",
+   "transformations": [
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "pattern": "^(@timestamp|agent\\.name|rule\\.level|rule\\.description|rule\\.id|syscheck\\.path)$"
+      }
+     }
+    }
+   ],
+   "type": "table"
   },
-  "time": {
-    "from": "now-7d",
-    "to": "now"
+  {
+   "datasource": {
+    "type": "loki",
+    "uid": "loki"
+   },
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 11,
+    "w": 24,
+    "x": 0,
+    "y": 11
+   },
+   "id": 2,
+   "options": {
+    "dedupStrategy": "none",
+    "enableInfiniteScrolling": false,
+    "enableLogDetails": true,
+    "prettifyLogMessage": false,
+    "showCommonLabels": false,
+    "showLabels": false,
+    "showTime": true,
+    "sortOrder": "Descending",
+    "wrapLogMessage": true
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "loki"
+     },
+     "direction": "backward",
+     "editorMode": "code",
+     "expr": "{host=~\"$host\"}",
+     "queryType": "range",
+     "refId": "A"
+    }
+   ],
+   "title": "로그 (Loki)",
+   "type": "logs"
   },
-  "timepicker": {},
-  "timezone": "browser",
-  "title": "KINX 통합 관제",
-  "uid": "kinx-overview",
-  "version": 1
+  {
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "axisBorderShow": false,
+      "axisCenteredZero": false,
+      "axisColorMode": "text",
+      "axisLabel": "",
+      "axisPlacement": "auto",
+      "barAlignment": 0,
+      "barWidthFactor": 0.6,
+      "drawStyle": "line",
+      "fillOpacity": 0,
+      "gradientMode": "none",
+      "hideFrom": {
+       "legend": false,
+       "tooltip": false,
+       "viz": false
+      },
+      "insertNulls": false,
+      "lineInterpolation": "linear",
+      "lineWidth": 1,
+      "pointSize": 5,
+      "scaleDistribution": {
+       "type": "linear"
+      },
+      "showPoints": "auto",
+      "spanNulls": false,
+      "stacking": {
+       "group": "A",
+       "mode": "none"
+      },
+      "thresholdsStyle": {
+       "mode": "off"
+      }
+     },
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green"
+       },
+       {
+        "color": "red",
+        "value": 80
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 22
+   },
+   "id": 3,
+   "options": {
+    "legend": {
+     "calcs": [],
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "hideZeros": false,
+     "mode": "single",
+     "sort": "none"
+    }
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "application": {
+      "filter": ""
+     },
+     "countTriggersBy": "",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "evaltype": "0",
+     "functions": [],
+     "group": {
+      "filter": "/.*/"
+     },
+     "host": {
+      "filter": "/$host/"
+     },
+     "item": {
+      "filter": "CPU utilization"
+     },
+     "itemTag": {
+      "filter": "component: cpu"
+     },
+     "macro": {
+      "filter": ""
+     },
+     "options": {
+      "count": false,
+      "disableDataAlignment": false,
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "queryType": "0",
+     "refId": "A",
+     "resultFormat": "time_series",
+     "schema": 12,
+     "table": {
+      "skipEmptyValues": false
+     },
+     "tags": {
+      "filter": ""
+     },
+     "textFilter": "",
+     "trigger": {
+      "filter": ""
+     }
+    }
+   ],
+   "title": "메트릭 (Zabbix) — $host CPU 사용률",
+   "type": "timeseries"
+  },
+  {
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10,
+      "lineWidth": 1,
+      "showPoints": "auto",
+      "spanNulls": false
+     },
+     "mappings": [],
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 38
+   },
+   "id": 10,
+   "options": {
+    "legend": {
+     "calcs": [],
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "single",
+     "sort": "none"
+    }
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "application": {
+      "filter": ""
+     },
+     "countTriggersBy": "",
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "evaltype": "0",
+     "functions": [],
+     "group": {
+      "filter": "/.*/"
+     },
+     "host": {
+      "filter": "/$host/"
+     },
+     "item": {
+      "filter": "/.*Seconds Behind Master.*/"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "options": {
+      "count": false,
+      "disableDataAlignment": false,
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "queryType": "0",
+     "refId": "A",
+     "resultFormat": "time_series",
+     "schema": 12,
+     "table": {
+      "skipEmptyValues": false
+     },
+     "tags": {
+      "filter": ""
+     },
+     "textFilter": "",
+     "trigger": {
+      "filter": ""
+     }
+    }
+   ],
+   "title": "메트릭 (Zabbix) — $host 복제 지연(초, Seconds Behind Master)",
+   "type": "timeseries"
+  },
+  {
+   "datasource": {
+    "type": "grafana-opensearch-datasource",
+    "uid": "wazuh"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "axisBorderShow": false,
+      "axisCenteredZero": false,
+      "axisColorMode": "text",
+      "axisLabel": "",
+      "axisPlacement": "auto",
+      "barAlignment": 0,
+      "barWidthFactor": 0.6,
+      "drawStyle": "line",
+      "fillOpacity": 0,
+      "gradientMode": "none",
+      "hideFrom": {
+       "legend": false,
+       "tooltip": false,
+       "viz": false
+      },
+      "insertNulls": false,
+      "lineInterpolation": "linear",
+      "lineWidth": 1,
+      "pointSize": 5,
+      "scaleDistribution": {
+       "type": "linear"
+      },
+      "showPoints": "auto",
+      "spanNulls": false,
+      "stacking": {
+       "group": "A",
+       "mode": "none"
+      },
+      "thresholdsStyle": {
+       "mode": "off"
+      }
+     },
+     "links": [
+      {
+       "targetBlank": true,
+       "title": "Wazuh 대시보드에서 심층 조사",
+       "url": "https://1.201.177.127/app/threat-hunting#/overview/?tab=general&tabView=dashboard&_a=(filters:!(),query:(language:kuery,query:''))&_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-24h,to:now))"
+      }
+     ],
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green"
+       },
+       {
+        "color": "red",
+        "value": 80
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 30
+   },
+   "id": 4,
+   "options": {
+    "legend": {
+     "calcs": [],
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "hideZeros": false,
+     "mode": "single",
+     "sort": "none"
+    }
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "alias": "",
+     "bucketAggs": [
+      {
+       "field": "@timestamp",
+       "id": "2",
+       "settings": {
+        "interval": "auto"
+       },
+       "type": "date_histogram"
+      }
+     ],
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh"
+     },
+     "format": "table",
+     "luceneQueryType": "Metric",
+     "metrics": [
+      {
+       "id": "1",
+       "type": "count"
+      }
+     ],
+     "query": "rule.level:>=10 AND agent.name:/$host/",
+     "queryType": "lucene",
+     "refId": "A",
+     "timeField": "@timestamp"
+    }
+   ],
+   "title": "보안 (Wazuh) — 레벨 10+",
+   "type": "timeseries"
+  },
+  {
+   "datasource": {
+    "type": "grafana-opensearch-datasource",
+    "uid": "wazuh"
+   },
+   "description": "SCA(CIS 벤치마크) 준수 점수. 요약 이벤트는 스캔할 때만 생성돼 매우 드물다(랩 실측 전체 7건). 그래서 추세선이 아니라 최신값 stat 으로 그리고, 패널 자체에 timeFrom 30d 를 걸어 대시보드 시간 범위와 무관하게 항상 최신값을 잡는다. 요약 룰 ID 는 점수 구간마다 달라지므로(랩 실측 19003) ID 대신 data.sca.score 존재 여부로 거른다.",
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "max": 100,
+     "min": 0,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red"
+       },
+       {
+        "color": "orange",
+        "value": 50
+       },
+       {
+        "color": "green",
+        "value": 80
+       }
+      ]
+     },
+     "unit": "percent"
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 49
+   },
+   "id": 6,
+   "options": {
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value_and_name"
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "alias": "",
+     "bucketAggs": [
+      {
+       "field": "agent.name",
+       "id": "3",
+       "settings": {
+        "min_doc_count": "1",
+        "order": "desc",
+        "orderBy": "_term",
+        "size": "10"
+       },
+       "type": "terms"
+      },
+      {
+       "field": "@timestamp",
+       "id": "2",
+       "settings": {
+        "interval": "auto",
+        "min_doc_count": "0"
+       },
+       "type": "date_histogram"
+      }
+     ],
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh"
+     },
+     "format": "table",
+     "luceneQueryType": "Metric",
+     "metrics": [
+      {
+       "field": "data.sca.score",
+       "id": "1",
+       "type": "avg"
+      }
+     ],
+     "query": "rule.groups:sca AND _exists_:data.sca.score AND agent.name:/$host/",
+     "queryType": "lucene",
+     "refId": "A",
+     "timeField": "@timestamp"
+    }
+   ],
+   "timeFrom": "30d",
+   "title": "설정 준수율 (Wazuh SCA) — CIS 벤치마크 점수 (최근 30일 최신 스캔)",
+   "type": "stat"
+  },
+  {
+   "datasource": {
+    "type": "grafana-opensearch-datasource",
+    "uid": "wazuh-states"
+   },
+   "description": "취약점 재고는 시계열이 아니라 '지금 이 호스트가 안고 있는 CVE' 스냅샷이다. 별도 인덱스(wazuh-states-vulnerabilities-*)를 쓰며, 매니저에 indexer connector가 배선돼야 데이터가 생긴다.",
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "filterable": false,
+      "inspect": false
+     },
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 49
+   },
+   "id": 8,
+   "options": {
+    "cellHeight": "sm",
+    "footer": {
+     "countRows": false,
+     "fields": "",
+     "reducer": [
+      "sum"
+     ],
+     "show": true
+    },
+    "showHeader": true,
+    "sortBy": []
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "alias": "",
+     "bucketAggs": [
+      {
+       "field": "vulnerability.severity",
+       "id": "2",
+       "settings": {
+        "min_doc_count": "0",
+        "order": "desc",
+        "orderBy": "_count",
+        "size": "10"
+       },
+       "type": "terms"
+      }
+     ],
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh-states"
+     },
+     "format": "table",
+     "luceneQueryType": "Metric",
+     "metrics": [
+      {
+       "id": "1",
+       "type": "count"
+      }
+     ],
+     "query": "agent.name:/$host/",
+     "queryType": "lucene",
+     "refId": "A",
+     "timeField": "vulnerability.detected_at"
+    }
+   ],
+   "timeFrom": "90d",
+   "title": "취약점 재고 (Wazuh) — $host 심각도별 CVE 수 (최근 90일 탐지분)",
+   "type": "table"
+  },
+  {
+   "datasource": {
+    "type": "grafana-opensearch-datasource",
+    "uid": "wazuh"
+   },
+   "description": "FIM(파일 무결성) 변경 이력. 레벨 10+ 패널에는 이 이벤트가 뜨지 않는다 — FIM 기본 레벨이 5~7이라 컷라인 아래이기 때문이다.",
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "filterable": true,
+      "inspect": false
+     },
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "경로"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 420
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "변경"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 90
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "시각"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 180
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "심각도"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "options": {
+           "from": 14,
+           "result": {
+            "color": "dark-red",
+            "index": 0,
+            "text": "SEV1 즉시"
+           },
+           "to": 15
+          },
+          "type": "range"
+         },
+         {
+          "options": {
+           "from": 10,
+           "result": {
+            "color": "red",
+            "index": 1,
+            "text": "SEV2 알림"
+           },
+           "to": 13
+          },
+          "type": "range"
+         },
+         {
+          "options": {
+           "from": 7,
+           "result": {
+            "color": "orange",
+            "index": 2,
+            "text": "SEV3 다이제스트"
+           },
+           "to": 9
+          },
+          "type": "range"
+         },
+         {
+          "options": {
+           "from": 3,
+           "result": {
+            "color": "text",
+            "index": 3,
+            "text": "SEV4 화면만"
+           },
+           "to": 6
+          },
+          "type": "range"
+         },
+         {
+          "options": {
+           "from": 0,
+           "result": {
+            "color": "text",
+            "index": 4,
+            "text": "NONE"
+           },
+           "to": 2
+          },
+          "type": "range"
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       },
+       {
+        "id": "custom.width",
+        "value": 130
+       }
+      ]
+     }
+    ]
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 57
+   },
+   "id": 7,
+   "options": {
+    "cellHeight": "sm",
+    "footer": {
+     "countRows": false,
+     "fields": "",
+     "reducer": [
+      "sum"
+     ],
+     "show": false
+    },
+    "showHeader": true,
+    "sortBy": []
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "alias": "",
+     "bucketAggs": [
+      {
+       "field": "@timestamp",
+       "id": "2",
+       "settings": {
+        "interval": "auto"
+       },
+       "type": "date_histogram"
+      }
+     ],
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh"
+     },
+     "format": "table",
+     "luceneQueryType": "RawData",
+     "metrics": [
+      {
+       "id": "1",
+       "settings": {
+        "order": "desc",
+        "size": "200",
+        "useTimeRange": true
+       },
+       "type": "raw_data"
+      }
+     ],
+     "query": "rule.groups:syscheck AND agent.name:/$host/",
+     "queryType": "lucene",
+     "refId": "A",
+     "timeField": "@timestamp"
+    }
+   ],
+   "title": "파일 변경 이력 (Wazuh FIM) — $host",
+   "transformations": [
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "pattern": "^(@timestamp|syscheck\\.path|syscheck\\.event|rule\\.level|rule\\.description)$"
+      }
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "includeByName": {},
+      "indexByName": {
+       "@timestamp": 0,
+       "rule.description": 4,
+       "rule.level": 3,
+       "syscheck.event": 2,
+       "syscheck.path": 1
+      },
+      "renameByName": {
+       "@timestamp": "시각",
+       "rule.description": "설명",
+       "rule.level": "심각도",
+       "syscheck.event": "변경",
+       "syscheck.path": "경로"
+      }
+     }
+    }
+   ],
+   "type": "table"
+  },
+  {
+   "datasource": {
+    "type": "alexanderzobnin-zabbix-datasource",
+    "uid": "zabbix"
+   },
+   "description": "인증서 만료 재고. 도메인 하나당 Zabbix 호스트 하나이며 ansible/certificates.yml 로 생성한다. 긴급도 판단과 알림은 표준 템플릿의 트리거({$CERT.EXPIRY.WARN})가 맡고, 이 패널은 전수 현황을 본다. 클릭하면 전용 대시보드(kinx-certificates)로 이동한다 — 활성 문제(만료 임박·유효하지 않음·점검 불가)와 전수 재고를 같이 본다.",
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [],
+     "unit": "dateTimeFromNow",
+     "links": [
+      {
+       "targetBlank": false,
+       "title": "인증서 전용 대시보드에서 전수 보기",
+       "url": "/d/kinx-certificates/kinx?var-group=$__all"
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 81
+   },
+   "id": 11,
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "orientation": "auto",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "textMode": "value_and_name"
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "application": {
+      "filter": ""
+     },
+     "datasource": {
+      "type": "alexanderzobnin-zabbix-datasource",
+      "uid": "zabbix"
+     },
+     "functions": [
+      {
+       "def": {
+        "category": "Transform",
+        "defaultParams": [
+         100
+        ],
+        "name": "scale",
+        "params": [
+         {
+          "name": "factor",
+          "options": [
+           100,
+           0.01,
+           10,
+           -1
+          ],
+          "type": "float"
+         }
+        ]
+       },
+       "params": [
+        "1000"
+       ],
+       "text": "scale(1000)"
+      }
+     ],
+     "group": {
+      "filter": "/.*/"
+     },
+     "host": {
+      "filter": "/.*/"
+     },
+     "item": {
+      "filter": "/Expires on/"
+     },
+     "itemTag": {
+      "filter": ""
+     },
+     "macro": {
+      "filter": ""
+     },
+     "options": {
+      "showDisabledItems": false,
+      "skipEmptyValues": false,
+      "useTrends": "default",
+      "useZabbixValueMapping": false
+     },
+     "proxy": {
+      "filter": ""
+     },
+     "queryType": "0",
+     "refId": "A",
+     "resultFormat": "time_series",
+     "schema": 12,
+     "table": {
+      "skipEmptyValues": false
+     },
+     "tags": {
+      "filter": ""
+     },
+     "textFilter": "",
+     "trigger": {
+      "filter": ""
+     }
+    }
+   ],
+   "title": "인증서 만료 재고 (Zabbix) — 도메인별 만료 시점",
+   "type": "stat"
+  },
+  {
+   "datasource": {
+    "type": "grafana-opensearch-datasource",
+    "uid": "wazuh"
+   },
+   "description": "로그인 성공과 실패를 나란히 본다. 레벨 10+ 패널에서는 실패가 누적 임계를 넘긴 뒤에야 한 줄로 보이는데, 이 패널은 그 전 단계를 보여준다. 실패가 쌓인 뒤 성공이 찍히는 패턴이 침해 신호다.",
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 60,
+      "lineWidth": 1,
+      "stacking": {
+       "group": "A",
+       "mode": "none"
+      }
+     },
+     "mappings": []
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "실패"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "fixedColor": "red",
+         "mode": "fixed"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "성공"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "fixedColor": "green",
+         "mode": "fixed"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 65
+   },
+   "id": 12,
+   "options": {
+    "legend": {
+     "calcs": [
+      "sum"
+     ],
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "alias": "실패",
+     "bucketAggs": [
+      {
+       "field": "@timestamp",
+       "id": "2",
+       "settings": {
+        "interval": "auto",
+        "min_doc_count": "0"
+       },
+       "type": "date_histogram"
+      }
+     ],
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh"
+     },
+     "format": "table",
+     "luceneQueryType": "Metric",
+     "metrics": [
+      {
+       "id": "1",
+       "type": "count"
+      }
+     ],
+     "query": "rule.groups:authentication_failed AND agent.name:/$host/",
+     "queryType": "lucene",
+     "refId": "A",
+     "timeField": "@timestamp"
+    },
+    {
+     "alias": "성공",
+     "bucketAggs": [
+      {
+       "field": "@timestamp",
+       "id": "2",
+       "settings": {
+        "interval": "auto",
+        "min_doc_count": "0"
+       },
+       "type": "date_histogram"
+      }
+     ],
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh"
+     },
+     "format": "table",
+     "luceneQueryType": "Metric",
+     "metrics": [
+      {
+       "id": "1",
+       "type": "count"
+      }
+     ],
+     "query": "rule.groups:authentication_success AND agent.name:/$host/",
+     "queryType": "lucene",
+     "refId": "B",
+     "timeField": "@timestamp"
+    }
+   ],
+   "title": "인증 활동 (Wazuh) — $host 로그인 실패/성공",
+   "type": "timeseries"
+  },
+  {
+   "datasource": {
+    "type": "grafana-opensearch-datasource",
+    "uid": "wazuh"
+   },
+   "description": "에이전트 연결·중단 이력. 룰 501/503/504/505/506 은 전부 레벨 3(SEV4)이라 팀 컷라인(10) 아래여서 알림이 가지 않는다 — 그래서 화면으로 본다. 끊긴 시간은 그 호스트가 무감시인 시간이다. 룰 번호 대신 설명 컬럼만 둔다(번호는 읽는 데 도움이 안 됨). $host 필터를 일부러 걸지 않는다: 어느 호스트가 빠졌는지는 그 호스트를 선택하지 않은 상태에서 알아야 한다.",
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "filterable": true,
+      "inspect": false
+     },
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "시각"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 180
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "이벤트"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 280
+       }
+      ]
+     }
+    ]
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 65
+   },
+   "id": 13,
+   "options": {
+    "cellHeight": "sm",
+    "footer": {
+     "countRows": false,
+     "fields": "",
+     "reducer": [
+      "sum"
+     ],
+     "show": false
+    },
+    "showHeader": true,
+    "sortBy": []
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "alias": "",
+     "bucketAggs": [
+      {
+       "field": "@timestamp",
+       "id": "2",
+       "settings": {
+        "interval": "auto",
+        "min_doc_count": "0"
+       },
+       "type": "date_histogram"
+      }
+     ],
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh"
+     },
+     "format": "table",
+     "luceneQueryType": "RawData",
+     "metrics": [
+      {
+       "id": "1",
+       "settings": {
+        "order": "desc",
+        "size": "100",
+        "useTimeRange": true
+       },
+       "type": "raw_data"
+      }
+     ],
+     "query": "rule.id:(501 OR 503 OR 504 OR 505 OR 506)",
+     "queryType": "lucene",
+     "refId": "A",
+     "timeField": "@timestamp"
+    }
+   ],
+   "title": "에이전트 수명주기 (Wazuh) — 연결·중단 이력 (전체 호스트)",
+   "transformations": [
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "pattern": "^(@timestamp|agent\\.name|rule\\.id|rule\\.description)$"
+      }
+     }
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "rule.id": true
+      },
+      "includeByName": {},
+      "indexByName": {
+       "@timestamp": 0,
+       "agent.name": 1,
+       "rule.description": 2
+      },
+      "renameByName": {
+       "@timestamp": "시각",
+       "agent.name": "호스트",
+       "rule.description": "이벤트"
+      }
+     }
+    }
+   ],
+   "type": "table"
+  },
+  {
+   "datasource": {
+    "type": "grafana-opensearch-datasource",
+    "uid": "wazuh"
+   },
+   "description": "Wazuh 룰셋이 자체적으로 달고 나오는 PCI DSS 요건 태그를 집계한다. 우리가 만든 매핑이 아니다 (룰 550 = pci_dss_11.5). 요건 계열: 2.x = 시스템 구성 표준, 10.x = 감사 로그 기록·보관, 11.x = 보안 시스템 정기 점검. 세부 항목(10.2.5 등)의 정확한 표준 문구는 PCI DSS 원문 확인이 필요하므로 여기서는 번호만 표시한다. 랩 실측 검산: 2.2=671 이 SCA 이벤트 수와 정확히 일치, 11.5 는 FIM. 컴플라이언스는 호스트 단위가 아니라 조직 단위로 보므로 $host 필터를 걸지 않는다.",
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "filterable": false,
+      "inspect": false
+     },
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text"
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 73
+   },
+   "id": 14,
+   "options": {
+    "cellHeight": "sm",
+    "footer": {
+     "countRows": false,
+     "fields": "",
+     "reducer": [
+      "sum"
+     ],
+     "show": true
+    },
+    "showHeader": true,
+    "sortBy": []
+   },
+   "pluginVersion": "11.6.16",
+   "targets": [
+    {
+     "alias": "",
+     "bucketAggs": [
+      {
+       "field": "rule.pci_dss",
+       "id": "3",
+       "settings": {
+        "min_doc_count": "1",
+        "order": "desc",
+        "orderBy": "_count",
+        "size": "15"
+       },
+       "type": "terms"
+      }
+     ],
+     "datasource": {
+      "type": "grafana-opensearch-datasource",
+      "uid": "wazuh"
+     },
+     "format": "table",
+     "luceneQueryType": "Metric",
+     "metrics": [
+      {
+       "id": "1",
+       "type": "count"
+      }
+     ],
+     "query": "_exists_:rule.pci_dss",
+     "queryType": "lucene",
+     "refId": "A",
+     "timeField": "@timestamp"
+    }
+   ],
+   "title": "PCI DSS 요건별 이벤트 (Wazuh) — 룰셋 기본 태그 집계 (전체 호스트)",
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "includeByName": {},
+      "indexByName": {
+       "Count": 1,
+       "rule.pci_dss": 0
+      },
+      "renameByName": {
+       "Count": "이벤트 수",
+       "rule.pci_dss": "PCI DSS 요건"
+      }
+     }
+    }
+   ],
+   "type": "table"
+  },
+  {
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "gridPos": {
+    "h": 3,
+    "w": 24,
+    "x": 0,
+    "y": 46
+   },
+   "id": 15,
+   "options": {
+    "code": {
+     "language": "plaintext",
+     "showLineNumbers": false,
+     "showMiniMap": false
+    },
+    "content": "## 보안 축 상세 — Wazuh 모듈별\n위쪽은 데모 A 의 3축 통합 화면(메트릭·로그·보안을 같은 타임라인에), 아래는 **보안 축을 모듈별로 펼친 것**입니다.\n\n심각도는 통합 눈금 **SEV** 로 표시합니다 — `SEV1 즉시` / `SEV2 알림`(팀 컷라인 10+) / `SEV3 다이제스트` / `SEV4 화면만`. Slack 카드·봇 회신과 같은 언어입니다(원본: `docs/02-design/severity-normalization.md`).\n\n**FIM·SCA 기본 레벨은 5~9(SEV3·SEV4)라 알림으로 가지 않습니다.** 그래서 여기서 봅니다. 컷라인 위로 올린 것은 인증·권한 핵심 파일 변경과 SCA 회귀 둘뿐입니다.",
+    "mode": "markdown"
+   },
+   "pluginVersion": "11.6.16",
+   "title": "",
+   "type": "text"
+  }
+ ],
+ "preload": false,
+ "refresh": "30s",
+ "schemaVersion": 41,
+ "tags": [
+  "kinx",
+  "overview"
+ ],
+ "templating": {
+  "list": [
+   {
+    "allValue": ".+",
+    "current": {
+     "text": "vm-target-001.novalocal",
+     "value": "vm-target-001.novalocal"
+    },
+    "datasource": {
+     "type": "loki",
+     "uid": "loki"
+    },
+    "definition": "",
+    "includeAll": true,
+    "name": "host",
+    "options": [],
+    "query": {
+     "label": "host",
+     "refId": "LokiVariableQueryEditor-VariableQuery",
+     "stream": "",
+     "type": 1
+    },
+    "refresh": 1,
+    "regex": "",
+    "type": "query"
+   }
+  ]
+ },
+ "time": {
+  "from": "now-7d",
+  "to": "now"
+ },
+ "timepicker": {},
+ "timezone": "browser",
+ "title": "KINX 통합 관제",
+ "uid": "kinx-overview",
+ "version": 1
 }

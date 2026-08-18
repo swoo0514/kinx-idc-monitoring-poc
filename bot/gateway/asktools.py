@@ -143,6 +143,31 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "host_metrics",
+        "description": ("그 호스트의 Zabbix 지표. 이름 조각으로 아이템을 고르고 값의 "
+                        "추이를 본다. 복제 지연·CPU·메모리처럼 수치로 보는 것은 여기서 본다."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string", "description": "list_hosts 가 준 호스트 토큰"},
+                "match": {"type": "string",
+                          "description": "아이템 이름·키에 든 문자열 (예: replication, cpu, memory)"},
+                "window_m": {"type": "integer", "description": "지금부터 거슬러 볼 분"},
+                "at": {"type": "integer",
+                       "description": "특정 시각을 볼 때 그 유닉스 초. 그 앞뒤 창을 본다"},
+            },
+            "required": ["host"],
+        },
+    },
+    {
+        "name": "open_problems",
+        "description": "그 호스트에 지금 열려 있는 문제(Zabbix). 비우면 전체.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"host": {"type": "string"}},
+        },
+    },
+    {
         "name": "past_judgments",
         "description": "봇이 전에 내린 판정 기록. 같은 일이 반복되는지 볼 때 쓴다.",
         "input_schema": {
@@ -239,8 +264,27 @@ async def _tool_past_judgments(args: dict, ctx: dict) -> dict:
     return await ctx["fetch_judgments"](ent.get("host") if ent else "", max(days, 1))
 
 
+async def _tool_host_metrics(args: dict, ctx: dict) -> dict:
+    ent, err = _target(args, ctx)
+    if err:
+        return err
+    return await ctx["fetch_metrics"](ent, str(args.get("match") or ""),
+                                      clamp_window(args.get("window_m")),
+                                      args.get("at"))
+
+
+async def _tool_open_problems(args: dict, ctx: dict) -> dict:
+    tok = str(args.get("host") or "").strip()
+    ent = (ctx.get("table") or {}).get(tok) if tok else None
+    if tok and not ent:
+        return _err("알 수 없는 대상이다: %s" % tok)
+    return await ctx["fetch_problems"](ent)
+
+
 _TOOLS = {
     "list_hosts": _tool_list_hosts,
+    "host_metrics": _tool_host_metrics,
+    "open_problems": _tool_open_problems,
     "host_logs": _tool_host_logs,
     "security_alerts": _tool_security_alerts,
     "past_judgments": _tool_past_judgments,

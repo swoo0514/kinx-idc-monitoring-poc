@@ -60,12 +60,26 @@ def resolve(dash: dict, title: str) -> list:
     return sorted(ids)
 
 
+# 유형을 사람이 읽는 말로. 토글 이름에 붙여 같은 패널에 걸린 질의를 구분한다.
+CLASS_LABEL = {
+    "cpu_io_pressure": "자원 압박",
+    "memory_pressure": "메모리",
+    "replication": "복제",
+    "auth_security": "인증·보안",
+    "service_down": "서비스 중단",
+}
+
+
 def query(title: str, classes: list, ids: list) -> dict:
     # matchAny=false 라 나열한 태그를 모두 가진 주석만 걸린다. 봇은 kinx-bot·심각도·
     # 호스트·사건 유형을 함께 달므로, 여기에 유형 하나를 더하면 그 유형만 남는다.
     return {"datasource": {"type": "grafana", "uid": "-- Grafana --"},
             "enable": True, "hide": False, "iconColor": "purple",
-            "name": "%s · %s" % (QUERY_NAME, title),
+            # 같은 패널에 유형이 둘이면 이름이 겹쳐 화면에 같은 토글이 두 개 뜬다
+            # (2026-08-18 실측). 유형을 이름에 붙여 구분한다.
+            "name": "%s · %s%s" % (
+                QUERY_NAME, title,
+                "".join(" · " + CLASS_LABEL.get(c, c) for c in classes)),
             "target": {"limit": 100, "matchAny": False,
                        "tags": [TAG] + list(classes), "type": "tags"},
             "filter": {"exclude": False, "ids": ids}}

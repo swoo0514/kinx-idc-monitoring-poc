@@ -330,6 +330,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_logs": lambda q, w, lim: fetch_logs(q, w, lim, now, mk),
         "fetch_security": lambda body: fetch_security(body, mk),
         "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
+        "fetch_metrics": lambda ent, match, w, at: fetch_metrics(ent, match, w, at),
+        "fetch_problems": lambda ent: fetch_problems(ent),
     }
 
     messages = list(history or []) + [{"role": "user", "content": clean["text"]}]
@@ -423,3 +425,89 @@ def user_budget_ok(user: str, now: float = None) -> tuple:
         return False, ("한 시간에 %d회까지 물을 수 있다. 지금까지 %d회 썼다"
                        % (MAX_PER_USER_HOUR, used))
     return True, ""
+
+
+async def fetch_metrics(entry: dict, match: str, window_m: int, at=None) -> dict:
+    """호스트의 지표 추이. 아이템 이름·키에 든 문자열로 고른다.
+
+    `at` 을 주면 그 시각 앞뒤를 본다. 사람은 "어제 2시에 튀었다" 로 묻지 "지금부터
+    몇 분" 으로 묻지 않는다.
+    """
+    import httpx
+
+    from . import collector
+
+    try:
+        zbx = collector.ZabbixClient(source=entry.get("source", ""))
+        async with httpx.AsyncClient() as c:
+            hosts = await zbx.call(c, "host.get", {
+                "filter": {"host": entry.get("host", "")}, "output": ["hostid"]})
+            if not hosts:
+                return {"metrics": [], "status": collector.SOURCE_UNMATCHED,
+                        "note": "감시 서버가 이 호스트를 모른다"}
+            params = {"hostids": hosts[0]["hostid"],
+                      "output": ["itemid", "name", "key_", "value_type", "units",
+                                 "lastvalue"],
+                      "sortfield": "name"}
+            if match:
+                params["search"] = {"name": match, "key_": match}
+                params["searchByAny"] = True
+            items = await zbx.call(c, "item.get", params)
+            if not items:
+                return {"metrics": [], "status": collector.SOURCE_OK,
+                        "note": "그 조건에 맞는 아이템이 없다. match 를 넓혀 보라"}
+            end = int(at) if at else int(time.time())
+            start = end - window_m * 60
+            if at:                       # 그 시각을 가운데 두고 앞뒤로 본다
+                start, end = int(at) - window_m * 30, int(at) + window_m * 30
+            out = []
+            for it in items[:5]:
+                vt = int(it.get("value_type", 3))
+                hist = []
+                if vt in (0, 3):         # 수치형만 추이가 뜻이 있다
+                    hist = await zbx.call(c, "history.get", {
+                        "itemids": it["itemid"], "history": vt,
+                        "time_from": start, "time_till": end, "output": "extend",
+                        "sortfield": "clock", "sortorder": "DESC", "limit": 60})
+                out.append({
+                    "name": it.get("name"), "key": it.get("key_"),
+                    "units": it.get("units"), "last": it.get("lastvalue"),
+                    "series": [{"t": int(h["clock"]), "v": h["value"]}
+                               for h in reversed(hist)],
+                })
+    except Exception as e:
+        log.warning("지표 조회 실패: %s", e)
+        return {"metrics": [], "status": collector.SOURCE_UNAVAILABLE,
+                "note": "조회하지 못했다. 이 결과를 '없음'으로 읽지 마라"}
+    return {"metrics": out, "matched": len(items), "window": [start, end],
+            "status": collector.SOURCE_OK}
+
+
+async def fetch_problems(entry) -> dict:
+    """지금 열려 있는 문제. 호스트를 안 주면 허용된 감시 서버 전체."""
+    import httpx
+
+    from . import collector
+
+    try:
+        sources = [entry["source"]] if entry else allowed_sources()
+        out = []
+        for src in sources:
+            zbx = collector.ZabbixClient(source=src)
+            async with httpx.AsyncClient() as c:
+                params = {"output": ["eventid", "name", "severity", "clock"],
+                          "sortfield": "eventid", "sortorder": "DESC", "limit": 50}
+                if entry:
+                    hosts = await zbx.call(c, "host.get", {
+                        "filter": {"host": entry.get("host", "")}, "output": ["hostid"]})
+                    if not hosts:
+                        continue
+                    params["hostids"] = hosts[0]["hostid"]
+                for p in await zbx.call(c, "problem.get", params):
+                    out.append({"name": p.get("name"), "sev": p.get("severity"),
+                                "t": int(p.get("clock") or 0)})
+    except Exception as e:
+        log.warning("열린 문제 조회 실패: %s", e)
+        return {"problems": [], "status": collector.SOURCE_UNAVAILABLE,
+                "note": "조회하지 못했다. 이 결과를 '없음'으로 읽지 마라"}
+    return {"problems": out, "status": collector.SOURCE_OK}

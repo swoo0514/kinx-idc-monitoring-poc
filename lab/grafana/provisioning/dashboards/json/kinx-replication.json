@@ -21,7 +21,7 @@
     "enable": true,
     "hide": false,
     "iconColor": "purple",
-    "name": "봇 판정 · 복제 지연",
+    "name": "봇 판정 · 복제 지연 · 복제",
     "target": {
      "limit": 100,
      "matchAny": false,
@@ -46,7 +46,7 @@
     "enable": true,
     "hide": false,
     "iconColor": "purple",
-    "name": "봇 판정 · 오류율",
+    "name": "봇 판정 · 오류율 · 서비스 중단",
     "target": {
      "limit": 100,
      "matchAny": false,
@@ -71,7 +71,7 @@
     "enable": true,
     "hide": false,
     "iconColor": "purple",
-    "name": "봇 판정 · 오류율",
+    "name": "봇 판정 · 오류율 · 자원 압박",
     "target": {
      "limit": 100,
      "matchAny": false,
