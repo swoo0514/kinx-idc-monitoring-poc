@@ -439,6 +439,18 @@ def load_facts() -> str:
     return chr(10).join(x for x in out if x.strip()).strip()
 
 
+# 그림 손잡이. 화면은 그림을 따로 그리므로 본문에 남으면 지저분한 글자일 뿐이다.
+_HANDLE_RE = re.compile(r"\[?img-[0-9a-z]+\]?")
+
+
+def strip_handles(text: str) -> str:
+    """답에서 그림 손잡이를 걷어 낸다. 앞뒤 공백도 정리한다."""
+    out = _HANDLE_RE.sub("", str(text or ""))
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"[ \t]+([,.!?)\]])", r"\1", out)
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
 def system_prompt() -> str:
     """모델에 줄 지시문. 기본 규칙 뒤에 우리 환경의 사실을 붙인다."""
     facts = load_facts()
@@ -497,7 +509,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
         "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
         "fetch_problems": lambda ent: fetch_problems(ent),
-        "fetch_panel": (panel_fn or (lambda ent, m, a, b: fetch_panel(ent, m, a, b))),
+        "fetch_panel": (panel_fn or (lambda ent, m, a, b: fetch_panel(
+            ent, m, a, b, (panel or {}).get("uid", "")))),
     }
 
     hist, dropped = trim_history(history)
@@ -518,7 +531,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
         "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
         "fetch_problems": lambda ent: fetch_problems(ent),
-        "fetch_panel": (panel_fn or (lambda ent, m, a, b: fetch_panel(ent, m, a, b))),
+        "fetch_panel": (panel_fn or (lambda ent, m, a, b: fetch_panel(
+            ent, m, a, b, (panel or {}).get("uid", "")))),
     }
 
     hist, dropped = trim_history(history)
@@ -604,7 +618,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         text = ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
                 % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
     remember(sid or "-", mk)
-    return {"text": mk.unmask(text), "trace": trace, "rounds": len(trace),
+    return {"text": strip_handles(mk.unmask(text)), "trace": trace,
+            "rounds": len(trace),
             "images": images, "stopped": stopped, "error": ""}
 
 
@@ -735,11 +750,12 @@ async def fetch_problems(entry) -> dict:
     return {"problems": out, "status": collector.SOURCE_OK}
 
 
-async def fetch_panel(entry: dict, match: str, start: int, end: int) -> dict:
+async def fetch_panel(entry: dict, match: str, start: int, end: int,
+                      prefer_uid: str = "") -> dict:
     """관측 화면 한 장. 모델에는 손잡이만 가고 주소는 화면으로만 간다."""
     from . import grafana
 
-    uid, panel_id, title = grafana.find_panel(match or "")
+    uid, panel_id, title = grafana.find_panel(match or "", prefer_uid)
     if not uid:
         return {"error": "그 조건에 맞는 패널을 못 찾았다. match 를 바꿔 보라"}
     return {"id": "img-%d" % (abs(hash((uid, panel_id, start))) % 9000 + 1000),

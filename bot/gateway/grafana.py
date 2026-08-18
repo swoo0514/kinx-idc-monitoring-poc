@@ -86,8 +86,12 @@ def annotate(text: str, event_ts: float, tags=()) -> int:
         return None
 
 
-def find_panel(match: str) -> tuple:
+def find_panel(match: str, prefer_uid: str = "") -> tuple:
     """제목에 그 문자열이 든 시계열 패널 하나. 반환 `(대시보드 uid, 패널 번호, 제목)`.
+
+    **보고 있는 대시보드를 먼저 본다.** 안 그러면 이름만 맞는 남의 대시보드 패널을
+    그려서, 사람이 보던 화면과 다른 그림이 붙는다(2026-08-18 실측: MSP 리포트
+    대시보드의 패널이 그려졌다).
 
     못 찾으면 `(None, None, "")`. 지어내지 않는다.
     """
@@ -99,7 +103,10 @@ def find_panel(match: str) -> tuple:
             r = c.get(base + "/api/search", params={"type": "dash-db", "limit": 50},
                       headers=_auth())
             r.raise_for_status()
-            for d in r.json():
+            found = r.json()
+            order = ([d for d in found if d.get("uid") == prefer_uid] +
+                     [d for d in found if d.get("uid") != prefer_uid])
+            for d in order:
                 uid = d.get("uid")
                 if not uid:
                     continue

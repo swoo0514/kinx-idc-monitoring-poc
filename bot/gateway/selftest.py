@@ -3706,13 +3706,20 @@ def _ask_loop_checks() -> int:
         # 그리고 그 이름이 같은 대상으로 풀려야 도구를 부를 수 있다
         assert ask.proxy.token_for("host", "node1") in seen7[0], seen7[0]
 
-        # ㉓ 모델이 죽어도 예외를 위로 던지지 않는다
+        # ㉓ **손잡이는 화면에 글자로 남기지 않는다.** 그림을 따로 그리므로 [img-1]
+        #    같은 문자열이 본문에 남으면 그냥 지저분한 글자다(2026-08-18 실측).
+        assert ask.strip_handles("아래 [img-6598] 를 보라") == "아래 를 보라"
+        assert ask.strip_handles("img-6598 참고") == "참고"
+        # 비슷하지만 손잡이가 아닌 말은 안 건드린다
+        assert ask.strip_handles("image-6598 은 그대로") == "image-6598 은 그대로"
+
+        # ㉔ 모델이 죽어도 예외를 위로 던지지 않는다
         def dead(system, messages, tools):
             raise RuntimeError("model down")
 
         r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
         assert r.get("error") and "모델" in r["error"], r
-        return 56
+        return 59
     finally:
         nametable._terms = saved
         ask.forget_all()
