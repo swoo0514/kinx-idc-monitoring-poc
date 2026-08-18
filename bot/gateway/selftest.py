@@ -280,7 +280,7 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks()
+                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _model_tier_checks()
                     + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
@@ -3462,6 +3462,51 @@ def _cache_checks() -> int:
     return 12
 
 
+
+def _model_tier_checks() -> int:
+    """호출 용도마다 모델 등급을 나눌 수 있는가.
+
+    나누는 자리는 **서로 다른 호출 사이**뿐이다. 한 대화 안에서 모델을 바꾸면 캐시가
+    모델별로 잡히므로 도구·시스템·대화 캐시가 통째로 무효가 된다(공식 문서 확인).
+
+    그리고 판단은 싼 모델에 맡기지 않는다. 2026-08-13 실측으로 haiku 는 복제 지연 회신에
+    `RESET SLAVE` 를 권했고 opus 는 금지를 명시했다(llm.py 주석).
+    """
+    import os
+
+    from . import llm
+
+    saved = {k: os.environ.get(k) for k in
+             ("LLM_CLAUDE_MODEL", "LLM_MODEL_INVESTIGATE", "LLM_MODEL_WRITE",
+              "LLM_MODEL_ROUTE")}
+    try:
+        for k in saved:
+            os.environ.pop(k, None)
+        os.environ["LLM_CLAUDE_MODEL"] = "base-model"
+
+        # ① 용도별 값이 없으면 기존 값으로 떨어진다. 설정을 안 바꾼 배포가 멈추면 안 된다.
+        for kind in ("investigate", "write", "route", "triage", "없는용도"):
+            assert llm.model_for(kind) == "base-model", kind
+
+        # ② 적으면 그 용도만 바뀐다.
+        os.environ["LLM_MODEL_WRITE"] = "cheap-model"
+        assert llm.model_for("write") == "cheap-model"
+        assert llm.model_for("investigate") == "base-model"
+        # **트리아지는 조사와 같은 등급을 쓴다.** 판단이기 때문이다.
+        assert llm.model_for("triage") == llm.model_for("investigate")
+
+        # ③ 어댑터가 모델을 인자로 받는다. 환경변수를 직접 읽으면 용도를 못 나눈다.
+        assert llm.ClaudeAdapter(model="x").model == "x"
+        assert llm.ClaudeAdapter().model == "base-model"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return 9
+
+
 def _ask_dispatch_checks() -> int:
     """도구를 실제로 부를 때 무엇을 막는가.
 
@@ -4815,6 +4860,9 @@ def _llm_concurrency_checks() -> int:
     class _Slow:
         name = "fake"
 
+        def __init__(self, *a, **kw):     # 실제 어댑터가 용도·모델을 받는다
+            pass
+
         def available(self):
             return True
 
@@ -4824,6 +4872,9 @@ def _llm_concurrency_checks() -> int:
 
     class _Absent:
         name = "absent"
+
+        def __init__(self, *a, **kw):
+            pass
 
         def available(self):
             return False
@@ -4882,6 +4933,9 @@ def _llm_concurrency_checks() -> int:
 
         class _Dead:
             name = "dead"
+
+            def __init__(self, *a, **kw):     # 실제 어댑터가 용도·모델을 받는다
+                pass
 
             def available(self):
                 return True

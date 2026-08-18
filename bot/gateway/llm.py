@@ -82,11 +82,36 @@ DEFAULT_TIMEOUT_S = 20  # 실측 최대 14.8s(llm_latency_20260726.md) + 여유
 MAX_TOKENS = 2048
 
 
+# 용도마다 모델 등급을 나눈다. **나누는 자리는 서로 다른 호출 사이뿐이다.**
+#
+# 한 대화 안에서 모델을 바꾸면 캐시가 모델별로 잡히므로 도구·시스템·대화 캐시가 통째로
+# 무효가 된다. 그래서 질의 반복문은 처음부터 끝까지 한 모델로 돈다.
+#
+# 판단은 싼 모델에 맡기지 않는다. 2026-08-13 실측으로 haiku 는 복제 지연 회신에
+# `RESET SLAVE` 를 권했고 opus 는 금지를 명시했다. 트리아지와 조사는 같은 등급을 쓴다.
+_MODEL_ENV = {
+    "investigate": "LLM_MODEL_INVESTIGATE",   # 질의 반복문·트리아지
+    "triage": "LLM_MODEL_INVESTIGATE",
+    "write": "LLM_MODEL_WRITE",               # 월간 리포트 서사
+    "route": "LLM_MODEL_ROUTE",               # 짧은 판단(별도 호출을 만들 때)
+}
+
+
+def model_for(kind: str = "") -> str:
+    """그 용도로 쓸 모델. 용도별 값이 없으면 기존 값으로 떨어진다.
+
+    설정을 안 바꾼 배포가 멈추면 안 된다.
+    """
+    base = os.environ.get("LLM_CLAUDE_MODEL", "claude-opus-4-8")
+    name = os.environ.get(_MODEL_ENV.get(kind or "", ""), "").strip()
+    return name or base
+
+
 class ClaudeAdapter:
     name = "claude"
 
-    def __init__(self):
-        self.model = os.environ.get("LLM_CLAUDE_MODEL", "claude-opus-4-8")
+    def __init__(self, model: str = "", kind: str = ""):
+        self.model = model or model_for(kind)
         self.timeout = float(os.environ.get("LLM_TIMEOUT_S", DEFAULT_TIMEOUT_S))
 
     def available(self) -> bool:
@@ -284,7 +309,7 @@ def monthly_reply(stats: dict, incidents: list) -> dict:
     payload = build_monthly_context(stats, incidents, masker)
     user = ("다음은 한 고객사의 한 달치 사건 집계다. 월간 리포트의 분석 절을 작성하라.\n\n"
             + json.dumps(payload, ensure_ascii=False, indent=1))
-    res = egress.call(_adapters(), MONTHLY_SYSTEM, user, kind="monthly")
+    res = egress.call(_adapters("write"), MONTHLY_SYSTEM, user, kind="monthly")
     if not res["degraded"]:
         return {**res, "text": masker.unmask(res["text"])}
     # 열화 — 리포트는 실시간이 아니므로 빈 문장 대신 "생성 실패"를 그대로 남긴다.
@@ -294,9 +319,12 @@ def monthly_reply(stats: dict, incidents: list) -> dict:
                            "집계 수치는 유효하다.)"}
 
 
-def _adapters():
-    """폴백 순서. 두 경로가 같은 체인을 쓰도록 한 곳에 둔다."""
-    return (ClaudeAdapter(), OllamaAdapter())
+def _adapters(kind: str = ""):
+    """폴백 순서. 두 경로가 같은 체인을 쓰도록 한 곳에 둔다.
+
+    용도를 주면 그 등급의 모델을 쓴다. 안 주면 기존 값이라 동작이 안 바뀐다.
+    """
+    return (ClaudeAdapter(kind=kind), OllamaAdapter())
 
 
 def _reason_text(reason: str) -> str:
@@ -384,14 +412,15 @@ def cached_system(system: str):
              "cache_control": {"type": "ephemeral"}}]
 
 
-def claude_tools(system: str, messages: list, tools: list) -> dict:
+def claude_tools(system: str, messages: list, tools: list,
+                 model: str = "") -> dict:
     """도구를 쓸 수 있는 호출. 반환은 응답 본문 그대로(content 블록·stop_reason).
 
     Ollama 로 폴백하지 않는다. 도구 호출에서 약하다는 것이 HolmesGPT 조사에서 이미
     나왔고, 여기서 폴백하면 조사가 조용히 얕아진다. 실패는 실패로 알린다.
     """
     import anthropic
-    ad = ClaudeAdapter()
+    ad = ClaudeAdapter(model=model, kind="investigate")
     client = anthropic.Anthropic(timeout=ad.timeout, max_retries=0)
     resp = client.messages.create(model=ad.model, max_tokens=MAX_TOKENS,
                                   system=cached_system(system),
