@@ -649,7 +649,7 @@ def _class_map_checks() -> int:
         assert pending.PATH.startswith(_tmpd), pending.PATH
         pending.PATH = _saved_pending
         shutil.rmtree(_tmpd, ignore_errors=True)
-        return 13
+        return 17
     finally:
         os.unlink(path)
         if saved is None:
@@ -3934,6 +3934,17 @@ def _panel_window_checks() -> int:
     assert not asktools.span_note(T0, T1, None)
     out = asktools._add_cut({}, False, 60, 1787000000 - 3600, 1787000000, {}, default)
     assert "화면 구간" in out["note"], out
+
+    # ③-c 로그도 같은 상한을 쓴다. 하루로 자르면 이틀 구간의 앞 하루가 통째로 빠진다.
+    a, b, cut = asktools.window_bounds({}, now=1787000000,
+                                       max_m=asktools.WINDOW_MAX_WIDE_M,
+                                       default_span=default)
+    assert not cut and (a, b) == default, (a, b, cut)
+    # 줄 수 상한을 채웠으면 앞부분이 안 실렸다고 말한다.
+    from . import collector as _col
+    capped = asktools.note_if_capped({"logs": [], "fetched": _col.LOKI_FETCH_LIMIT})
+    assert "앞부분은 안 들어왔다" in capped["note"], capped
+    assert not (asktools.note_if_capped({"logs": [], "fetched": 3}).get("note"))
 
     # ④ 화면 구간이 없으면 예전대로 최근 창을 본다.
     a, b, cut = asktools.window_bounds({}, now=1787000000)

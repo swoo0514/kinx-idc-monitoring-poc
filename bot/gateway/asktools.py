@@ -214,6 +214,22 @@ def note_if_no_points(out):
     return out
 
 
+def note_if_capped(out):
+    """받을 수 있는 줄 수를 다 채웠으면 그 사실을 결과에 적는다.
+
+    로그는 최신순으로 받는다. 상한을 채웠다는 것은 구간 앞부분이 안 실렸다는 뜻이다.
+    안 알리면 모델은 실린 것이 그 구간 전부인 줄 알고 "없었다" 로 답한다.
+    """
+    if not isinstance(out, dict):
+        return out
+    from . import collector
+    if int(out.get("fetched") or 0) >= collector.LOKI_FETCH_LIMIT:
+        msg = ("받을 수 있는 줄 수를 다 채웠다. 최신 쪽만 실렸고 구간 앞부분은 안 들어왔다. "
+               "구간을 좁히거나 contains 로 걸러서 다시 불러라.")
+        out["note"] = (str(out.get("note") or "") + " " + msg).strip()
+    return out
+
+
 def bad_when(args: dict) -> list:
     """시각으로 읽지 못한 인자 이름들.
 
@@ -654,10 +670,14 @@ async def _tool_host_logs(args: dict, ctx: dict) -> dict:
     if not ok:
         return _err(why)
     q = build_logql(label, args.get("contains") or "")
-    a, b, cut = window_bounds(args, int(ctx["now"]),
+    # 로그도 보안 경보와 같은 상한을 쓴다. 하루로 자르면 사람이 이틀 구간을 보며
+    # 물었을 때 앞 하루가 통째로 빠지고, 봇은 그 절반만 보고 답한다(2026-08-18 실측).
+    # 결과 크기는 구간이 아니라 줄 수 상한이 정하므로 넓혀도 무겁지 않다.
+    a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
                               default_span=ctx.get("panel_span"))
-    out = await ctx["fetch_logs"](q, a, b, int(args.get("limit") or LOG_LIMIT_DEFAULT))
-    return _add_cut(out, cut, WINDOW_MAX_M, a, b, args, ctx.get("panel_span"))
+    limit = int(args.get("limit") or LOG_LIMIT_DEFAULT)
+    out = note_if_capped(await ctx["fetch_logs"](q, a, b, limit))
+    return _add_cut(out, cut, WINDOW_MAX_WIDE_M, a, b, args, ctx.get("panel_span"))
 
 
 async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
