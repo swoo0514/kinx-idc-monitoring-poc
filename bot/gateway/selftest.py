@@ -3260,6 +3260,22 @@ def _ask_dispatch_checks() -> int:
         r = asyncio.run(asktools.run_tool(tool_name, {"host": "host-aaa"}, ctx2))
         assert not r.get("error"), (tool_name, r)
 
+    # ①-d **일수는 분 상한에 걸리면 안 된다.** days 를 분 상한(1440)에 통과시켜
+    #      30일을 넣어도 1일이 됐다. 기록이 있는데 "없다"고 답했다(2026-08-18 실측).
+    got_days = []
+
+    async def _j2(host, days):
+        got_days.append(days)
+        return {"judgments": [], "status": "ok"}
+
+    asyncio.run(asktools.run_tool("past_judgments", {"days": 30},
+                                  dict(ctx, fetch_judgments=_j2)))
+    assert got_days == [30], got_days
+    got_days.clear()
+    asyncio.run(asktools.run_tool("past_judgments", {"days": 9999},
+                                  dict(ctx, fetch_judgments=_j2)))
+    assert got_days == [asktools.JUDGMENT_DAYS_MAX], got_days
+
     # ② 표에 없는 대상은 거부한다. 표는 허용된 감시 서버에서만 만들어진다.
     r = asyncio.run(asktools.run_tool("host_logs", {"host": "[host-zzz]"}, ctx))
     assert r.get("error") and "대상" in r["error"], r

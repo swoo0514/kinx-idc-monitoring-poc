@@ -176,6 +176,9 @@ def build_wazuh_query(agent_name: str, start: int, end: int, min_level: int) -> 
 
 LOG_LIMIT_DEFAULT = 60
 JUDGMENT_DAYS_DEFAULT = 7
+# 판정 이력은 90일까지 남는다(store.KEEP_DAYS). **분 단위 상한을 쓰면 안 된다** —
+# days 를 분 상한(1440)에 통과시켜 30일이 1일이 됐다(2026-08-18 실측).
+JUDGMENT_DAYS_MAX = 90
 
 TOOL_SPECS = [
     {
@@ -415,8 +418,12 @@ async def _tool_past_judgments(args: dict, ctx: dict) -> dict:
     ent = _lookup(tok, ctx) if tok else None
     if tok and not ent:
         return _err("알 수 없는 대상이다: %s. list_hosts 로 확인하라" % tok)
-    days = clamp_window(int(args.get("days") or JUDGMENT_DAYS_DEFAULT) * 1440) // 1440
-    return await ctx["fetch_judgments"](ent.get("host") if ent else "", max(days, 1))
+    try:
+        days = int(args.get("days") or JUDGMENT_DAYS_DEFAULT)
+    except (TypeError, ValueError):
+        days = JUDGMENT_DAYS_DEFAULT
+    days = max(1, min(days, JUDGMENT_DAYS_MAX))
+    return await ctx["fetch_judgments"](ent.get("host") if ent else "", days)
 
 
 async def _tool_host_metrics(args: dict, ctx: dict) -> dict:
