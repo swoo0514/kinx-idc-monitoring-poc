@@ -575,8 +575,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
         "fetch_problems": lambda ent: fetch_problems(ent),
         "fetch_panel": (panel_fn or (
-            lambda ent, m, a, b, scope="", dash="": fetch_panel(
-                ent, m, a, b, (panel or {}).get("uid", ""), panel, scope, dash, mk))),
+            lambda ent, m, a, b, dash="": fetch_panel(
+                ent, m, a, b, (panel or {}).get("uid", ""), panel, dash, mk))),
     }
 
     images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
@@ -962,8 +962,7 @@ async def fetch_problems(entry) -> dict:
 
 async def fetch_panel(entry: dict, match: str, start: int, end: int,
                       prefer_uid: str = "", panel: dict = None,
-                      scope: str = "", dash: str = "",
-                      masker: masking.Masker = None) -> dict:
+                      dash: str = "", masker: masking.Masker = None) -> dict:
     """관측 화면 한 장. 모델에는 손잡이만 가고 주소는 화면으로만 간다.
 
     **보고 있는 패널은 번호로 그린다.** 화면이 패널 번호를 넘겨 주는데도 제목으로
@@ -971,7 +970,7 @@ async def fetch_panel(entry: dict, match: str, start: int, end: int,
     """
     from . import asktools, grafana
 
-    uid, panel_id = asktools.panel_pick(panel, match, scope)
+    uid, panel_id = asktools.panel_pick(panel, match, dash)
     title = str((panel or {}).get("title") or "")
     searched = False
     if not uid:

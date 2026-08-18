@@ -428,6 +428,23 @@ _WINDOW_PROPS = {
 }
 
 
+# 엄격 모드(strict)에서 도구 정의 전체가 가질 수 있는 선택 인자 수. 넘기면 API 가 호출을
+# 통째로 거부한다(2026-08-18 실측: "Schemas contains too many optional parameters (25),
+# which would make grammar compilation inefficient ... limit: 24"). 인자를 하나 더할 때마다
+# 이 한도를 먼저 본다.
+OPTIONAL_PARAM_MAX = 24
+
+
+def optional_params(specs: list) -> int:
+    """도구 정의에 든 선택 인자 수. 필수(required)로 적힌 것은 안 센다."""
+    n = 0
+    for t in (specs or []):
+        sch = (t or {}).get("input_schema") or {}
+        req = set(sch.get("required") or [])
+        n += len([k for k in (sch.get("properties") or {}) if k not in req])
+    return n
+
+
 def _spec(name: str, desc: str, props: dict, required=None) -> dict:
     """도구 하나. 목록 밖 인자를 아예 못 넣게 스키마대로 검증시킨다."""
     return {
@@ -484,12 +501,10 @@ def build_tool_specs(table: dict = None) -> list:
                    match={"type": "string",
                           "description": "패널 제목에 든 문자열 (예: CPU, 복제, 로그)"},
                    dashboard={"type": "string",
-                              "description": ("다른 대시보드에서 찾을 때 그 대시보드 "
-                                              "제목의 일부. scope=search 일 때만 쓴다")},
-                   scope={"type": "string", "enum": ["screen", "search"],
-                          "description": ("기본은 screen 이라 사람이 보고 있는 패널을 "
-                                          "그린다. 다른 대시보드의 패널을 보여 줄 때만 "
-                                          "search 로 적고 match 에 제목을 넣는다")}),
+                              "description": ("비우면 사람이 보고 있는 패널을 그린다. "
+                                              "다른 대시보드의 패널을 보여 줄 때만 그 "
+                                              "대시보드 제목의 일부를 적고 match 에 패널 "
+                                              "제목을 넣는다")}),
               ["host"]),
         _spec("past_judgments", "봇이 전에 내린 판정 기록. 같은 일이 반복되는지 볼 때 쓴다.",
               {"host": _host_prop("비우면 전체", toks),
@@ -534,7 +549,7 @@ def check_answer(args: dict, images, windows) -> tuple:
     return True, ""
 
 
-def panel_pick(panel: dict, match: str = "", scope: str = "") -> tuple:
+def panel_pick(panel: dict, match: str = "", dash: str = "") -> tuple:
     """보고 있는 패널을 그대로 쓸 것인가. 반환 `(대시보드 uid, 패널 번호)`.
 
     화면이 패널 번호를 넘겨 주면 제목으로 뒤지지 않는다. 제목으로 찾으면 이름이 비슷한
@@ -548,9 +563,9 @@ def panel_pick(panel: dict, match: str = "", scope: str = "") -> tuple:
     """
     # 다만 **사람이 다른 패널을 물을 수는 있어야 한다.** "MSP 대시보드 것도 같은 값이냐"
     # 같은 질문이 그렇다. 화면 패널로 고정해 두면 그 질문에 영영 답을 못 한다
-    # (2026-08-18 실측). 그래서 모델이 `scope="search"` 를 **명시**하면 그때만 찾는다.
-    # 기본값이 화면이므로, 아무 생각 없이 match 를 넣는 것으로는 안 바뀐다.
-    if str(scope or "").strip() == "search":
+    # (2026-08-18 실측). 그래서 모델이 대시보드를 **지목했을 때만** 찾는다. 지목은
+    # 명시적인 행동이라, 아무 생각 없이 match 를 넣는 것으로는 안 바뀐다.
+    if str(dash or "").strip():
         return None, None
     p = panel or {}
     uid, pid = p.get("uid"), p.get("panelId")
@@ -771,7 +786,6 @@ async def _tool_panel_image(args: dict, ctx: dict) -> dict:
     a, b, _cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
                                default_span=ctx.get("panel_span"))
     return await ctx["fetch_panel"](ent, str(args.get("match") or ""), a, b,
-                                    str(args.get("scope") or ""),
                                     str(args.get("dashboard") or ""))
 
 

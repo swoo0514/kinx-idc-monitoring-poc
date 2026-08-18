@@ -3712,24 +3712,30 @@ def _panel_route_checks() -> int:
         assert [x["id"] for x in grafana._flatten(nested) if x.get("id")] == [7]
         assert grafana._flatten(None) == []
 
+        # ①-b-2 **선택 인자 수 한도.** 넘기면 API 가 호출을 통째로 거부한다. 인자를
+        #        하나 더했다가 모든 질의가 400 으로 죽었다(2026-08-18 실측).
+        n = asktools.optional_params(asktools.build_tool_specs(table))
+        assert n <= asktools.OPTIONAL_PARAM_MAX, "선택 인자가 %d개다 (한도 %d)" % (
+            n, asktools.OPTIONAL_PARAM_MAX)
+
         # ①-c **다른 대시보드 패널도 물을 수 있어야 한다.** 화면 패널로 고정해 두면
         #      "MSP 대시보드 것도 같은 값이냐" 에 영영 답을 못 한다(2026-08-18 실측).
         #      다만 모델이 scope 를 적었을 때만 푼다. match 만으로는 안 바뀐다.
         assert asktools.panel_pick({"uid": "u1", "panelId": 3}, "CPU") == ("u1", 3)
-        assert asktools.panel_pick({"uid": "u1", "panelId": 3}, "CPU", "search") == (None, None)
+        assert asktools.panel_pick({"uid": "u1", "panelId": 3}, "CPU", "리포트") == (None, None)
 
         def model2(system, messages, tools):
             if len(messages) == 1:
                 return {"stop_reason": "tool_use", "content": [
                     {"type": "tool_use", "id": "t1", "name": "panel_image",
-                     "input": {"host": tok, "match": "MSP 인증", "scope": "search"}}]}
+                     "input": {"host": tok, "match": "MSP 인증", "dashboard": "MSP"}}]}
             return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
 
         calls[:] = []
         r3 = asyncio.run(ask.run_ask("MSP 대시보드 것도 보여줘", table=table, model_fn=model2,
                                      panel={"uid": "kinx-overview", "panelId": 12,
                                             "title": "인증 활동"}))
-        assert calls == [("MSP 인증", "kinx-overview", "")], calls
+        assert calls == [("MSP 인증", "", "MSP")], calls
         assert "/render/d-solo/다른-대시보드/" in r3["images"][0]["url"], r3["images"]
 
         # ①-d **대시보드를 지목하면 화면 대시보드를 앞세우지 않는다.** 앞세우면 지목한
@@ -3738,7 +3744,7 @@ def _panel_route_checks() -> int:
             if len(messages) == 1:
                 return {"stop_reason": "tool_use", "content": [
                     {"type": "tool_use", "id": "t1", "name": "panel_image",
-                     "input": {"host": tok, "match": "인증", "scope": "search",
+                     "input": {"host": tok, "match": "인증",
                                "dashboard": "월간 리포트"}}]}
             return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
 
@@ -4444,7 +4450,7 @@ def _ask_loop_checks() -> int:
                      "input": {"host": list(long_tbl)[0], "match": "CPU"}}]}
             return _text("아래 그림을 보라 img-1")
 
-        async def fake_panel(ent, m, a, b, scope="", dash=""):
+        async def fake_panel(ent, m, a, b, dash=""):
             return {"id": "img-1", "title": "CPU 사용률",
                     "url": "/render/d-solo/x?var-host=%s" % ent["host"]}
 
