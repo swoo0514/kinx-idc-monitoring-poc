@@ -28,6 +28,52 @@ ZBX_METHODS = frozenset((
 ))
 
 
+def parse_when(value):
+    """시각 한 개를 유닉스 초로. 못 읽으면 None — 지어내지 않는다.
+
+    사람은 화면에 보이는 절대 시각으로 묻는다. 도구가 상대 창만 받으면 모델이 그것을
+    "지금부터 N분" 으로 바꾸고, 그러면 **엉뚱한 날을 본다**(2026-08-18 실측).
+    """
+    if value is None or value == "":
+        return None
+    try:                                   # 유닉스 초(문자열 포함)
+        n = int(float(value))
+        if n > 10 ** 12:                   # 밀리초로 준 경우
+            n //= 1000
+        if n > 10 ** 8:
+            return n
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip().replace("Z", "+00:00")
+    try:
+        import datetime
+        dt = datetime.datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return int(dt.timestamp())
+    except ValueError:
+        return None
+
+
+def window_bounds(args: dict, now: int) -> tuple:
+    """조회 구간 `(시작, 끝)`. 절대 구간이 있으면 그것을, 없으면 상대 창을 쓴다.
+
+    구간 길이는 상한 안으로 자른다. 뒤집혀 오면 바로잡는다 — 사람이 끌어 놓은 순서를
+    모델이 그대로 옮기는 일이 있다.
+    """
+    a = parse_when((args or {}).get("from"))
+    b = parse_when((args or {}).get("to"))
+    if a is not None and b is not None:
+        if a > b:
+            a, b = b, a
+        return a, min(b, a + WINDOW_MAX_M * 60)
+    at = parse_when((args or {}).get("at"))
+    win = clamp_window((args or {}).get("window_m")) * 60
+    if at is not None:                     # 그 시각을 가운데 두고 앞뒤로
+        return at - win // 2, at + win // 2
+    return now - win, now
+
+
 def clamp_window(minutes) -> int:
     """조회 기간을 상한 안으로. 0 이나 이상한 값은 기본값으로."""
     try:
@@ -66,13 +112,12 @@ def zbx_method_ok(method: str) -> bool:
     return str(method or "") in ZBX_METHODS
 
 
-def build_wazuh_query(agent_name: str, window_m: int, min_level: int, now: int) -> dict:
+def build_wazuh_query(agent_name: str, start: int, end: int, min_level: int) -> dict:
     """Wazuh 질의 본문. 틀을 코드가 만들고 값만 끼운다.
 
     에이전트명은 정확 일치(`term`)를 유지한다. 부분 일치로 바꾸면 이름이 비슷한 다른
     호스트의 경보가 섞인다.
     """
-    win = clamp_window(window_m)
     try:
         lvl = max(0, min(15, int(min_level)))
     except (TypeError, ValueError):
@@ -85,8 +130,8 @@ def build_wazuh_query(agent_name: str, window_m: int, min_level: int, now: int) 
         "query": {"bool": {"filter": [
             {"term": {"agent.name": str(agent_name)}},
             {"range": {"rule.level": {"gte": lvl}}},
-            {"range": {"@timestamp": {"gte": (now - win * 60) * 1000,
-                                      "lte": now * 1000,
+            {"range": {"@timestamp": {"gte": int(start) * 1000,
+                                      "lte": int(end) * 1000,
                                       "format": "epoch_millis"}}},
         ]}},
     }
@@ -124,6 +169,15 @@ TOOL_SPECS = [
             "properties": {
                 "host": {"type": "string", "description": "list_hosts 가 준 호스트 토큰"},
                 "window_m": {"type": "integer", "description": "지금부터 거슬러 볼 분"},
+                "from": {"type": "string",
+                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
+                "to": {"type": "string", "description": "절대 구간 끝"},
+                "from": {"type": "string",
+                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
+                "to": {"type": "string", "description": "절대 구간 끝"},
+                "from": {"type": "string",
+                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
+                "to": {"type": "string", "description": "절대 구간 끝"},
                 "contains": {"type": "string", "description": "이 문자열이 든 줄만"},
             },
             "required": ["host"],
@@ -137,6 +191,8 @@ TOOL_SPECS = [
             "properties": {
                 "host": {"type": "string"},
                 "window_m": {"type": "integer"},
+                "from": {"type": "string", "description": "절대 구간 시작"},
+                "to": {"type": "string", "description": "절대 구간 끝"},
                 "min_level": {"type": "integer", "description": "0~15"},
             },
             "required": ["host"],
@@ -153,6 +209,15 @@ TOOL_SPECS = [
                 "match": {"type": "string",
                           "description": "아이템 이름·키에 든 문자열 (예: replication, cpu, memory)"},
                 "window_m": {"type": "integer", "description": "지금부터 거슬러 볼 분"},
+                "from": {"type": "string",
+                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
+                "to": {"type": "string", "description": "절대 구간 끝"},
+                "from": {"type": "string",
+                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
+                "to": {"type": "string", "description": "절대 구간 끝"},
+                "from": {"type": "string",
+                         "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
+                "to": {"type": "string", "description": "절대 구간 끝"},
                 "at": {"type": "integer",
                        "description": "특정 시각을 볼 때 그 유닉스 초. 그 앞뒤 창을 본다"},
             },
@@ -243,8 +308,8 @@ async def _tool_host_logs(args: dict, ctx: dict) -> dict:
     if not ok:
         return _err(why)
     q = build_logql(label, args.get("contains") or "")
-    return await ctx["fetch_logs"](q, clamp_window(args.get("window_m")),
-                                   int(args.get("limit") or LOG_LIMIT_DEFAULT))
+    a, b = window_bounds(args, int(ctx["now"]))
+    return await ctx["fetch_logs"](q, a, b, int(args.get("limit") or LOG_LIMIT_DEFAULT))
 
 
 async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
@@ -255,8 +320,8 @@ async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
     if not agent:
         return {"alerts": [], "status": "disabled",
                 "note": "이 호스트에는 보안 에이전트가 없다. 없다는 뜻이 아니다"}
-    body = build_wazuh_query(agent, args.get("window_m"), args.get("min_level") or 0,
-                             int(ctx["now"]))
+    a, b = window_bounds(args, int(ctx["now"]))
+    body = build_wazuh_query(agent, a, b, args.get("min_level") or 0)
     return await ctx["fetch_security"](body)
 
 
@@ -273,9 +338,8 @@ async def _tool_host_metrics(args: dict, ctx: dict) -> dict:
     ent, err = _target(args, ctx)
     if err:
         return err
-    return await ctx["fetch_metrics"](ent, str(args.get("match") or ""),
-                                      clamp_window(args.get("window_m")),
-                                      args.get("at"))
+    a, b = window_bounds(args, int(ctx["now"]))
+    return await ctx["fetch_metrics"](ent, str(args.get("match") or ""), a, b)
 
 
 async def _tool_open_problems(args: dict, ctx: dict) -> dict:

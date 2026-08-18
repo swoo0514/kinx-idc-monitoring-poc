@@ -3153,6 +3153,22 @@ def _ask_tool_checks() -> int:
     assert asktools.clamp_window(0) == asktools.WINDOW_DEFAULT_M
     assert asktools.clamp_window(30) == 30
 
+    # ①-b **절대 구간을 받는다.** 사람은 "8월 13일 12시" 를 보고 묻는데 도구에
+    #      상대 창만 있으면 모델이 '지금부터 N분' 으로 바꿔 **엉뚱한 날을 본다**
+    #      (2026-08-18 랩 실측: 8월 13일 화면을 보고 물었는데 8월 18일을 조회했다).
+    assert asktools.parse_when("2026-08-13T02:56:26.163Z") == 1786589786
+    assert asktools.parse_when(1786589786) == 1786589786
+    assert asktools.parse_when("말도 안 되는 값") is None
+    a, b = asktools.window_bounds({"from": "2026-08-13T02:56:26Z",
+                                   "to": "2026-08-13T06:57:43Z"}, now=1787000000)
+    assert (a, b) == (1786589786, 1786604263), (a, b)
+    # 절대 구간이 없으면 상대 창으로 떨어진다
+    a, b = asktools.window_bounds({"window_m": 60}, now=1787000000)
+    assert b == 1787000000 and a == 1787000000 - 3600, (a, b)
+    # 뒤집힌 구간은 바로잡는다
+    a, b = asktools.window_bounds({"from": 200, "to": 100}, now=1787000000)
+    assert a < b, (a, b)
+
     # ② 로그 필터는 정규식이 아니라 문자열이다. 질의문을 깨뜨릴 글자는 거부한다.
     for bad in ('a"b', "a}b", "a{b", "a\nb", "a\\b", "x" * 200):
         ok, why = asktools.check_filter(bad)
@@ -3182,7 +3198,7 @@ def _ask_tool_checks() -> int:
     body = asktools.build_wazuh_query("vm-a.example", 60, 7, 1786590000)
     assert body["query"]["bool"]["filter"][0]["term"]["agent.name"] == "vm-a.example", body
     assert set(body) <= {"size", "sort", "query", "_source"}, body
-    return 21
+    return 27
 
 
 def _ask_dispatch_checks() -> int:
@@ -3200,7 +3216,8 @@ def _ask_dispatch_checks() -> int:
         "[host-aaa]": {"host": "web-01", "source": "zabbix-internal",
                        "logs": "web-01.example", "security": "web-01.example"},
     }
-    async def _logs(q, w, lim):
+    async def _logs(q, a, b, lim):
+        assert a < b, (a, b)
         return {"logs": [], "status": "ok"}
 
     ctx = {"table": table, "now": 1786590000, "zbx": None, "fetch_logs": _logs}

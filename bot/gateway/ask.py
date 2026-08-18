@@ -219,7 +219,7 @@ def sanitize_question(text: str, mk: masking.Masker) -> dict:
 # 모델이 없음을 근거로 단언한다. 알림 경로에서 이미 겪은 문제다(조회 상태 계약).
 # ---------------------------------------------------------------------------
 
-async def fetch_logs(logql: str, window_m: int, limit: int, now: int,
+async def fetch_logs(logql: str, start: int, end: int, limit: int,
                      masker: masking.Masker) -> dict:
     import httpx
 
@@ -233,8 +233,8 @@ async def fetch_logs(logql: str, window_m: int, limit: int, now: int,
         async with httpx.AsyncClient() as c:
             r = await c.get(f"{url}/loki/api/v1/query_range", params={
                 "query": logql,
-                "start": str((now - window_m * 60) * 1_000_000_000),
-                "end": str(now * 1_000_000_000),
+                "start": str(int(start) * 1_000_000_000),
+                "end": str(int(end) * 1_000_000_000),
                 "limit": min(int(limit), collector.LOKI_FETCH_LIMIT),
                 "direction": "backward"}, timeout=collector.TIMEOUT_S)
             r.raise_for_status()
@@ -324,6 +324,8 @@ ASK_SYSTEM = """\
 규칙:
 - 호스트는 [host-...] 같은 가명 토큰으로만 지칭한다. 실명을 지어내지 마라.
 - 대상 토큰을 모르면 list_hosts 를 먼저 부른다.
+- **사람이 절대 시각을 말하면 window_m 이 아니라 from·to 로 넘겨라.** "8월 13일 12시",
+  "어제 새벽" 처럼 특정 시점을 가리키는 질문에 상대 창을 쓰면 엉뚱한 날을 보게 된다.
 - **도구 결과의 status 를 반드시 읽어라.** "ok" 일 때만 빈 결과를 "없었다"로 해석한다.
   "unavailable" 은 조회가 실패한 것이고 "disabled" 는 그 축이 없는 것이다. 둘 다
   "없었다"가 아니므로 그렇게 밝혀라.
@@ -400,10 +402,10 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
 
     ctx = {
         "table": table, "now": now,
-        "fetch_logs": lambda q, w, lim: fetch_logs(q, w, lim, now, mk),
+        "fetch_logs": lambda q, a, b, lim: fetch_logs(q, a, b, lim, mk),
         "fetch_security": lambda body: fetch_security(body, mk),
         "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
-        "fetch_metrics": lambda ent, match, w, at: fetch_metrics(ent, match, w, at),
+        "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
         "fetch_problems": lambda ent: fetch_problems(ent),
     }
 
@@ -504,7 +506,7 @@ def user_budget_ok(user: str, now: float = None) -> tuple:
     return True, ""
 
 
-async def fetch_metrics(entry: dict, match: str, window_m: int, at=None) -> dict:
+async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
     """호스트의 지표 추이. 아이템 이름·키에 든 문자열로 고른다.
 
     `at` 을 주면 그 시각 앞뒤를 본다. 사람은 "어제 2시에 튀었다" 로 묻지 "지금부터
@@ -533,10 +535,6 @@ async def fetch_metrics(entry: dict, match: str, window_m: int, at=None) -> dict
             if not items:
                 return {"metrics": [], "status": collector.SOURCE_OK,
                         "note": "그 조건에 맞는 아이템이 없다. match 를 넓혀 보라"}
-            end = int(at) if at else int(time.time())
-            start = end - window_m * 60
-            if at:                       # 그 시각을 가운데 두고 앞뒤로 본다
-                start, end = int(at) - window_m * 30, int(at) + window_m * 30
             out = []
             for it in items[:5]:
                 vt = int(it.get("value_type", 3))
