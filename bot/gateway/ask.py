@@ -1041,7 +1041,9 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
                 text = m.content
                 break
     stopped = _stop["why"] or out.get("stopped") or "end_turn"
-    if stopped == "end_turn" and len(trace) >= MAX_ROUNDS:
+    # 답을 받았으면 상한 표시를 붙이지 않는다. 마지막 라운드에 답한 것을 "멈췄다" 로
+    # 적으면 기록을 보는 사람이 답이 잘린 줄 안다.
+    if stopped == "end_turn" and not final and len(trace) >= MAX_ROUNDS:
         stopped = "rounds"
     if stopped in ("rounds", "deadline", "budget") and not final and trace:
         if await force_answer(system, G.to_anthropic(out.get("messages") or []),
