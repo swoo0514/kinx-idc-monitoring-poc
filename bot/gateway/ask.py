@@ -62,6 +62,19 @@ def allowed_sources() -> list:
     return [n for n in registry.source_names() if target_allowed(n)[0]]
 
 
+def _alias(mk, name: str) -> None:
+    """도메인 접미사를 뗀 짧은 이름을 **같은 토큰**에 묶는다.
+
+    사람은 `vm-a.novalocal` 을 `vm-a` 로 줄여 친다. 안 묶으면 그 조각이 안 가려진 채
+    모델로 가고, 모델은 그 문자열을 도구 인자로 넣어 '알 수 없는 대상' 으로 튕긴다.
+    새 토큰을 만들지 않고 기존 토큰을 가리키게 해야 같은 기계로 읽힌다.
+    """
+    short = str(name or "").split(".")[0]
+    if short and short != name and short not in mk._fwd:
+        mk._fwd[short] = mk._fwd[name]
+        mk._re = None
+
+
 async def build_table(masker: masking.Masker = None, client_factory=None) -> dict:
     """질의가 조회할 수 있는 대상 표. `{토큰: {host, source, logs, security}}`.
 
@@ -93,6 +106,7 @@ async def build_table(masker: masking.Masker = None, client_factory=None) -> dic
             if not name:
                 continue
             mk.register("host", name)
+            _alias(mk, name)
             table[mk._fwd[name]] = {
                 "host": name,
                 "source": source,
@@ -316,6 +330,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     else:
         for ent in table.values():
             mk.register("host", ent.get("host", ""))
+            _alias(mk, ent.get("host", ""))
     if not table:
         return {"text": "", "trace": [], "rounds": 0, "stopped": "no_targets",
                 "error": "조회할 수 있는 대상이 없다. 감시 서버 연결과 허용 영역을 확인하라"}

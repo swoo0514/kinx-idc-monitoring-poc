@@ -221,8 +221,10 @@ async def _tool_list_hosts(args: dict, ctx: dict) -> dict:
     for tok, ent in (ctx.get("table") or {}).items():
         if q and q not in str(ent.get("host", "")).lower():
             continue
-        out.append({"host": tok, "axes": sorted(k for k in ("logs", "security")
-                                                if ent.get(k))})
+        # 표의 호스트는 전부 감시 서버에서 왔으므로 지표는 언제나 볼 수 있다.
+        # 안 알리면 모델이 "이 호스트는 지표가 없다"고 단정한다(2026-08-18 실측).
+        axes = ["metrics"] + sorted(k for k in ("logs", "security") if ent.get(k))
+        out.append({"host": tok, "axes": axes})
     return {"hosts": out[:100], "n": len(out)}
 
 

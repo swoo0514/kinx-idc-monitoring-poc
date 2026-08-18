@@ -3391,13 +3391,33 @@ def _ask_loop_checks() -> int:
         assert found["n"] == 1, found
         assert "web-01" not in json.dumps(found, ensure_ascii=False), found
 
-        # ⑧ 모델이 죽어도 예외를 위로 던지지 않는다
+        # ⑧ **줄여 쓴 이름도 같은 토큰으로 가린다.** 사람은 도메인 접미사를 빼고
+        #    친다. 안 가리면 실명 조각이 그대로 나가고, 모델은 그 문자열을 도구
+        #    인자로 넣어 '알 수 없는 대상' 으로 튕긴다(2026-08-18 랩 실측).
+        long_tbl = {ask.proxy.token_for("host", "vm-a.novalocal"):
+                    {"host": "vm-a.novalocal", "source": "zabbix-internal",
+                     "logs": "vm-a.novalocal", "security": "vm-a.novalocal"}}
+        seen2 = []
+
+        def cap2(system, messages, tools):
+            seen2.append(messages[-1]["content"])
+            return _text("확인")
+
+        nametable._terms = {}
+        asyncio.run(ask.run_ask("vm-a 로그 봐줘", table=long_tbl, model_fn=cap2))
+        assert "vm-a" not in seen2[0], "줄여 쓴 이름이 안 가려졌다: %s" % seen2[0]
+
+        # ⑨ 호스트 목록은 지표 축도 알려 준다. 안 알리면 모델이 '지표가 없다'고 단정한다.
+        got = asyncio.run(asktools.run_tool("list_hosts", {}, {"table": long_tbl}))
+        assert "metrics" in got["hosts"][0]["axes"], got
+
+        # ⑩ 모델이 죽어도 예외를 위로 던지지 않는다
         def dead(system, messages, tools):
             raise RuntimeError("model down")
 
         r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
         assert r.get("error") and "모델" in r["error"], r
-        return 17
+        return 20
     finally:
         nametable._terms = saved
         ask.forget_all()
