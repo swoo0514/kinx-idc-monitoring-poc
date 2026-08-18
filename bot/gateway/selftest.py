@@ -282,7 +282,7 @@ def main():
                     + _ask_question_checks() + _ask_scope_checks()
                     + _ask_tool_checks() + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
-                    + _ask_user_checks())
+                    + _ask_user_checks() + _convo_checks())
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
@@ -3748,6 +3748,48 @@ def _ask_user_checks() -> int:
         store.PATH = saved_path
         shutil.rmtree(d, ignore_errors=True)
     return 9
+
+
+def _convo_checks() -> int:
+    """대화 이력 — 사용자별로 나뉘고, 목록이 보이고, 만료가 있는가.
+
+    저장소가 죽어도 질의 자체는 돌아야 한다. 대화는 다시 물으면 되지만 조회는 아니다.
+    """
+    from . import convo
+
+    convo.use_memory()          # 검사에서는 메모리 구현으로 돈다
+    try:
+        cid = convo.create("hong", "복제 지연 확인")
+        convo.append(cid, "hong", "user", "질문 1")
+        convo.append(cid, "hong", "assistant", "답 1")
+
+        # ① 사용자별로 나뉜다. 남의 대화는 목록에도 안 나오고 열리지도 않는다.
+        other = convo.create("kim", "다른 사람 것")
+        mine = [c["id"] for c in convo.listing("hong")]
+        assert cid in mine and other not in mine, mine
+        assert convo.load(cid, "kim") == [], "남의 대화가 열렸다"
+        assert len(convo.load(cid, "hong")) == 2
+
+        # ② 제목은 첫 질문에서 만들되 사람이 바꿀 수 있다
+        convo.rename(cid, "hong", "백업 때문에 밀린 복제")
+        assert convo.listing("hong")[0]["title"] == "백업 때문에 밀린 복제"
+
+        # ③ 목록은 최근 것이 위다 — 사람이 방금 하던 대화를 먼저 찾는다
+        cid2 = convo.create("hong", "두 번째")
+        assert [c["id"] for c in convo.listing("hong")][0] == cid2
+
+        # ④ 지우면 목록과 본문이 함께 사라진다
+        convo.remove(cid2, "hong")
+        assert cid2 not in [c["id"] for c in convo.listing("hong")]
+        assert convo.load(cid2, "hong") == []
+
+        # ⑤ **저장소가 죽어도 질의는 돌아야 한다.** 대화만 포기한다.
+        convo.use_none()
+        assert convo.create("hong", "무시됨") == ""
+        assert convo.listing("hong") == [] and convo.load("x", "hong") == []
+        return 12
+    finally:
+        convo.use_memory()
 
 
 def _proxy_mask_checks() -> int:

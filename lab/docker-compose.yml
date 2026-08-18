@@ -138,6 +138,24 @@ services:
       - lab_net
     restart: unless-stopped
 
+  # 대화 이력·사용자 설정·사용량. **판정 이력과 증거는 여기 두지 않는다** — 그건 재현과
+  # 감사를 위한 것이라 영속 저장소(SQLite)가 맞다. 여기 담는 것은 키로 빠르게 읽고
+  # 만료가 필요한 상태이고, 날아가도 사람이 다시 물으면 되는 것들이다.
+  redis:
+    image: redis:7-alpine
+    container_name: kinx-redis
+    # 메모리 상한과 축출 정책을 못 박는다. 안 걸면 대화가 쌓여 노드가 먼저 죽는다.
+    command: ["redis-server", "--maxmemory", "256mb",
+              "--maxmemory-policy", "allkeys-lru", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    # **루프백에만 연다.** 인증이 없으므로 밖으로 열면 누구나 읽는다.
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - lab_net
+    restart: unless-stopped
+
   # 대시보드를 헤드리스 Chromium 으로 그려 이미지로 낸다. OSS 에서도 쓸 수 있다
   # (공식: "Image rendering works with Grafana OSS, Grafana Enterprise, and Grafana Cloud").
   # 예약·발송은 여기 없다 — 그건 Grafana Enterprise 기능이라 우리 스크립트가 대신한다.
@@ -352,6 +370,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  redis_data:
   mariadb_data:
   mariadb_slave_data:
   grafana_data:

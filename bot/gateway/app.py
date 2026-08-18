@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import ask
 from . import collector
+from . import convo
 from . import heartbeat
 from . import incident
 from . import keep
@@ -110,6 +111,11 @@ async def _start_heartbeat():
         if not st["ok"]:
             log.error("Zabbix 조회 실패 source=%s (%s) — 이 서버의 사건은 지표 미상으로 "
                       "기록된다", name or "기본", st["error"])
+    # 대화 이력 저장소. 못 붙으면 대화만 포기하고 질의는 그대로 돈다.
+    if convo.use_redis():
+        log.info("대화 이력 저장소 연결됨 (Redis)")
+    else:
+        log.warning("대화 이력 저장소 없음 — 질의는 되지만 대화가 안 남는다 (REDIS_URL)")
     _beat.start()
     # 이름 표는 조회가 몇 초 걸리므로 별도 스레드에서 만든다. 만들어지기 전에도
     # 캐시가 있으면 그걸로 돌고, 없으면 오늘까지의 동작(맥락 기반 등록)으로 돈다.
@@ -218,6 +224,7 @@ def healthz():
 class AskRequest(BaseModel):
     question: str
     session: str = ""
+    convo_id: str = ""      # 이어가는 대화. 비면 새로 만든다.
     history: list = []
     # 사람이 보고 있던 패널. 있으면 그 그림을 코드가 붙인다(모델 판단에 안 맡긴다).
     panel: dict = {}
@@ -238,11 +245,62 @@ async def ask_endpoint(req: AskRequest, request: Request,
     ok, why = ask.user_budget_ok(user)
     if not ok:
         return JSONResponse(status_code=429, content={"error": why, "user": user})
-    res = await ask.run_ask(req.question, history=req.history,
-                            sid=req.session or user, user=user, panel=req.panel)
+    # **이력은 서버가 읽는다.** 화면이 보낸 것을 그대로 믿으면 남의 대화도 실린다.
+    cid = req.convo_id or convo.create(user, req.question)
+    stored = convo.load(cid, user)
+    hist = [{"role": m["role"], "content": m["content"]} for m in stored] or req.history
+    res = await ask.run_ask(req.question, history=hist,
+                            sid=req.session or cid or user, user=user, panel=req.panel)
+    convo.append(cid, user, "user", req.question)
+    if res.get("text"):
+        convo.append(cid, user, "assistant", res["text"])
+    res["convo_id"] = cid
     log.info("ask user=%s rounds=%s stopped=%s", user, res.get("rounds"),
              res.get("stopped"))
     return res
+
+
+class ConvoRequest(BaseModel):
+    id: str = ""
+    title: str = ""
+
+
+def _who(header: str) -> str:
+    return ask.who(header)
+
+
+@app.get("/ask/convos")
+def convo_list(x_gateway_token: str = Header(default=""),
+               x_grafana_user: str = Header(default="")):
+    """내 대화 목록. 남의 것은 애초에 안 나온다."""
+    if not _token_ok(x_gateway_token):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return {"convos": convo.listing(_who(x_grafana_user)),
+            "store": convo.status()["backend"]}
+
+
+@app.get("/ask/convos/{cid}")
+def convo_get(cid: str, x_gateway_token: str = Header(default=""),
+              x_grafana_user: str = Header(default="")):
+    if not _token_ok(x_gateway_token):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return {"messages": convo.load(cid, _who(x_grafana_user))}
+
+
+@app.post("/ask/convos/{cid}/rename")
+def convo_rename(cid: str, req: ConvoRequest, x_gateway_token: str = Header(default=""),
+                 x_grafana_user: str = Header(default="")):
+    if not _token_ok(x_gateway_token):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return {"ok": convo.rename(cid, _who(x_grafana_user), req.title)}
+
+
+@app.post("/ask/convos/{cid}/delete")
+def convo_delete(cid: str, x_gateway_token: str = Header(default=""),
+                 x_grafana_user: str = Header(default="")):
+    if not _token_ok(x_gateway_token):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return {"ok": convo.remove(cid, _who(x_grafana_user))}
 
 
 @app.post("/ask/cancel")
