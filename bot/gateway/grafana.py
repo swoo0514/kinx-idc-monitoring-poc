@@ -86,6 +86,22 @@ def annotate(text: str, event_ts: float, tags=()) -> int:
         return None
 
 
+SEARCH_LIMIT = 50
+
+
+def _flatten(panels):
+    """행(row) 안에 접힌 패널까지 펼친다.
+
+    Grafana 는 접힌 row 의 자식 패널을 `panel["panels"]` 에 중첩해 넣는다. 최상위만
+    보면 사람이 펼쳐 보던 패널을 "없다" 고 답한다.
+    """
+    out = []
+    for p in (panels or []):
+        out.append(p)
+        out.extend(_flatten(p.get("panels")))
+    return out
+
+
 def find_panel(match: str, prefer_uid: str = "") -> tuple:
     """제목에 그 문자열이 든 시계열 패널 하나. 반환 `(대시보드 uid, 패널 번호, 제목)`.
 
@@ -100,10 +116,13 @@ def find_panel(match: str, prefer_uid: str = "") -> tuple:
         return None, None, ""
     try:
         with httpx.Client(timeout=TIMEOUT_S) as c:
-            r = c.get(base + "/api/search", params={"type": "dash-db", "limit": 50},
+            r = c.get(base + "/api/search", params={"type": "dash-db", "limit": SEARCH_LIMIT},
                       headers=_auth())
             r.raise_for_status()
             found = r.json()
+            if len(found) >= SEARCH_LIMIT:
+                # 잘렸다는 것을 남긴다. 이 저장소는 다른 곳에서 잘림을 꼬박 알린다.
+                log.warning("대시보드가 %d개를 넘어 뒤쪽은 보지 못했다", SEARCH_LIMIT)
             order = ([d for d in found if d.get("uid") == prefer_uid] +
                      [d for d in found if d.get("uid") != prefer_uid])
             for d in order:
@@ -113,13 +132,18 @@ def find_panel(match: str, prefer_uid: str = "") -> tuple:
                 dr = c.get(base + "/api/dashboards/uid/" + uid, headers=_auth())
                 if dr.status_code != 200:
                     continue
-                for p in (dr.json().get("dashboard") or {}).get("panels") or []:
+                for p in _flatten((dr.json().get("dashboard") or {}).get("panels")):
                     title = str(p.get("title") or "")
                     # 시계열만 보면 표·로그 패널을 "없다"고 답한다(2026-08-18 실측:
                     # 인증 활동 패널이 있는데 없다고 했다).
+                    # **match 가 비면 아무것도 고르지 않는다.** 예전에는 그 대시보드의
+                    # 첫 시계열 패널을 무조건 집었다. 근거 없는 선택이라 사람이 보던
+                    # 화면과 다른 그림이 붙었다.
+                    if not match:
+                        continue
                     if p.get("type") in ("timeseries", "graph", "table", "logs",
                                          "stat", "barchart", "piechart") and (
-                            not match or match.lower() in title.lower()):
+                            match.lower() in title.lower()):
                         return uid, p.get("id"), title
     except Exception as e:
         log.warning("패널 검색 실패: %s", e)

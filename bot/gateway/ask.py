@@ -562,30 +562,17 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
             ent, m, a, b, (panel or {}).get("uid", ""), panel))),
     }
 
-    hist, dropped = trim_history(history)
     images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
     # 사람이 보고 있던 패널은 **맥락으로만** 알려 준다. 무조건 붙이면 이어지는
     # 질문마다 같은 그림이 다시 그려진다. 붙일지는 모델이 정하고, 판단 기준은 지시문에
     # 적었다.
     viewing = ""
-    if panel and panel.get("uid") and panel.get("host"):
+    if panel and panel.get("uid"):
         viewing = ("[사람이 보고 있는 패널] %s — 이 화면을 그림으로 붙이려면 "
                    "panel_image 를 부르면 된다." + chr(10)
                    ) % mk.mask(str(panel.get("title") or "제목 없음"))
 
-    ctx = {
-        "table": table, "now": now,
-        "fetch_logs": lambda q, a, b, lim: fetch_logs(q, a, b, lim, mk),
-        "fetch_security": lambda body: fetch_security(body, mk),
-        "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
-        "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
-        "fetch_problems": lambda ent: fetch_problems(ent),
-        "fetch_panel": (panel_fn or (lambda ent, m, a, b: fetch_panel(
-            ent, m, a, b, (panel or {}).get("uid", "")))),
-    }
-
     hist, dropped = trim_history(history)
-    images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
     # **이력도 가린다.** 화면은 사람이 읽는 글(실명으로 되돌린 것)을 이력으로
     # 되보낸다. 그대로 실으면 앞 턴의 실명이 모델에 가고, 모델은 그 이름을 도구
     # 인자로 쓴다(2026-08-18 실측).
@@ -877,9 +864,13 @@ async def fetch_panel(entry: dict, match: str, start: int, end: int,
         uid, panel_id, title = grafana.find_panel(match or "", prefer_uid)
     if not uid:
         return {"error": "그 조건에 맞는 패널을 못 찾았다. match 를 바꿔 보라"}
+    # **화면이 준 호스트 값을 먼저 쓴다.** 대시보드 변수의 실제 현재 값이다. Zabbix 축
+    # 이름을 넣으면 Loki·Wazuh 패널이 빈 그래프로 나오고 사람은 "아무 일도 없었다" 로
+    # 읽는다(축마다 이름이 다르다 — collector._resolve_label 참고).
+    var_host = str((panel or {}).get("host") or "") or entry.get("host", "")
     return {"id": "img-%d" % (abs(hash((uid, panel_id, start))) % 9000 + 1000),
             "title": title,
-            "url": grafana.panel_url(uid, panel_id, entry.get("host", ""), start, end)}
+            "url": grafana.panel_url(uid, panel_id, var_host, start, end)}
 
 
 def engine_name() -> str:

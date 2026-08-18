@@ -281,6 +281,7 @@ def main():
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
                     + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
+                    + _panel_route_checks()
                     + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
@@ -3311,9 +3312,9 @@ def _ask_result_checks() -> int:
     #         (2026-08-18 실측: "인증 활동" 을 보고 물었는데 "보안 이벤트" 가 그려졌다).
     ctx = {"uid": "kinx-overview", "panelId": 12, "title": "인증 활동 (Wazuh)"}
     assert asktools.panel_pick(ctx, match="") == ("kinx-overview", 12)
-    # 사람이 다른 패널을 콕 집어 물으면 그때는 찾아 준다.
-    assert asktools.panel_pick(ctx, match="복제") == (None, None)
-    # 보고 있는 패널의 제목과 통하면 그대로 쓴다.
+    # **모델이 넣은 match 로 화면 맥락을 버리지 않는다.** 보던 제목이 "프로세서 사용률"
+    # 인데 모델이 "CPU" 를 넣었다고 남의 패널을 그리면 사람은 같은 화면을 봤다고 믿는다.
+    assert asktools.panel_pick(ctx, match="CPU") == ("kinx-overview", 12)
     assert asktools.panel_pick(ctx, match="인증") == ("kinx-overview", 12)
     # 번호가 없으면 예전처럼 찾는다.
     assert asktools.panel_pick({"uid": "kinx-overview"}, match="") == (None, None)
@@ -3652,6 +3653,71 @@ def _prompt_file_checks() -> int:
     assert len(llm.TRIAGE_SYSTEM) > 200
     assert len(llm.MONTHLY_SYSTEM) > 100
     return 8
+
+
+
+def _panel_route_checks() -> int:
+    """보고 있는 패널이 **실경로로** 그려지는가.
+
+    `panel_pick` 을 직접 부르는 검사와 `panel_fn` 을 주입하는 검사만 있으면
+    `run_ask → fetch_panel` 사이가 안 지나간다. 2026-08-18 에 그 사이에 중복 대입이
+    있어 수정이 한 줄도 실행되지 않았는데 검사는 전부 통과했다.
+    """
+    import asyncio
+
+    from . import ask, grafana, nametable
+
+    saved_terms = dict(nametable._terms)
+    saved_find = grafana.find_panel
+    calls = []
+
+    def _spy(match, prefer_uid=""):
+        calls.append((match, prefer_uid))
+        return "다른-대시보드", 99, "남의 패널"
+
+    try:
+        nametable._terms = {"web-01": "host"}
+        grafana.find_panel = _spy
+        table = {ask.proxy.token_for("host", "web-01"):
+                 {"host": "web-01", "source": "zabbix-internal",
+                  "logs": "web-01.example", "security": "web-01.example"}}
+        tok = list(table)[0]
+
+        def model(system, messages, tools):
+            if len(messages) == 1:
+                return {"stop_reason": "tool_use", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "panel_image",
+                     "input": {"host": tok}}]}
+            return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
+
+        # ① 화면이 번호를 주면 검색을 아예 안 부른다.
+        r = asyncio.run(ask.run_ask("이 패널 뭐야", table=table, model_fn=model,
+                                    panel={"uid": "kinx-overview", "panelId": 12,
+                                           "title": "인증 활동 (Wazuh)"}))
+        assert not calls, "번호를 쥐고도 제목으로 뒤졌다: %r" % (calls,)
+        assert r["images"] and "/render/d-solo/kinx-overview/" in r["images"][0]["url"],             r["images"]
+        assert "panelId=12" in r["images"][0]["url"], r["images"][0]["url"]
+        # **화면이 준 호스트 값을 쓴다.** Zabbix 축 이름을 넣으면 Loki·Wazuh 패널이
+        # 빈 그래프가 되고 사람은 "아무 일도 없었다" 로 읽는다.
+        r2 = asyncio.run(ask.run_ask("이 패널", table=table, model_fn=model,
+                                     panel={"uid": "u1", "panelId": 3,
+                                            "title": "t", "host": "web-01.example"}))
+        assert "web-01.example" in r2["images"][0]["url"], r2["images"][0]["url"]
+
+        # ①-b **행 안에 접힌 패널도 찾는다.** 최상위만 보면 사람이 펼쳐 본 패널을
+        #      "없다" 고 답한다.
+        nested = [{"type": "row", "title": "묶음", "panels": [
+            {"type": "timeseries", "title": "복제 지연", "id": 7}]}]
+        assert [x["id"] for x in grafana._flatten(nested) if x.get("id")] == [7]
+        assert grafana._flatten(None) == []
+
+        # ② 화면 맥락이 없으면 그때만 찾는다.
+        r = asyncio.run(ask.run_ask("이 패널 뭐야", table=table, model_fn=model))
+        assert calls, "맥락이 없는데도 안 찾았다"
+    finally:
+        grafana.find_panel = saved_find
+        nametable._terms = saved_terms
+    return 6
 
 
 def _ask_dispatch_checks() -> int:

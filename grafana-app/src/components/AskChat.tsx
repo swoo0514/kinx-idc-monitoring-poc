@@ -113,7 +113,10 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
         question: text,
         convo_id: convoId,
         session: convoId || 'ui',
-        panel: turns.length === 0 ? panel : undefined,
+        // **매 턴 보낸다.** 첫 턴에만 보내면 두 번째 질문부터 게이트웨이가
+        // 식별자를 못 받아 제목으로 뒤진다. 첫 턴은 맞고 둘째 턴은 틀리므로
+        // 사람이 원인을 가장 짚기 어렵다. 같은 그림을 다시 붙일지는 모델이 정한다.
+        panel,
       });
       if (res?.error) {
         setErr(res.error);

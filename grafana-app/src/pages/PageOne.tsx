@@ -31,7 +31,16 @@ function panelFromQuery() {
   if (!uid || panelId === null) {
     return undefined;
   }
-  return { uid, panelId: Number(panelId), title: p.get("panel") || "" };
+  // host 와 구간도 함께 넘긴다. 게이트웨이가 "보고 있는 패널" 맥락을 붙일 때 쓰고,
+  // 그림을 그릴 때 대시보드 변수 값으로도 쓴다. 산문에만 넣으면 코드가 못 쓴다.
+  return {
+    uid,
+    panelId: Number(panelId),
+    title: p.get("panel") || "",
+    host: p.get("host") || "",
+    from: p.get("from") || "",
+    to: p.get("to") || "",
+  };
 }
 
 export default function PageOne() {

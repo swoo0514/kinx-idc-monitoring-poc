@@ -441,14 +441,14 @@ def panel_pick(panel: dict, match: str = "") -> tuple:
     옆 패널이 걸린다(2026-08-18 실측: "인증 활동" 을 보고 물었는데 "보안 이벤트" 가
     그려졌다).
 
-    사람이 다른 패널을 콕 집어 물으면 그때는 찾아 준다. 보고 있는 제목과 통하면 그대로.
+    **모델이 넣은 `match` 로 이 판단을 하지 않는다.** 보던 패널 제목이 "프로세서 사용률"
+    인데 모델이 지침대로 `match="CPU"` 를 넣으면 화면 맥락이 버려지고 남의 대시보드
+    패널이 그려진다. 사람은 같은 패널을 봤다고 믿는다. 사람이 다른 패널을 원하면
+    그때는 화면에서 그 패널을 열고 다시 물으면 된다.
     """
     p = panel or {}
     uid, pid = p.get("uid"), p.get("panelId")
     if not uid or pid in (None, ""):
-        return None, None
-    want = str(match or "").strip().lower()
-    if want and want not in str(p.get("title") or "").lower():
         return None, None
     return uid, pid
 
