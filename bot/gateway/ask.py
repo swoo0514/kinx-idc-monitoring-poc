@@ -836,6 +836,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
     """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+    from . import asktools
     from . import graph as G
 
     def guard() -> bool:
