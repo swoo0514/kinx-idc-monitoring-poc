@@ -299,7 +299,8 @@ async def fetch_security(body: dict, masker: masking.Masker) -> dict:
         log.warning("보안 조회 실패: %s", e)
         return {"alerts": [], "status": collector.SOURCE_UNAVAILABLE,
                 "note": "조회하지 못했다. 이 결과를 '없음'으로 읽지 마라"}
-    return {"alerts": [masking._security_item(h.get("_source") or {}, masker.mask)
+    return {"alerts": [masking._security_item(
+                           collector.flatten_alert(h.get("_source") or {}), masker.mask)
                        for h in hits],
             "status": collector.SOURCE_OK}
 
@@ -376,6 +377,11 @@ ASK_SYSTEM = """\
 - **그림은 도움이 될 때만 붙인다.** panel_image 는 사람이 보고 있는 화면을 답과 함께
   보여 줄 때, 또는 추이·모양을 말로 설명하기 어려울 때 한 번만 부른다. 같은 대화에서
   이미 붙였으면 다시 붙이지 마라. "없다"·"정상이다" 만 말하는 답에는 붙이지 마라.
+- **사람이 보고 있는 패널에 대해 물었는데 조회가 비었으면, 사람에게 화면을 확인하라고
+  미루지 말고 네가 panel_image 로 그 패널을 먼저 봐라.** 화면에는 값이 있는데 다른 축을
+  조회해 비었을 수 있다.
+- **로그에서 여러 낱말 중 하나를 찾을 때는 contains 에 `failed|invalid user` 처럼
+  세로줄로 이어라.** 다섯 개까지 된다.
 - 대상 토큰을 모르면 list_hosts 를 먼저 부른다.
 - **사람이 절대 시각을 말하면 window_m 이 아니라 from·to 로 넘겨라.** "8월 13일 12시",
   "어제 새벽" 처럼 특정 시점을 가리키는 질문에 상대 창을 쓰면 엉뚱한 날을 보게 된다.
@@ -446,6 +452,9 @@ _HANDLE_RE = re.compile(r"\[?img-[0-9a-z]+\]?")
 def strip_handles(text: str) -> str:
     """답에서 그림 손잡이를 걷어 낸다. 앞뒤 공백도 정리한다."""
     out = _HANDLE_RE.sub("", str(text or ""))
+    # 손잡이가 괄호 안에 있었으면 빈 괄호가 남는다 — "패널()의" 가 화면에 그대로
+    # 나왔다(2026-08-18 실측).
+    out = re.sub(r"\(\s*\)|\[\s*\]", "", out)
     out = re.sub(r"[ \t]{2,}", " ", out)
     out = re.sub(r"[ \t]+([,.!?)\]])", r"\1", out)
     return re.sub(r"\n{3,}", "\n\n", out).strip()

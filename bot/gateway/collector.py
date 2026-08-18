@@ -873,6 +873,26 @@ async def _loki_name_status(client, url: str, host_label: str, now: int) -> str:
     return SOURCE_UNMATCHED
 
 
+def flatten_alert(src: dict) -> dict:
+    """Wazuh 경보 1건을 전송 화이트리스트가 읽는 평탄한 형태로 옮긴다.
+
+    인덱서는 `rule.level` 처럼 중첩해서 주고 `masking._security_item` 은 평탄한 열쇠를
+    읽는다. 이 단계를 건너뛰면 **모든 값이 공백이 되고 모델은 그것을 "경보 없음" 으로
+    읽는다** — 조회는 성공했는데 답은 없음이 된다(2026-08-18 랩 실측, 50건이 전부 공백).
+    질의 경로와 알림 경로가 같은 함수를 쓰게 해 한쪽만 빠지는 일을 막는다.
+    """
+    rule = src.get("rule") or {}
+    sc = src.get("syscheck") or {}
+    groups = rule.get("groups") or []
+    return {"level": rule.get("level"),
+            "desc": rule.get("description"),
+            "ts": src.get("@timestamp"),
+            "rule_id": rule.get("id"),
+            "groups": ",".join(groups) if isinstance(groups, list) else groups,
+            "path": sc.get("path"),
+            "change": sc.get("event")}
+
+
 async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "", source: str = "") -> tuple:
     """Wazuh Indexer(OpenSearch) 최근 경보. 반환 (경보 목록, 조회 상태).
 
@@ -912,19 +932,8 @@ async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "", source: s
             r = await client.post(f"{url}/wazuh-alerts-*/_search",
                                   json=body, auth=(user, pw), timeout=TIMEOUT_S)
             r.raise_for_status()
-            out = []
-            for h in r.json().get("hits", {}).get("hits", []):
-                src = h.get("_source", {})
-                rule = src.get("rule", {}) or {}
-                sc = src.get("syscheck", {}) or {}
-                groups = rule.get("groups") or []
-                out.append({"level": rule.get("level"),
-                            "desc": rule.get("description"),
-                            "ts": src.get("@timestamp"),
-                            "rule_id": rule.get("id"),
-                            "groups": ",".join(groups) if isinstance(groups, list) else groups,
-                            "path": sc.get("path"),
-                            "change": sc.get("event")})
+            out = [flatten_alert(h.get("_source") or {})
+                   for h in r.json().get("hits", {}).get("hits", [])]
             if out:
                 return out, SOURCE_OK
             return [], await _wazuh_name_status(client, url, user, pw, agent_name)

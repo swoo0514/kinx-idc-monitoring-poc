@@ -13,6 +13,9 @@ log = logging.getLogger("gateway.asktools")
 # 조회 기간(분). 모델이 큰 값을 넣어도 여기서 잘린다.
 WINDOW_DEFAULT_M = 60
 WINDOW_MAX_M = 1440
+# 건수 상한이 있어 구간을 넓혀도 무겁지 않은 조회(보안 경보·문제 목록). 사람이 보는
+# 대시보드 구간이 7일인 일이 흔한데 하루로 자르면 그 화면을 설명하지 못한다.
+WINDOW_MAX_WIDE_M = 10080
 
 # 문자열 필터 상한. 길면 질의가 무거워지고, 정규식으로 쓰려는 시도이기도 하다.
 FILTER_MAX_CHARS = 80
@@ -20,6 +23,10 @@ FILTER_MAX_CHARS = 80
 _UNSAFE = re.compile(r'["{}\\\r\n]')
 # 라벨 값은 호스트 이름이라 더 좁게 본다.
 _LABEL_OK = re.compile(r"^[A-Za-z0-9._\-]+$")
+# `a|b` 로 나눈 낱말 하나. 정규식 특수문자를 빼서 조립한 질의문이 의도대로만 돌게 한다.
+_TERM_OK = re.compile(r"^[A-Za-z0-9._/\- ]+$")
+# 한 번에 찾을 낱말 수. 늘리면 질의가 무거워진다.
+FILTER_MAX_TERMS = 5
 
 # 도구가 쓰는 Zabbix 메서드. `.get` 이어도 이 목록 밖이면 거부한다 — 읽기 전용이라고
 # 다 열어 주면 사용자·설정 조회까지 나간다.
@@ -82,23 +89,39 @@ def parse_when(value):
         return None
 
 
-def window_bounds(args: dict, now: int) -> tuple:
-    """조회 구간 `(시작, 끝)`. 절대 구간이 있으면 그것을, 없으면 상대 창을 쓴다.
+def window_bounds(args: dict, now: int, max_m: int = 0) -> tuple:
+    """조회 구간 `(시작, 끝, 잘렸는가)`. 절대 구간이 있으면 그것을, 없으면 상대 창을.
 
     구간 길이는 상한 안으로 자른다. 뒤집혀 오면 바로잡는다 — 사람이 끌어 놓은 순서를
     모델이 그대로 옮기는 일이 있다.
+
+    **잘랐으면 잘랐다고 돌려준다.** 조용히 자르면 7일을 물은 사람이 1일치 결과를 보고
+    7일 내내 아무 일도 없었다고 읽는다(2026-08-18 랩 실측).
     """
+    cap = int(max_m or WINDOW_MAX_M) * 60
     a = parse_when((args or {}).get("from"))
     b = parse_when((args or {}).get("to"))
     if a is not None and b is not None:
         if a > b:
             a, b = b, a
-        return a, min(b, a + WINDOW_MAX_M * 60)
+        return a, min(b, a + cap), (b - a) > cap
     at = parse_when((args or {}).get("at"))
-    win = clamp_window((args or {}).get("window_m")) * 60
+    win = min(clamp_window((args or {}).get("window_m")) * 60, cap)
     if at is not None:                     # 그 시각을 가운데 두고 앞뒤로
-        return at - win // 2, at + win // 2
-    return now - win, now
+        return at - win // 2, at + win // 2, False
+    return now - win, now, False
+
+
+def cut_note(cut: bool, max_m: int) -> str:
+    """구간을 잘랐을 때 도구 결과에 실을 문장. 안 잘랐으면 빈 문자열."""
+    if not cut:
+        return ""
+    if max_m % 1440 == 0:
+        span = "%d일" % (max_m // 1440)
+    else:
+        span = "%d분" % max_m
+    return ("물어본 구간이 상한(%s)보다 길어 앞쪽 %s만 조회했다. "
+            "나머지 구간은 확인하지 않았다 — 없다고 답하지 마라." % (span, span))
 
 
 def clamp_window(minutes) -> int:
@@ -113,13 +136,31 @@ def clamp_window(minutes) -> int:
 
 
 def check_filter(text: str) -> tuple:
-    """로그 문자열 필터가 쓸 만한가. 반환 `(가능 여부, 사유)`."""
+    """로그 문자열 필터가 쓸 만한가. 반환 `(가능 여부, 사유)`.
+
+    `a|b` 는 "둘 중 하나" 로 받는다. 모델은 이 표기를 정규식으로 쓰는데, 글자 그대로
+    찾으면 절대 맞지 않아 결과가 비고 사람은 그것을 "기록 없음" 으로 읽는다
+    (2026-08-18 랩 실측).
+    """
     s = str(text or "")
     if len(s) > FILTER_MAX_CHARS:
         return False, "필터가 %d자를 넘는다" % FILTER_MAX_CHARS
     if _UNSAFE.search(s):
         return False, "질의문을 깨뜨리는 글자가 있다(따옴표·중괄호·역슬래시·줄바꿈)"
+    terms = filter_terms(s)
+    if s and not terms:
+        return False, "찾을 낱말이 없다"
+    if len(terms) > FILTER_MAX_TERMS:
+        return False, "한 번에 찾을 낱말은 %d개까지다" % FILTER_MAX_TERMS
+    for t in terms:
+        if not _TERM_OK.match(t):
+            return False, "낱말에 쓸 수 없는 글자가 있다: %r" % t
     return True, ""
+
+
+def filter_terms(text: str) -> list:
+    """`a|b|c` 를 낱말 목록으로. 빈 조각은 버린다."""
+    return [t.strip() for t in str(text or "").split("|") if t.strip()]
 
 
 def build_logql(label_value: str, contains: str = "") -> str:
@@ -131,7 +172,12 @@ def build_logql(label_value: str, contains: str = "") -> str:
         ok, why = check_filter(contains)
         if not ok:
             raise ValueError(why)
-        q += ' |= "%s"' % contains
+        terms = filter_terms(contains)
+        if len(terms) == 1:
+            q += ' |= "%s"' % terms[0]
+        else:
+            # 낱말마다 위 검사를 통과했으므로 질의문을 깨뜨릴 글자가 없다.
+            q += ' |~ "(%s)"' % "|".join(terms)
     return q
 
 
@@ -208,7 +254,9 @@ TOOL_SPECS = [
                 "from": {"type": "string",
                          "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
                 "to": {"type": "string", "description": "절대 구간 끝"},
-                "contains": {"type": "string", "description": "이 문자열이 든 줄만"},
+                "contains": {"type": "string",
+                             "description": "이 문자열이 든 줄만. 세로줄로 이으면 "
+                                            "그중 하나라도 든 줄(failed|timeout), 5개까지"},
             },
             "required": ["host"],
         },
@@ -364,6 +412,18 @@ def _hint_if_empty(name: str, out):
     return out
 
 
+def _add_cut(out, cut: bool, max_m: int):
+    """구간을 잘랐다는 사실을 도구 결과에 얹는다.
+
+    프롬프트가 아니라 결과에 실어야 모델이 답에 옮긴다. 이미 안내가 있으면 뒤에 붙인다.
+    """
+    note = cut_note(cut, max_m)
+    if not note or not isinstance(out, dict):
+        return out
+    out["note"] = (str(out.get("note") or "") + " " + note).strip()
+    return out
+
+
 async def _tool_list_hosts(args: dict, ctx: dict) -> dict:
     """표에서 만든다. 조회를 안 하므로 라운드를 아낀다."""
     # **검색은 실명으로 맞춘다.** 사람은 실명으로 묻고 모델은 그 말을 그대로 옮긴다.
@@ -396,8 +456,9 @@ async def _tool_host_logs(args: dict, ctx: dict) -> dict:
     if not ok:
         return _err(why)
     q = build_logql(label, args.get("contains") or "")
-    a, b = window_bounds(args, int(ctx["now"]))
-    return await ctx["fetch_logs"](q, a, b, int(args.get("limit") or LOG_LIMIT_DEFAULT))
+    a, b, cut = window_bounds(args, int(ctx["now"]))
+    out = await ctx["fetch_logs"](q, a, b, int(args.get("limit") or LOG_LIMIT_DEFAULT))
+    return _add_cut(out, cut, WINDOW_MAX_M)
 
 
 async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
@@ -408,9 +469,9 @@ async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
     if not agent:
         return {"alerts": [], "status": "disabled",
                 "note": "이 호스트에는 보안 에이전트가 없다. 없다는 뜻이 아니다"}
-    a, b = window_bounds(args, int(ctx["now"]))
+    a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M)
     body = build_wazuh_query(agent, a, b, args.get("min_level") or 0)
-    return await ctx["fetch_security"](body)
+    return _add_cut(await ctx["fetch_security"](body), cut, WINDOW_MAX_WIDE_M)
 
 
 async def _tool_past_judgments(args: dict, ctx: dict) -> dict:
@@ -430,8 +491,9 @@ async def _tool_host_metrics(args: dict, ctx: dict) -> dict:
     ent, err = _target(args, ctx)
     if err:
         return err
-    a, b = window_bounds(args, int(ctx["now"]))
-    return await ctx["fetch_metrics"](ent, str(args.get("match") or ""), a, b)
+    a, b, cut = window_bounds(args, int(ctx["now"]))
+    out = await ctx["fetch_metrics"](ent, str(args.get("match") or ""), a, b)
+    return _add_cut(out, cut, WINDOW_MAX_M)
 
 
 async def _tool_open_problems(args: dict, ctx: dict) -> dict:
@@ -446,7 +508,7 @@ async def _tool_panel_image(args: dict, ctx: dict) -> dict:
     ent, err = _target(args, ctx)
     if err:
         return err
-    a, b = window_bounds(args, int(ctx["now"]))
+    a, b, _cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M)
     return await ctx["fetch_panel"](ent, str(args.get("match") or ""), a, b)
 
 

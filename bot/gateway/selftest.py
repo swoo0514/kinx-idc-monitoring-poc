@@ -280,7 +280,7 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_dispatch_checks()
+                    + _ask_tool_checks() + _ask_result_checks() + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks())
     store_checks = (_store_checks() + _store_schema_checks()
@@ -3159,15 +3159,16 @@ def _ask_tool_checks() -> int:
     assert asktools.parse_when("2026-08-13T02:56:26.163Z") == 1786589786
     assert asktools.parse_when(1786589786) == 1786589786
     assert asktools.parse_when("말도 안 되는 값") is None
-    a, b = asktools.window_bounds({"from": "2026-08-13T02:56:26Z",
-                                   "to": "2026-08-13T06:57:43Z"}, now=1787000000)
+    a, b, _ = asktools.window_bounds({"from": "2026-08-13T02:56:26Z",
+                                      "to": "2026-08-13T06:57:43Z"}, now=1787000000)
     assert (a, b) == (1786589786, 1786604263), (a, b)
     # 절대 구간이 없으면 상대 창으로 떨어진다
-    a, b = asktools.window_bounds({"window_m": 60}, now=1787000000)
+    a, b, _ = asktools.window_bounds({"window_m": 60}, now=1787000000)
     assert b == 1787000000 and a == 1787000000 - 3600, (a, b)
     # 뒤집힌 구간은 바로잡는다
-    a, b = asktools.window_bounds({"from": 200, "to": 100}, now=1787000000)
-    assert a < b, (a, b)
+    a, b, _ = asktools.window_bounds({"from": 1786600000, "to": 1786590000},
+                                     now=1787000000)
+    assert (a, b) == (1786590000, 1786600000), (a, b)
 
     # ①-c **구간을 골고루 보되 극단은 살린다.** 최신순으로 상한만큼만 받으면 긴
     #      구간에서 앞부분이 통째로 잘려 **먼저 난 스파이크를 못 본다**
@@ -3214,6 +3215,77 @@ def _ask_tool_checks() -> int:
     assert body["query"]["bool"]["filter"][0]["term"]["agent.name"] == "vm-a.example", body
     assert set(body) <= {"size", "sort", "query", "_source"}, body
     return 32
+
+
+
+def _ask_result_checks() -> int:
+    """조회 결과가 사람에게 닿기까지 무엇이 사라지는가.
+
+    2026-08-18 랩 실측에서 봇이 "수집된 데이터가 없습니다" 라고 답했는데, 실제로는
+    보안 경보 50건이 왔고 그 50건이 전부 공백으로 채워져 있었다. 조회 실패가 아니라
+    **성공한 조회를 없음으로 바꾸는** 경로였다. 그런 경로만 모은다.
+    """
+    from . import asktools, collector, masking, ask
+
+    # (1) **Wazuh 응답은 중첩이고 화이트리스트는 평탄하다.** 옮기는 단계를 건너뛰면
+    #     50건이 전부 공백이 되고, 모델은 그것을 "기록 없음" 으로 읽는다.
+    raw = {"@timestamp": "2026-07-20T01:00:00.000Z",
+           "rule": {"level": 10, "id": "5710", "description": "SSH 로그인 실패",
+                    "groups": ["authentication_failed", "sshd"]},
+           "agent": {"name": "vm-a.example"},
+           "syscheck": {"path": "/etc/ssh/sshd_config", "event": "modified"}}
+    flat = collector.flatten_alert(raw)
+    assert flat["level"] == 10, flat
+    assert flat["desc"] == "SSH 로그인 실패", flat
+    assert flat["rule_id"] == "5710", flat
+    assert flat["ts"] == "2026-07-20T01:00:00.000Z", flat
+    assert flat["groups"] == "authentication_failed,sshd", flat
+    assert flat["path"] == "/etc/ssh/sshd_config", flat
+    item = masking._security_item(flat, lambda x: x)
+    assert item["level"] == 10 and item["desc"], item
+    assert not all(v is None for v in item.values()), "화이트리스트가 전부 공백이다"
+
+    # (2) **여러 낱말 중 하나를 찾는 필터.** 모델은 `a|b|c` 를 정규식으로 쓴다.
+    #     그것을 글자 그대로 찾으면 절대 안 맞고, 결과가 비어 "기록 없음" 이 된다.
+    q = asktools.build_logql("vm-a.example", "failed|invalid user")
+    assert q == '{host="vm-a.example"} |~ "(failed|invalid user)"', q
+    # 낱말 하나면 정규식으로 만들지 않는다
+    assert asktools.build_logql("vm-a.example", "timeout") == '{host="vm-a.example"} |= "timeout"'
+    # 낱말마다 검사한다 — 하나라도 위험하면 만들지 않는다
+    # 뒤에 구분자만 남은 것은 낱말 하나로 받는다 — 되묻는 값이 아니다
+    assert asktools.build_logql("vm-a.example", "failed|") == '{host="vm-a.example"} |= "failed"'
+    for bad in ('failed|a"b', "failed|a}b", "|", "a|b|c|d|e|f|g"):
+        try:
+            asktools.build_logql("vm-a.example", bad)
+            raise AssertionError("위험한 필터를 통과시켰다: %r" % bad)
+        except ValueError:
+            pass
+
+    # (3) **구간을 잘랐으면 잘랐다고 말한다.** 7일을 물었는데 1일만 보고 "없음" 이라
+    #     답하면 사람은 7일에 아무것도 없었다고 읽는다.
+    T0 = 1786500000
+    a, b, cut = asktools.window_bounds({"from": T0, "to": T0 + 30 * 86400}, now=T0)
+    assert cut, "7일을 1일로 자르고도 알리지 않았다"
+    assert b - a == asktools.WINDOW_MAX_M * 60, (a, b)
+    a, b, cut = asktools.window_bounds({"from": T0, "to": T0 + 3600}, now=T0)
+    assert not cut and b - a == 3600, (a, b, cut)
+    # 보안·문제 조회는 건수 상한이 있어 더 긴 구간을 본다
+    a, b, cut = asktools.window_bounds({"from": T0, "to": T0 + 7 * 86400}, now=T0,
+                                       max_m=asktools.WINDOW_MAX_WIDE_M)
+    assert not cut and b - a == 7 * 86400, (a, b, cut)
+
+    # (4) **잘린 사실은 도구 결과에 실린다.** 프롬프트가 아니라 결과에 실어야
+    #     모델이 답에 옮긴다.
+    note = asktools.cut_note(True, 1440)
+    assert note and "1일" in note, note
+    assert asktools.cut_note(False, 1440) == ""
+
+    # (5) 그림 손잡이를 걷어내고 남은 빈 괄호까지 정리한다. "패널()의" 가 화면에
+    #     그대로 나왔다(2026-08-18 실측).
+    assert ask.strip_handles("패널(img-6598)의 그래프") == "패널의 그래프"
+    assert ask.strip_handles("패널 [img-6598] 참고") == "패널 참고"
+    assert ask.strip_handles("image-6598 은 그대로") == "image-6598 은 그대로"
+    return 24
 
 
 def _ask_dispatch_checks() -> int:
