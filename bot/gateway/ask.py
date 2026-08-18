@@ -4,6 +4,7 @@
 그 보호가 없다. 사람은 호스트명이든 IP든 계정명이든 아무거나 친다.
 """
 
+import functools
 import logging
 import os
 import re
@@ -278,6 +279,20 @@ async def fetch_security(body: dict, masker: masking.Masker) -> dict:
             "status": collector.SOURCE_OK}
 
 
+def judgment_body(row: dict, mk: masking.Masker) -> str:
+    """과거 판정의 분석 문장. 실을 수 없으면 빈 문자열.
+
+    시각과 유형만 주면 "예전에도 있었다" 까지밖에 못 말한다. **무엇이라고 판단했는지가
+    값이다.** 다만 그 문장에는 호스트명이 섞이므로 가린 뒤 누수 검사를 통과할 때만
+    싣는다. 못 실어도 구조화 값은 그대로 가므로 판정 자체는 보인다(prior 와 같은 규칙).
+    """
+    raw = str(row.get("summary") or "")[:600]
+    if not raw:
+        return ""
+    masked = mk.mask(raw)
+    return "" if masking._leaks(masked) else masked
+
+
 async def fetch_judgments(host: str, days: int, masker: masking.Masker,
                           now: float = None) -> dict:
     from . import collector, store
@@ -290,11 +305,18 @@ async def fetch_judgments(host: str, days: int, masker: masking.Masker,
                                      now=now, host=host)
     out = []
     for r in rows:
-        out.append({"ts": int(r.get("ts") or 0),
-                    "host": masker.mask(r.get("host") or ""),
-                    "classes": r.get("classes") or "",
-                    "sev": r.get("sev") or "",
-                    "verdict": r.get("verdict") or ""})
+        item = {"ts": int(r.get("ts") or 0),
+                "host": masker.mask(r.get("host") or ""),
+                "classes": r.get("classes") or "",
+                "sev": r.get("sev") or "",
+                "verdict": r.get("verdict") or ""}
+        body = judgment_body(r, masker)
+        if body:
+            item["summary"] = body
+        else:
+            # 서술은 30일이면 지워진다(보관 정책). 없는 것과 못 실은 것을 구분한다.
+            item["summary_note"] = "본문 없음(보관 기간 경과 또는 가림 실패)"
+        out.append(item)
     return {"judgments": out, "status": collector.SOURCE_OK}
 
 
@@ -359,6 +381,42 @@ def trim_history(history) -> tuple:
         chars += len(m["content"])
     kept.reverse()
     return kept, len(kept) < len(msgs)
+
+
+# 관측 지식 조각. 우리 환경의 사실을 적어 프롬프트에 실는다. 없어도 창구는 돌아야 한다.
+FACTS_FILE = os.environ.get(
+    "ASK_FACTS_FILE",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "ask_facts.yml"))
+
+
+@functools.lru_cache(maxsize=1)
+def load_facts() -> str:
+    """지식 조각을 한 덩어리 글로 읽는다. 못 읽으면 빈 문자열.
+
+    YAML 로 적되 파서를 쓰지 않는다. 값이 전부 여러 줄 글이고, 우리가 하는 일은
+    그것을 이어 붙이는 것뿐이라 의존성을 늘릴 이유가 없다.
+    """
+    try:
+        with open(FACTS_FILE, encoding="utf-8") as f:
+            raw = f.read()
+    except OSError as e:
+        log.warning("관측 지식 조각을 못 읽었다(%s) — 없이 진행한다", e)
+        return ""
+    out = []
+    for line in raw.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        out.append(line.rstrip().lstrip("|").rstrip("|") if line.endswith("|") else line)
+    return chr(10).join(x for x in out if x.strip()).strip()
+
+
+def system_prompt() -> str:
+    """모델에 줄 지시문. 기본 규칙 뒤에 우리 환경의 사실을 붙인다."""
+    facts = load_facts()
+    if not facts:
+        return ASK_SYSTEM
+    return ASK_SYSTEM + (chr(10) * 2) + "[이 환경의 사실]" + chr(10) + facts
 
 
 def _blocks_text(content) -> str:
@@ -427,8 +485,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
 
     def _model(msgs):
         if model_fn is not None:
-            return model_fn(ASK_SYSTEM, msgs, asktools.TOOL_SPECS)
-        return llm.claude_tools(ASK_SYSTEM, msgs, asktools.TOOL_SPECS)
+            return model_fn(system_prompt(), msgs, asktools.TOOL_SPECS)
+        return llm.claude_tools(system_prompt(), msgs, asktools.TOOL_SPECS)
 
     for _round in range(MAX_ROUNDS):
         if tick() - started > DEADLINE_S:

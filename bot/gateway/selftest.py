@@ -3550,13 +3550,44 @@ def _ask_loop_checks() -> int:
         # ⑮ 프롬프트가 범위를 못 박는가 — 관측과 무관한 질문에는 답을 아낀다
         assert "관측" in ask.ASK_SYSTEM and "범위" in ask.ASK_SYSTEM, "범위 규칙이 없다"
 
-        # ⑯ 모델이 죽어도 예외를 위로 던지지 않는다
+        # ⑯ **과거 판정의 분석 문장을 읽는다.** 시각·유형만 주면 "예전에도 있었다"
+        #    까지밖에 못 말한다. 무엇이라고 판단했는지가 값이다. 다만 본문에는 실명이
+        #    섞이므로 마스킹 뒤 누수 검사를 통과할 때만 싣는다(prior 와 같은 규칙).
+        # 누수 판정은 이름 표를 실시간으로 본다. 이 검사만 표를 채워 둔다.
+        nametable._terms = {"vm-p3-target-002.novalocal": "host"}
+        mk_all = ask.proxy.build_masker()
+        row = {"fingerprint": "f1", "host": "vm-p3-target-002.novalocal",
+               "realm": "internal", "classes": "replication", "sev": "SEV2",
+               "verdict": "만성", "summary": "백업 부하로 복제가 밀렸다"}
+        assert hasattr(ask, "judgment_body"), "판정 본문을 다루는 자리가 없다"
+        assert ask.judgment_body(row, mk_all) == "백업 부하로 복제가 밀렸다"
+        # 가린 뒤에도 아는 이름이 남으면 본문을 버린다 — 구조화 값은 그대로 간다
+        row2 = dict(row, summary="xvm-p3-target-002.novalocaly 가 문제")
+        assert ask.judgment_body(row2, mk_all) == ""
+
+        # ⑰ **관측 지식 조각이 프롬프트에 실린다.** 없으면 모델이 match 를 헤맨다.
+        facts = ask.load_facts()
+        assert facts and "replication" in facts, facts[:200]
+        sys_txt = ask.system_prompt()
+        assert "replication" in sys_txt and "범위" in sys_txt, sys_txt[:200]
+        # 조각을 못 읽어도 창구는 돌아야 한다 — 없는 파일이면 빈 문자열
+        saved_path = ask.FACTS_FILE
+        try:
+            ask.FACTS_FILE = "/없는/경로.yml"
+            ask.load_facts.cache_clear()
+            assert ask.load_facts() == ""
+            assert ask.system_prompt(), "조각이 없다고 프롬프트가 비면 안 된다"
+        finally:
+            ask.FACTS_FILE = saved_path
+            ask.load_facts.cache_clear()
+
+        # ⑱ 모델이 죽어도 예외를 위로 던지지 않는다
         def dead(system, messages, tools):
             raise RuntimeError("model down")
 
         r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
         assert r.get("error") and "모델" in r["error"], r
-        return 36
+        return 44
     finally:
         nametable._terms = saved
         ask.forget_all()
