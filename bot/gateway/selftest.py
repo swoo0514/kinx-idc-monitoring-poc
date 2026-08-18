@@ -280,7 +280,7 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _model_tier_checks()
+                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _model_tier_checks() + _graph_state_checks()
                     + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
@@ -3505,6 +3505,58 @@ def _model_tier_checks() -> int:
             else:
                 os.environ[k] = v
     return 9
+
+
+
+def _graph_state_checks() -> int:
+    """그래프 상태가 스스로를 검사하는가.
+
+    동기분 코드(`InvestigationState.validate_graph_invariants`)는 단계마다 상태를 검증해
+    없는 증거를 참조하거나 개수가 어긋난 상태를 그 자리에서 실패시킨다. 우리 상태에도
+    같은 것을 둔다. 어긋난 상태로 계속 돌면 사람은 틀린 답을 정상으로 읽는다.
+
+    langgraph 없이도 도는 순수 함수라 개발 PC 에서도 검사된다.
+    """
+    from . import graph
+
+    ok = {"trace": [{"tool": "host_logs"}], "called": {"k": 1}, "images": [],
+          "spent": 10, "stopped": ""}
+    assert graph.check_state(ok) == ""
+
+    # ① 조회 기록과 중복 차단 표의 개수가 어긋나면 안 된다. 어긋나면 같은 조회를
+    #    두 번 하거나 추적에서 한 건이 사라진 것이다.
+    bad = dict(ok, called={"k": 1, "k2": 2})
+    assert "조회" in graph.check_state(bad), graph.check_state(bad)
+
+    # ② 같은 그림을 두 번 붙이지 않는다.
+    dup = dict(ok, images=[{"id": "img-1"}, {"id": "img-1"}])
+    assert graph.check_state(dup)
+
+    # ③ 쓴 바이트는 줄지 않는다. 줄었다면 상태가 뒤섞인 것이다.
+    assert graph.check_state(dict(ok, spent=-1))
+
+    # ④ 멈춘 이유는 정해진 값 중 하나다. 모르는 값이 화면에 나가면 사람이 해석할 수 없다.
+    assert graph.check_state(dict(ok, stopped="이상한값"))
+    for good in ("", "budget", "llm_failed"):
+        assert graph.check_state(dict(ok, stopped=good)) == "", good
+
+    # ⑤ 분기 판단이 그래프 없이 돈다. 클로저 안에 있으면 단위 검사를 못 한다.
+    class _Msg:
+        tool_calls = [{"name": "host_logs"}]
+
+    assert graph.should_continue({"messages": [_Msg()], "trace": []},
+                                 max_calls=6, stop_now=lambda: False,
+                                 answered=lambda: False) is True
+    assert graph.should_continue({"messages": [_Msg()], "trace": []},
+                                 max_calls=6, stop_now=lambda: False,
+                                 answered=lambda: True) is False
+    assert graph.should_continue({"messages": [_Msg()], "trace": [1, 2, 3]},
+                                 max_calls=3, stop_now=lambda: False,
+                                 answered=lambda: False) is False
+    assert graph.should_continue({"messages": [_Msg()], "trace": []},
+                                 max_calls=6, stop_now=lambda: True,
+                                 answered=lambda: False) is False
+    return 14
 
 
 def _ask_dispatch_checks() -> int:

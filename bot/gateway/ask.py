@@ -697,7 +697,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     else:
         stopped = "rounds"
 
-    if stopped in ("rounds", "deadline", "budget", "cancelled") and not text:
+    if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not text:
         text = ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
                 % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
     remember(sid or "-", mk)
@@ -945,7 +945,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
     stopped = _stop["why"] or out.get("stopped") or "end_turn"
     if stopped == "end_turn" and len(trace) >= MAX_ROUNDS:
         stopped = "rounds"
-    if stopped in ("rounds", "deadline", "budget", "cancelled") and not text:
+    if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not text:
         text = ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
                 % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
     remember(sid or "-", mk)

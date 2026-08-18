@@ -158,6 +158,49 @@ class ModelBlocked(Exception):
 # 그래프
 # ---------------------------------------------------------------------------
 
+# 멈출 수 있는 이유. 모르는 값이 화면에 나가면 사람이 해석할 수 없다.
+STOP_REASONS = frozenset(("", "budget", "llm_failed", "rounds", "deadline",
+                          "cancelled", "end_turn", "invalid_state"))
+
+
+def check_state(state: dict) -> str:
+    """상태가 앞뒤가 맞는가. 어긋나면 사람이 읽을 사유, 맞으면 빈 문자열.
+
+    동기분 코드(`InvestigationState.validate_graph_invariants`)와 같은 자리다. 단계마다
+    검증해야 어긋난 상태가 그 자리에서 드러난다. 그냥 두면 사람은 틀린 답을 정상으로
+    읽는다.
+    """
+    trace = state.get("trace") or []
+    called = state.get("called") or {}
+    if len(called) > len(trace):
+        return ("조회 기록(%d)보다 중복 차단 표(%d)가 많다. 추적에서 조회가 빠졌다"
+                % (len(trace), len(called)))
+    ids = [im.get("id") for im in (state.get("images") or [])]
+    if len(ids) != len(set(ids)):
+        return "같은 그림을 두 번 붙였다"
+    if int(state.get("spent") or 0) < 0:
+        return "쓴 바이트가 음수다"
+    if str(state.get("stopped") or "") not in STOP_REASONS:
+        return "모르는 멈춤 사유다: %r" % state.get("stopped")
+    return ""
+
+
+def should_continue(state: dict, max_calls: int, stop_now, answered) -> bool:
+    """도구를 더 부를까. **그래프 밖 순수 함수로 둔다.**
+
+    클로저 안에 있으면 그래프를 세우지 않고는 단위 검사를 못 한다. 동기분 코드가
+    `routing.py` 를 따로 둔 이유와 같다.
+    """
+    last = (state.get("messages") or [None])[-1]
+    if not getattr(last, "tool_calls", None):
+        return False
+    if answered():                       # 답을 받았으면 더 돌 이유가 없다
+        return False
+    if stop_now():                       # 시간 상한·사람이 누른 멈춤
+        return False
+    return len(state.get("trace") or []) < max_calls
+
+
 def build(system: str, specs: list, user: str, run_tool, model_fn=None,
           guard=None, result_bytes: int = 60000, max_calls: int = 6,
           answered=None):
@@ -229,20 +272,20 @@ def build(system: str, specs: list, user: str, run_tool, model_fn=None,
             outs.append((call.get("id"), blob))
         msgs = list(state["messages"]) + [ToolMessage(content=b, tool_call_id=i)
                                           for i, b in outs]
-        return {"messages": msgs, "trace": trace, "images": images,
-                "spent": spent, "called": called, "stopped": stopped}
+        out = {"messages": msgs, "trace": trace, "images": images,
+               "spent": spent, "called": called, "stopped": stopped}
+        why = check_state(out)
+        if why:
+            # 예외를 그대로 올리면 사람은 답 대신 추적을 본다.
+            log.warning("그래프 상태가 어긋났다: %s", why)
+            out["stopped"], out["error"] = "invalid_state", why
+        return out
 
     def route(state: State) -> str:
-        if state.get("stopped") or got_answer():
+        if state.get("stopped"):
             return END
-        last = state["messages"][-1]
-        if not getattr(last, "tool_calls", None):
-            return END
-        if stop_now():                       # 시간 상한·사람이 누른 멈춤
-            return END
-        if len(state.get("trace") or []) >= max_calls:
-            return END
-        return "tools"
+        return "tools" if should_continue(state, max_calls, stop_now,
+                                          got_answer) else END
 
     g = StateGraph(State)
     g.add_node("model", ask_model)
