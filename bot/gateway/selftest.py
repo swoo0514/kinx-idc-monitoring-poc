@@ -3306,6 +3306,16 @@ def _ask_result_checks() -> int:
                                        max_m=asktools.WINDOW_MAX_TREND_M)
     assert not cut and b - a == 90 * 86400, (a, b, cut)
 
+    # (3)-e **못 읽은 시각을 말해 준다.** 조용히 기본 창으로 떨어지면 모델은 잘못 물은
+    #       줄 모르고 같은 실수를 반복한다. 2026-08-18 랩 실측: `at: 90` → `at: 7776000`
+    #       으로 네 번 되풀이하며 라운드를 다 썼다.
+    a, b, cut = asktools.window_bounds({"at": 90}, now=T0)
+    assert asktools.bad_when({"at": 90}), "못 읽은 시각을 알리지 않았다"
+    assert not asktools.bad_when({"at": T0})
+    assert not asktools.bad_when({"window_m": 129600})
+    assert "at" in asktools.when_note({"at": 90}), asktools.when_note({"at": 90})
+    assert asktools.when_note({"at": T0}) == ""
+
     # (4) **잘린 사실은 도구 결과에 실린다.** 프롬프트가 아니라 결과에 실어야
     #     모델이 답에 옮긴다.
     note = asktools.cut_note(True, 1440)

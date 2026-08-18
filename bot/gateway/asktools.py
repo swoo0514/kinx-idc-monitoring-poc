@@ -145,6 +145,31 @@ def window_label(start: int, end: int) -> str:
     return "%s → %s UTC" % (fmt(start), fmt(end))
 
 
+def bad_when(args: dict) -> list:
+    """시각으로 읽지 못한 인자 이름들.
+
+    **조용히 기본 창으로 떨어지면 모델은 잘못 물은 줄 모른다.** 2026-08-18 랩 실측으로
+    `at: 90` 을 시작으로 네 번 되풀이하며 라운드를 다 썼다. 결과가 그럴듯해 보였기
+    때문이다.
+    """
+    out = []
+    for key in ("at", "from", "to"):
+        v = (args or {}).get(key)
+        if v not in (None, "") and parse_when(v) is None:
+            out.append(key)
+    return out
+
+
+def when_note(args: dict) -> str:
+    """못 읽은 시각을 알리는 문장. 없으면 빈 문자열."""
+    bad = bad_when(args)
+    if not bad:
+        return ""
+    return ("%s 값을 시각으로 읽지 못해 무시했다. 유닉스 초나 ISO8601 로 준다. "
+            "긴 기간은 window_m 에 분으로 준다(90일이면 129600)."
+            % ", ".join("%s=%r" % (k, (args or {}).get(k)) for k in bad))
+
+
 def cut_note(cut: bool, max_m: int) -> str:
     """구간을 잘랐을 때 도구 결과에 실을 문장. 안 잘랐으면 빈 문자열."""
     if not cut:
@@ -286,7 +311,8 @@ def _host_prop(desc: str, tokens=None) -> dict:
 
 
 _WINDOW_PROPS = {
-    "window_m": {"type": "integer", "description": "지금부터 거슬러 볼 분"},
+    "window_m": {"type": "integer",
+                 "description": "지금부터 거슬러 볼 분. 90일이면 129600"},
     "from": {"type": "string", "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
     "to": {"type": "string", "description": "절대 구간 끝"},
 }
@@ -464,7 +490,8 @@ def _hint_if_empty(name: str, out):
     return out
 
 
-def _add_cut(out, cut: bool, max_m: int, start: int = 0, end: int = 0):
+def _add_cut(out, cut: bool, max_m: int, start: int = 0, end: int = 0,
+             args: dict = None):
     """**실제로 본 구간**과, 잘랐다면 잘랐다는 사실을 도구 결과에 얹는다.
 
     프롬프트가 아니라 결과에 실어야 모델이 답에 옮긴다. 이미 안내가 있으면 뒤에 붙인다.
@@ -473,9 +500,9 @@ def _add_cut(out, cut: bool, max_m: int, start: int = 0, end: int = 0):
         return out
     if start and end:
         out["window_utc"] = window_label(start, end)
-    note = cut_note(cut, max_m)
-    if note:
-        out["note"] = (str(out.get("note") or "") + " " + note).strip()
+    for note in (when_note(args or {}), cut_note(cut, max_m)):
+        if note:
+            out["note"] = (str(out.get("note") or "") + " " + note).strip()
     return out
 
 
@@ -513,7 +540,7 @@ async def _tool_host_logs(args: dict, ctx: dict) -> dict:
     q = build_logql(label, args.get("contains") or "")
     a, b, cut = window_bounds(args, int(ctx["now"]))
     out = await ctx["fetch_logs"](q, a, b, int(args.get("limit") or LOG_LIMIT_DEFAULT))
-    return _add_cut(out, cut, WINDOW_MAX_M, a, b)
+    return _add_cut(out, cut, WINDOW_MAX_M, a, b, args)
 
 
 async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
@@ -526,7 +553,7 @@ async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
                 "note": "이 호스트에는 보안 에이전트가 없다. 없다는 뜻이 아니다"}
     a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M)
     body = build_wazuh_query(agent, a, b, args.get("min_level") or 0)
-    return _add_cut(await ctx["fetch_security"](body), cut, WINDOW_MAX_WIDE_M, a, b)
+    return _add_cut(await ctx["fetch_security"](body), cut, WINDOW_MAX_WIDE_M, a, b, args)
 
 
 async def _tool_past_judgments(args: dict, ctx: dict) -> dict:
@@ -548,7 +575,7 @@ async def _tool_host_metrics(args: dict, ctx: dict) -> dict:
         return err
     a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_TREND_M)
     out = await ctx["fetch_metrics"](ent, str(args.get("match") or ""), a, b)
-    return _add_cut(out, cut, WINDOW_MAX_TREND_M, a, b)
+    return _add_cut(out, cut, WINDOW_MAX_TREND_M, a, b, args)
 
 
 async def _tool_open_problems(args: dict, ctx: dict) -> dict:
