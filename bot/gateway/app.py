@@ -218,7 +218,9 @@ def healthz():
     return {"ok": True, "version": app.version,
             "store": store.status()["open"],
             "annotations": bool(_grafana_state.get("ok")),
-            "zabbix": all(_zabbix_state.values()) if _zabbix_state else None}
+            "zabbix": all(_zabbix_state.values()) if _zabbix_state else None,
+            # 어느 반복문으로 도는지. 설치가 빠지면 조용히 되돌아가므로 밖에서 보여야 한다.
+            "ask_engine": ask.engine_name()}
 
 
 class AskRequest(BaseModel):
@@ -256,8 +258,8 @@ async def ask_endpoint(req: AskRequest, request: Request,
         # 그림도 함께 남긴다. 안 남기면 새로고침한 순간 화면에서 사라진다.
         convo.append(cid, user, "assistant", res["text"], images=res.get("images"))
     res["convo_id"] = cid
-    log.info("ask user=%s rounds=%s stopped=%s", user, res.get("rounds"),
-             res.get("stopped"))
+    log.info("ask user=%s engine=%s rounds=%s stopped=%s", user, ask.engine_name(),
+             res.get("rounds"), res.get("stopped"))
     return res
 
 

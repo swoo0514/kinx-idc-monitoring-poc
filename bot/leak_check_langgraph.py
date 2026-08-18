@@ -1,10 +1,11 @@
 """LangGraph 안에서 마스킹이 새는지 보는 검사. **이관을 결정하는 통과 조건이다.**
 
-셀프테스트에 넣지 않은 이유는 파이썬 3.10 이상과 langgraph 가 필요하기 때문이다.
-랩과 실환경은 3.9 라 컨테이너로 돌린다.
+셀프테스트와 따로 두는 이유는 langgraph 가 선택 의존이기 때문이다. **실제로 올리는
+조합으로 돌려야 뜻이 있다** — 파이썬 3.9 에 langgraph 0.6 계열이다. 종전에는 컨테이너의
+3.12 와 최신 판으로 돌렸는데, 그것은 우리가 쓰지 않는 조합이었다.
 
     ssh core
-    docker run --rm -v ~/kinx-idc-monitoring-poc:/repo:ro -e HOME=/tmp python:3.12-slim       sh -c "pip -q install langgraph langchain-core && python /repo/bot/leak_check_langgraph.py"
+    cd ~/kinx-idc-monitoring-poc/bot && ~/bot-venv/bin/python leak_check_langgraph.py
 
 가짜 모델을 써서 **모델이 실제로 받는 모든 문자열을 기록**하고 거기에 실명이 한 번이라도
 나타나는지 본다. API 를 부르지 않으므로 비용이 없다.
@@ -12,7 +13,7 @@
 확인하는 것은 하나다 — 프레임워크가 자기 문구를 넣어도 우리 마스커를 반드시 지나는가.
 지나면 도구·마스킹·출구를 우리가 쥔 채 루프만 프레임워크에 맡길 수 있다.
 
-2026-08-18 실행 결과: 누수 없음. 도구 인자는 토큰으로 오고, 조회 원문(실명·사설 IP)은
+2026-08-18 실행 결과(3.9 + langgraph 0.6.11 + langchain-core 0.3.86): 누수 없음. 도구 인자는 토큰으로 오고, 조회 원문(실명·사설 IP)은
 우리 함수 안에서만 존재하며, 사람이 읽는 마지막 문장에서만 실명으로 돌아온다.
 """
 import json

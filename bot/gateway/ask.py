@@ -812,18 +812,20 @@ async def fetch_panel(entry: dict, match: str, start: int, end: int,
 
 
 def engine_name() -> str:
-    """질의 반복문을 무엇으로 돌릴까. `loop`(직접 구현) 또는 `graph`(LangGraph).
+    """질의 반복문을 무엇으로 돌릴까. `graph`(LangGraph, 기본) 또는 `loop`(직접 구현).
 
-    프레임워크가 안 깔린 서버에서는 값을 뭐라 적었든 기존 반복문으로 돈다. 설정을
-    잘못 적은 사람이 답을 아예 못 받는 상황이 가장 나쁘다.
+    프레임워크가 안 깔린 서버에서는 기존 반복문으로 돈다. 설정이나 설치가 빠진 사람이
+    답을 아예 못 받는 상황이 가장 나쁘다. `ASK_ENGINE=loop` 이 되돌리는 길이며,
+    두 엔진이 같은 답을 내는지는 셀프테스트가 지킨다.
     """
     from . import graph
 
-    want = os.environ.get("ASK_ENGINE", "loop").strip().lower()
-    if want == "graph" and graph.available():
+    want = os.environ.get("ASK_ENGINE", "graph").strip().lower()
+    if want == "loop":
+        return "loop"
+    if graph.available():
         return "graph"
-    if want == "graph":
-        log.warning("ASK_ENGINE=graph 인데 langgraph 가 없다. 기존 반복문으로 돈다")
+    log.warning("langgraph 가 없어 기존 반복문으로 돈다")
     return "loop"
 
 
