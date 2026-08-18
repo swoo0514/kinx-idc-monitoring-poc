@@ -574,8 +574,9 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
         "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
         "fetch_problems": lambda ent: fetch_problems(ent),
-        "fetch_panel": (panel_fn or (lambda ent, m, a, b, scope="": fetch_panel(
-            ent, m, a, b, (panel or {}).get("uid", ""), panel, scope))),
+        "fetch_panel": (panel_fn or (
+            lambda ent, m, a, b, scope="", dash="": fetch_panel(
+                ent, m, a, b, (panel or {}).get("uid", ""), panel, scope, dash, mk))),
     }
 
     images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
@@ -625,7 +626,9 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         image = None
         if isinstance(out, dict) and out.get("url"):
             # **주소는 모델에 주지 않는다.** 대시보드 식별자와 호스트 실명이 들어 있다.
-            image = out
+            # 같은 패널을 두 번 찾아오면 그림은 한 장만 붙인다. 두 번 붙이면 상태 검사가
+            # 이상으로 보고 답이 통째로 버려진다(2026-08-18 실측: invalid_state).
+            image = None if out.get("id") in made_images else out
             made_images.add(out.get("id"))
             out = {"image": out.get("id"), "title": mk.mask(out.get("title", "")),
                    "note": "화면에 붙였다. answer 의 image_ids 에 이 id 를 적어라"}
@@ -959,7 +962,8 @@ async def fetch_problems(entry) -> dict:
 
 async def fetch_panel(entry: dict, match: str, start: int, end: int,
                       prefer_uid: str = "", panel: dict = None,
-                      scope: str = "") -> dict:
+                      scope: str = "", dash: str = "",
+                      masker: masking.Masker = None) -> dict:
     """관측 화면 한 장. 모델에는 손잡이만 가고 주소는 화면으로만 간다.
 
     **보고 있는 패널은 번호로 그린다.** 화면이 패널 번호를 넘겨 주는데도 제목으로
@@ -971,10 +975,18 @@ async def fetch_panel(entry: dict, match: str, start: int, end: int,
     title = str((panel or {}).get("title") or "")
     searched = False
     if not uid:
-        uid, panel_id, title = grafana.find_panel(match or "", prefer_uid)
+        # 대시보드를 지목했으면 화면 대시보드를 앞세우지 않는다. 앞세우면 지목한 곳
+        # 대신 보고 있던 곳에서 찾아 놓고 "그 대시보드에는 없다" 고 답한다.
+        prefer = "" if dash else prefer_uid
+        uid, panel_id, title = grafana.find_panel(match or "", prefer, dash)
         searched = True
     if not uid:
-        return {"error": "그 조건에 맞는 패널을 못 찾았다. match 를 바꿔 보라"}
+        # **무엇이 있는지 함께 준다.** 안 주면 모델이 "그 대시보드에는 없다" 를 지어낸다
+        # (2026-08-18 실측).
+        mask = masker.mask if masker is not None else (lambda x: x)
+        names = [mask(t) for t in grafana.dashboard_titles()]
+        return {"error": "그 조건에 맞는 패널을 못 찾았다. match 나 dashboard 를 바꿔 보라",
+                "dashboards": names}
     # **화면이 준 호스트 값을 먼저 쓴다.** 대시보드 변수의 실제 현재 값이다. Zabbix 축
     # 이름을 넣으면 Loki·Wazuh 패널이 빈 그래프로 나오고 사람은 "아무 일도 없었다" 로
     # 읽는다(축마다 이름이 다르다 — collector._resolve_label 참고).

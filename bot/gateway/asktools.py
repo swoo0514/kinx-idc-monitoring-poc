@@ -483,6 +483,9 @@ def build_tool_specs(table: dict = None) -> list:
                    host=_host_prop("조회할 호스트 토큰", toks),
                    match={"type": "string",
                           "description": "패널 제목에 든 문자열 (예: CPU, 복제, 로그)"},
+                   dashboard={"type": "string",
+                              "description": ("다른 대시보드에서 찾을 때 그 대시보드 "
+                                              "제목의 일부. scope=search 일 때만 쓴다")},
                    scope={"type": "string", "enum": ["screen", "search"],
                           "description": ("기본은 screen 이라 사람이 보고 있는 패널을 "
                                           "그린다. 다른 대시보드의 패널을 보여 줄 때만 "
@@ -768,7 +771,8 @@ async def _tool_panel_image(args: dict, ctx: dict) -> dict:
     a, b, _cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
                                default_span=ctx.get("panel_span"))
     return await ctx["fetch_panel"](ent, str(args.get("match") or ""), a, b,
-                                    str(args.get("scope") or ""))
+                                    str(args.get("scope") or ""),
+                                    str(args.get("dashboard") or ""))
 
 
 _TOOLS = {

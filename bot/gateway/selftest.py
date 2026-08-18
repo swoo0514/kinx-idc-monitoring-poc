@@ -3672,8 +3672,8 @@ def _panel_route_checks() -> int:
     saved_find = grafana.find_panel
     calls = []
 
-    def _spy(match, prefer_uid=""):
-        calls.append((match, prefer_uid))
+    def _spy(match, prefer_uid="", dash_match=""):
+        calls.append((match, prefer_uid, dash_match))
         return "다른-대시보드", 99, "남의 패널"
 
     try:
@@ -3729,8 +3729,23 @@ def _panel_route_checks() -> int:
         r3 = asyncio.run(ask.run_ask("MSP 대시보드 것도 보여줘", table=table, model_fn=model2,
                                      panel={"uid": "kinx-overview", "panelId": 12,
                                             "title": "인증 활동"}))
-        assert calls == [("MSP 인증", "kinx-overview")], calls
+        assert calls == [("MSP 인증", "kinx-overview", "")], calls
         assert "/render/d-solo/다른-대시보드/" in r3["images"][0]["url"], r3["images"]
+
+        # ①-d **대시보드를 지목하면 화면 대시보드를 앞세우지 않는다.** 앞세우면 지목한
+        #      곳 대신 보고 있던 곳에서 찾아 놓고 "그 대시보드에는 없다" 고 답한다.
+        def model3(system, messages, tools):
+            if len(messages) == 1:
+                return {"stop_reason": "tool_use", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "panel_image",
+                     "input": {"host": tok, "match": "인증", "scope": "search",
+                               "dashboard": "월간 리포트"}}]}
+            return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
+
+        calls[:] = []
+        asyncio.run(ask.run_ask("리포트 것도", table=table, model_fn=model3,
+                                panel={"uid": "kinx-overview", "panelId": 12, "title": "t"}))
+        assert calls == [("인증", "", "월간 리포트")], calls
 
         # ② 화면 맥락이 없으면 그때만 찾는다.
         r = asyncio.run(ask.run_ask("이 패널 뭐야", table=table, model_fn=model))
@@ -3738,7 +3753,7 @@ def _panel_route_checks() -> int:
     finally:
         grafana.find_panel = saved_find
         nametable._terms = saved_terms
-    return 10
+    return 12
 
 
 
@@ -4429,7 +4444,7 @@ def _ask_loop_checks() -> int:
                      "input": {"host": list(long_tbl)[0], "match": "CPU"}}]}
             return _text("아래 그림을 보라 img-1")
 
-        async def fake_panel(ent, m, a, b, scope=""):
+        async def fake_panel(ent, m, a, b, scope="", dash=""):
             return {"id": "img-1", "title": "CPU 사용률",
                     "url": "/render/d-solo/x?var-host=%s" % ent["host"]}
 

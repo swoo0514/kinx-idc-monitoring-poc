@@ -102,7 +102,7 @@ def _flatten(panels):
     return out
 
 
-def find_panel(match: str, prefer_uid: str = "") -> tuple:
+def find_panel(match: str, prefer_uid: str = "", dash_match: str = "") -> tuple:
     """제목에 그 문자열이 든 시계열 패널 하나. 반환 `(대시보드 uid, 패널 번호, 제목)`.
 
     **보고 있는 대시보드를 먼저 본다.** 안 그러면 이름만 맞는 남의 대시보드 패널을
@@ -123,6 +123,13 @@ def find_panel(match: str, prefer_uid: str = "") -> tuple:
             if len(found) >= SEARCH_LIMIT:
                 # 잘렸다는 것을 남긴다. 이 저장소는 다른 곳에서 잘림을 꼬박 알린다.
                 log.warning("대시보드가 %d개를 넘어 뒤쪽은 보지 못했다", SEARCH_LIMIT)
+            # 사람이 대시보드를 지목했으면 그 안에서만 찾는다. 안 그러면 이름이 비슷한
+            # 다른 대시보드 패널을 집어 놓고 "그 대시보드에는 없다" 고 답한다
+            # (2026-08-18 실측: MSP 리포트를 물었는데 통합 관제 패널을 보고 없다고 했다).
+            want = str(dash_match or "").strip().lower()
+            if want:
+                found = [d for d in found
+                         if want in str(d.get("title") or "").lower()]
             order = ([d for d in found if d.get("uid") == prefer_uid] +
                      [d for d in found if d.get("uid") != prefer_uid])
             for d in order:
@@ -148,6 +155,26 @@ def find_panel(match: str, prefer_uid: str = "") -> tuple:
     except Exception as e:
         log.warning("패널 검색 실패: %s", e)
     return None, None, ""
+
+
+def dashboard_titles(limit: int = 30) -> list:
+    """대시보드 제목 목록. 못 읽으면 빈 목록.
+
+    패널을 못 찾았을 때 이것을 함께 주지 않으면 모델이 "그 대시보드에는 없다" 를
+    지어낸다. 무엇이 있는지 알려 주면 사람에게 되물을 수 있다.
+    """
+    base = _base()
+    if not base:
+        return []
+    try:
+        with httpx.Client(timeout=TIMEOUT_S) as c:
+            r = c.get(base + "/api/search", params={"type": "dash-db", "limit": SEARCH_LIMIT},
+                      headers=_auth())
+            r.raise_for_status()
+            return [str(d.get("title") or "") for d in r.json()][:limit]
+    except Exception as e:
+        log.warning("대시보드 목록 조회 실패: %s", e)
+        return []
 
 
 def panel_url(uid: str, panel_id, host: str, start: int, end: int) -> str:
