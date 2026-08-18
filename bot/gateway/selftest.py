@@ -3500,13 +3500,39 @@ def _ask_loop_checks() -> int:
                                 table=long_tbl, model_fn=cap4))
         assert not any("앞선 대화" in str(m.get("content")) for m in seen4[0]), seen4[0]
 
-        # ⑫ 모델이 죽어도 예외를 위로 던지지 않는다
+        # ⑫ **패널 그림은 손잡이만 모델에 준다.** 주소에는 대시보드 식별자와
+        #    var-host 실명이 들어가므로 그대로 실으면 마스킹이 무너진다. 그림은
+        #    화면이 받아 그리고, 모델은 손잡이로만 가리킨다.
+        shots = []
+
+        def cap5(system, messages, tools):
+            shots.append(json.dumps(messages, ensure_ascii=False))
+            if len(shots) == 1:
+                return {"stop_reason": "tool_use", "content": [
+                    {"type": "tool_use", "id": "p1", "name": "panel_image",
+                     "input": {"host": list(long_tbl)[0], "match": "CPU"}}]}
+            return _text("아래 그림을 보라 img-1")
+
+        async def fake_panel(ent, m, a, b):
+            return {"id": "img-1", "title": "CPU 사용률",
+                    "url": "/render/d-solo/x?var-host=%s" % ent["host"]}
+
+        r = asyncio.run(ask.run_ask("CPU 그림 보여줘", table=long_tbl, model_fn=cap5,
+                                    panel_fn=fake_panel))
+        assert r["images"] and r["images"][0]["id"] == "img-1", r.get("images")
+        assert "vm-p3-target-002" in r["images"][0]["url"], r["images"][0]
+        # 모델이 본 것에는 주소도 실명도 없어야 한다
+        blob = chr(10).join(shots)
+        assert "/render/" not in blob, "이미지 주소가 모델에 갔다"
+        assert "vm-p3-target-002" not in blob, "실명이 모델에 갔다"
+
+        # ⑬ 모델이 죽어도 예외를 위로 던지지 않는다
         def dead(system, messages, tools):
             raise RuntimeError("model down")
 
         r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
         assert r.get("error") and "모델" in r["error"], r
-        return 28
+        return 32
     finally:
         nametable._terms = saved
         ask.forget_all()

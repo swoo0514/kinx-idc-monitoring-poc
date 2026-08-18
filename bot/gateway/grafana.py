@@ -84,3 +84,46 @@ def annotate(text: str, event_ts: float, tags=()) -> int:
     except Exception as e:
         _warn_once("exc", "판정 주석 발행 실패: %s", e)
         return None
+
+
+def find_panel(match: str) -> tuple:
+    """제목에 그 문자열이 든 시계열 패널 하나. 반환 `(대시보드 uid, 패널 번호, 제목)`.
+
+    못 찾으면 `(None, None, "")`. 지어내지 않는다.
+    """
+    base = _base()
+    if not base:
+        return None, None, ""
+    try:
+        with httpx.Client(timeout=TIMEOUT_S) as c:
+            r = c.get(base + "/api/search", params={"type": "dash-db", "limit": 50},
+                      headers=_auth())
+            r.raise_for_status()
+            for d in r.json():
+                uid = d.get("uid")
+                if not uid:
+                    continue
+                dr = c.get(base + "/api/dashboards/uid/" + uid, headers=_auth())
+                if dr.status_code != 200:
+                    continue
+                for p in (dr.json().get("dashboard") or {}).get("panels") or []:
+                    title = str(p.get("title") or "")
+                    if p.get("type") in ("timeseries", "graph") and (
+                            not match or match.lower() in title.lower()):
+                        return uid, p.get("id"), title
+    except Exception as e:
+        log.warning("패널 검색 실패: %s", e)
+    return None, None, ""
+
+
+def panel_url(uid: str, panel_id, host: str, start: int, end: int) -> str:
+    """브라우저가 그림을 받아 갈 주소.
+
+    **이 주소는 모델에 주지 않는다.** 대시보드 식별자와 호스트 실명이 들어 있다.
+    화면이 사용자 세션으로 직접 받아 그린다.
+    """
+    from urllib.parse import urlencode
+    q = urlencode({"panelId": panel_id, "var-host": host, "orgId": 1,
+                   "from": int(start) * 1000, "to": int(end) * 1000,
+                   "width": 1000, "height": 320, "theme": "dark"})
+    return "/render/d-solo/%s/x?%s" % (uid, q)

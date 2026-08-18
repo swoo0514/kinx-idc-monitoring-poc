@@ -260,6 +260,23 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "panel_image",
+        "description": ("그 호스트의 관측 화면(패널)을 그림으로 붙인다. 사람이 보고 있는 "
+                        "그래프를 답과 함께 보여 줄 때 쓴다. 반환된 id 를 답에 적으면 "
+                        "화면에 그림이 붙는다."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string"},
+                "match": {"type": "string",
+                          "description": "패널 제목에 든 문자열 (예: CPU, 복제, 로그)"},
+                "from": {"type": "string"}, "to": {"type": "string"},
+                "window_m": {"type": "integer"},
+            },
+            "required": ["host"],
+        },
+    },
+    {
         "name": "past_judgments",
         "description": "봇이 전에 내린 판정 기록. 같은 일이 반복되는지 볼 때 쓴다.",
         "input_schema": {
@@ -377,8 +394,17 @@ async def _tool_open_problems(args: dict, ctx: dict) -> dict:
     return await ctx["fetch_problems"](ent)
 
 
+async def _tool_panel_image(args: dict, ctx: dict) -> dict:
+    ent, err = _target(args, ctx)
+    if err:
+        return err
+    a, b = window_bounds(args, int(ctx["now"]))
+    return await ctx["fetch_panel"](ent, str(args.get("match") or ""), a, b)
+
+
 _TOOLS = {
     "list_hosts": _tool_list_hosts,
+    "panel_image": _tool_panel_image,
     "host_metrics": _tool_host_metrics,
     "open_problems": _tool_open_problems,
     "host_logs": _tool_host_logs,

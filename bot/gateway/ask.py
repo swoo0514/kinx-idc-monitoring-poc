@@ -364,7 +364,8 @@ def _blocks_text(content) -> str:
 
 
 async def run_ask(question: str, history=None, sid: str = "", table: dict = None,
-                  model_fn=None, clock=None, now: int = None, user: str = "") -> dict:
+                  model_fn=None, clock=None, now: int = None, user: str = "",
+                  panel_fn=None) -> dict:
     """질문 하나에 답한다. 어떤 실패도 예외로 던지지 않는다.
 
     반환 `{"text", "trace", "rounds", "stopped", "error"}`.
@@ -389,7 +390,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
             mk.register("host", ent.get("host", ""))
             _alias(mk, ent.get("host", ""))
     if not table:
-        return {"text": "", "trace": [], "rounds": 0, "stopped": "no_targets",
+        return {"text": "", "trace": [], "rounds": 0, "images": [], "stopped": "no_targets",
                 "error": "조회할 수 있는 대상이 없다. 감시 서버 연결과 허용 영역을 확인하라"}
 
     # 이름 조각을 먼저 토큰으로 바꾼다. 마스커는 등록된 이름만 보므로 줄여 쓴 말을
@@ -397,7 +398,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     question = resolve_mentions(question, table)
     clean = sanitize_question(question, mk)
     if not clean["ok"]:
-        return {"text": "", "trace": [], "rounds": 0, "stopped": "rejected",
+        return {"text": "", "trace": [], "rounds": 0, "images": [], "stopped": "rejected",
                 "error": clean["reason"]}
 
     ctx = {
@@ -407,9 +408,11 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
         "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
         "fetch_problems": lambda ent: fetch_problems(ent),
+        "fetch_panel": (panel_fn or (lambda ent, m, a, b: fetch_panel(ent, m, a, b))),
     }
 
     hist, dropped = trim_history(history)
+    images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
     messages = list(hist)
     if dropped:
         messages.insert(0, {"role": "user", "content": DROP_NOTE})
@@ -429,7 +432,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         res = await asyncio.to_thread(egress.call_raw, lambda: _model(messages),
                                       kind="ask", user=user)
         if not res["ok"]:
-            return {"text": "", "trace": trace, "rounds": len(trace),
+            return {"text": "", "trace": trace, "rounds": len(trace), "images": images,
                     "stopped": "llm_failed",
                     "error": "모델을 부르지 못했다: %s" % res["reason"]}
         reply = res["value"]
@@ -443,6 +446,11 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         for u in uses:
             # 모델이 준 인자는 토큰 상태 그대로 쓴다. 도구가 표에서 실명을 찾는다.
             out = await asktools.run_tool(u.get("name", ""), u.get("input") or {}, ctx)
+            if isinstance(out, dict) and out.get("url"):
+                # **주소는 모델에 주지 않는다.** 대시보드 식별자와 호스트 실명이 들어 있다.
+                images.append(out)
+                out = {"image": out.get("id"), "title": mk.mask(out.get("title", "")),
+                       "note": "화면에 붙였다. 답에 이 id 를 적어라"}
             blob = _json.dumps(out, ensure_ascii=False)
             spent += len(blob)
             if spent > RESULT_BYTES:
@@ -464,7 +472,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
                 % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
     remember(sid or "-", mk)
     return {"text": mk.unmask(text), "trace": trace, "rounds": len(trace),
-            "stopped": stopped, "error": ""}
+            "images": images, "stopped": stopped, "error": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -592,3 +600,15 @@ async def fetch_problems(entry) -> dict:
         return {"problems": [], "status": collector.SOURCE_UNAVAILABLE,
                 "note": "조회하지 못했다. 이 결과를 '없음'으로 읽지 마라"}
     return {"problems": out, "status": collector.SOURCE_OK}
+
+
+async def fetch_panel(entry: dict, match: str, start: int, end: int) -> dict:
+    """관측 화면 한 장. 모델에는 손잡이만 가고 주소는 화면으로만 간다."""
+    from . import grafana
+
+    uid, panel_id, title = grafana.find_panel(match or "")
+    if not uid:
+        return {"error": "그 조건에 맞는 패널을 못 찾았다. match 를 바꿔 보라"}
+    return {"id": "img-%d" % (abs(hash((uid, panel_id, start))) % 9000 + 1000),
+            "title": title,
+            "url": grafana.panel_url(uid, panel_id, entry.get("host", ""), start, end)}
