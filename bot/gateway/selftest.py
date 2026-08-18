@@ -283,7 +283,7 @@ def main():
                     + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _item_rank_checks() + _registry_fill_checks() + _proxy_gate_checks()
                     + _panel_window_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
                     + _panel_route_checks()
-                    + _ask_dispatch_checks()
+                    + _ask_dispatch_checks() + _cap_answer_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -3955,6 +3955,56 @@ def _panel_window_checks() -> int:
     url = (r.get("images") or [{}])[0].get("url", "")
     assert "from=%d" % (T0 * 1000) in url and "to=%d" % (T1 * 1000) in url, url
     return 9
+
+
+def _cap_answer_checks() -> int:
+    """상한에 닿았을 때 사람이 답을 받는가.
+
+    2026-08-18 랩 실측: 라운드를 다 쓴 질의의 회신이 "레벨을 더 낮춰서 전체 보안
+    이벤트를 확인하겠습니다." 한 줄이었다. 조회를 열 번 했는데 그 결과가 사람에게
+    하나도 안 갔다. 상한에 닿으면 조회 도구를 빼고 한 번 더 불러 답을 받는다.
+    """
+    import asyncio
+
+    from . import ask
+
+    table = {ask.proxy.token_for("host", "web-01"):
+             {"host": "web-01", "source": "zabbix-internal",
+              "logs": "web-01.example", "security": "web-01.example"}}
+    tok = list(table)[0]
+    seen = {"names": []}
+
+    def model(system, messages, tools):
+        seen["names"].append([t["name"] for t in tools])
+        if len(tools) == 1:                      # 마무리 호출 — 답 도구만 있다
+            assert tools[0]["name"] == "answer", tools
+            assert "상한" in str(messages[-1]["content"]), messages[-1]
+            return {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "fin", "name": "answer",
+                 "input": {"summary": "확인한 범위에서는 인증 실패가 없었다"}}]}
+        # 조회만 되풀이하고 끝내지 않는다. 인자를 바꿔 중복 차단도 피한다.
+        n = len(seen["names"])
+        return {"stop_reason": "tool_use", "content": [
+            {"type": "text", "text": "레벨을 더 낮춰서 다시 보겠습니다"},
+            {"type": "tool_use", "id": "t%d" % n, "name": "security_alerts",
+             "input": {"host": tok, "min_level": max(3, 12 - n)}}]}
+
+    r = asyncio.run(ask.run_ask("이 구간 어땠어", table=table, model_fn=model))
+    assert r["stopped"] == "rounds", r["stopped"]
+    assert "인증 실패가 없었다" in r["text"], r["text"]
+    # 중간 생각이 답으로 나가지 않는다.
+    assert "다시 보겠습니다" not in r["text"], r["text"]
+    assert r["trace"][-1]["tool"] == "answer", r["trace"][-1]
+
+    # 마무리 호출이 실패해도 사람은 무엇을 조회했는지는 받는다.
+    def dead(system, messages, tools):
+        if len(tools) == 1:
+            return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "…"}]}
+        return model(system, messages, tools)
+
+    r2 = asyncio.run(ask.run_ask("이 구간 어땠어", table=table, model_fn=dead))
+    assert "상한" in r2["text"] and "security_alerts" in r2["text"], r2["text"]
+    return 8
 
 
 def _ask_dispatch_checks() -> int:

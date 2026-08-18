@@ -361,6 +361,11 @@ HISTORY_MAX_MSGS = int(os.environ.get("ASK_HISTORY_MAX_MSGS", "12"))
 HISTORY_MAX_CHARS = int(os.environ.get("ASK_HISTORY_MAX_CHARS", "8000"))
 DROP_NOTE = "(앞선 대화 일부는 길이 때문에 생략되었다. 필요하면 다시 물어라)"
 
+# 상한에 닿았을 때 마지막으로 한 번 더 부르며 붙이는 말. 조회는 못 하게 하고
+# 지금까지 본 것으로만 답하게 한다.
+CAP_NOTE = ("조회 상한에 닿았다. 더 조회할 수 없다. 지금까지 확인한 것만으로 answer 를 "
+            "불러 답하라. 확인하지 못한 것은 확인하지 못했다고 쓴다.")
+
 MAX_ROUNDS = int(os.environ.get("ASK_MAX_ROUNDS", "6"))
 DEADLINE_S = float(os.environ.get("ASK_DEADLINE_S", "60"))
 RESULT_BYTES = int(os.environ.get("ASK_RESULT_BYTES", "60000"))
@@ -705,14 +710,61 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     else:
         stopped = "rounds"
 
-    if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not text:
+    # **상한에 닿았어도 답은 준다.** 조회한 것이 있는데 마무리를 안 하면 사람에게
+    # 가는 글이 모델의 중간 생각이 된다.
+    if stopped in ("rounds", "deadline", "budget") and not final and trace:
+        if await force_answer(system_prompt(), messages, specs, user,
+                              model_fn, exec_tool, trace):
+            text = render_answer(final)
+    if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not final:
         text = ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
-                % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
+                % (stopped, ", ".join(t["tool"] for t in trace) or "없음")
+                + ((chr(10) * 2 + text) if text else ""))
     remember(sid or "-", mk)
     return {"text": strip_handles(mk.unmask(text)), "trace": trace,
             "rounds": len(trace),
             "images": chosen_images(images, final), "stopped": stopped, "error": ""}
 
+
+
+async def force_answer(system: str, msgs: list, specs: list, user: str,
+                       model_fn, exec_tool, trace: list) -> bool:
+    """상한에 닿았으면 **한 번만 더** 불러 답을 받는다. 반환은 답을 받았는가.
+
+    안 하면 사람이 받는 글이 모델의 중간 생각이다. 2026-08-18 랩 실측으로 라운드를 다
+    쓴 질의의 회신이 "레벨을 더 낮춰서 전체 보안 이벤트를 확인하겠습니다." 한 줄이었다.
+    조회는 열 번 했는데 그 결과가 사람에게 하나도 안 갔다.
+
+    이 호출에는 **answer 도구만 준다.** 조회 도구를 남겨 두면 모델이 상한을 넘겨 또
+    조회하려 든다.
+    """
+    import asyncio
+
+    from . import egress, llm
+
+    only = [t for t in (specs or []) if t.get("name") == "answer"]
+    if not only:
+        return False
+    last = msgs + [{"role": "user", "content": CAP_NOTE}]
+
+    def _model():
+        if model_fn is not None:
+            return model_fn(system, last, only)
+        return llm.claude_tools(system, last, only)
+
+    res = await asyncio.to_thread(egress.call_raw, _model, kind="ask", user=user)
+    if not res["ok"]:
+        log.warning("마무리 호출 실패: %s", res["reason"])
+        return False
+    reply = res["value"]
+    for b in (reply.get("content") or []):
+        if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "answer":
+            _img, out, blob = await exec_tool("answer", b.get("input") or {},
+                                              {}, len(trace) + 1)
+            trace.append({"tool": "answer", "args": b.get("input") or {},
+                          "error": out.get("error", ""), "bytes": len(blob)})
+            return not out.get("error")
+    return False
 
 # ---------------------------------------------------------------------------
 # 사용자별 사용량
@@ -971,9 +1023,14 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
     stopped = _stop["why"] or out.get("stopped") or "end_turn"
     if stopped == "end_turn" and len(trace) >= MAX_ROUNDS:
         stopped = "rounds"
-    if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not text:
+    if stopped in ("rounds", "deadline", "budget") and not final and trace:
+        if await force_answer(system, G.to_anthropic(out.get("messages") or []),
+                              specs, user, model_fn, exec_tool, trace):
+            text = render_answer(final)
+    if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not final:
         text = ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
-                % (stopped, ", ".join(t["tool"] for t in trace) or "없음"))
+                % (stopped, ", ".join(t["tool"] for t in trace) or "없음")
+                + ((chr(10) * 2 + text) if text else ""))
     remember(sid or "-", mk)
     return {"text": strip_handles(mk.unmask(text)), "trace": trace,
             "rounds": len(trace),
