@@ -586,8 +586,27 @@ def _hint_if_empty(name: str, out):
     return out
 
 
+def span_note(start: int, end: int, span) -> str:
+    """화면 구간이 있는데 다른 구간을 봤으면 그 사실과 되부르는 법을 알린다.
+
+    모델이 `window_m` 을 스스로 넣으면 화면 구간 기본값이 안 쓰인다. 그 자체는 옳다 —
+    사람이 "그럼 지금은?" 하고 물을 수 있어야 한다. 문제는 모델이 최근 창 결과를 받고
+    **화면 구간은 조회할 수 없다고 단정한 것**이다(2026-08-18 실측: "현재 시스템의 조회
+    도구가 현시점 기준의 제한된 시간 범위만 지원하고 있습니다").
+
+    그래서 결과에 되부르는 법을 적는다. 지시문에 적는 것으로는 부족했다.
+    """
+    if not span or not start or not end:
+        return ""
+    if int(start) == int(span[0]) and int(end) == int(span[1]):
+        return ""
+    return ("이 조회는 사람이 보고 있는 구간이 아니다. 화면 구간은 %s 다. 시간 인자를 "
+            "모두 비우고 다시 부르면 그 구간을 본다. 조회할 수 없다고 답하지 마라."
+            % window_label(span[0], span[1]))
+
+
 def _add_cut(out, cut: bool, max_m: int, start: int = 0, end: int = 0,
-             args: dict = None):
+             args: dict = None, span=None):
     """**실제로 본 구간**과, 잘랐다면 잘랐다는 사실을 도구 결과에 얹는다.
 
     프롬프트가 아니라 결과에 실어야 모델이 답에 옮긴다. 이미 안내가 있으면 뒤에 붙인다.
@@ -596,7 +615,8 @@ def _add_cut(out, cut: bool, max_m: int, start: int = 0, end: int = 0,
         return out
     if start and end:
         out["window_utc"] = window_label(start, end)
-    for note in (when_note(args or {}), cut_note(cut, max_m)):
+    for note in (when_note(args or {}), cut_note(cut, max_m),
+                 span_note(start, end, span)):
         if note:
             out["note"] = (str(out.get("note") or "") + " " + note).strip()
     return out
@@ -637,7 +657,7 @@ async def _tool_host_logs(args: dict, ctx: dict) -> dict:
     a, b, cut = window_bounds(args, int(ctx["now"]),
                               default_span=ctx.get("panel_span"))
     out = await ctx["fetch_logs"](q, a, b, int(args.get("limit") or LOG_LIMIT_DEFAULT))
-    return _add_cut(out, cut, WINDOW_MAX_M, a, b, args)
+    return _add_cut(out, cut, WINDOW_MAX_M, a, b, args, ctx.get("panel_span"))
 
 
 async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
@@ -651,7 +671,8 @@ async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
     a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
                               default_span=ctx.get("panel_span"))
     body = build_wazuh_query(agent, a, b, args.get("min_level") or 0)
-    return _add_cut(await ctx["fetch_security"](body), cut, WINDOW_MAX_WIDE_M, a, b, args)
+    return _add_cut(await ctx["fetch_security"](body), cut, WINDOW_MAX_WIDE_M,
+                    a, b, args, ctx.get("panel_span"))
 
 
 async def _tool_past_judgments(args: dict, ctx: dict) -> dict:
@@ -675,7 +696,7 @@ async def _tool_host_metrics(args: dict, ctx: dict) -> dict:
                               default_span=ctx.get("panel_span"))
     out = note_if_no_points(
         await ctx["fetch_metrics"](ent, str(args.get("match") or ""), a, b))
-    return _add_cut(out, cut, WINDOW_MAX_TREND_M, a, b, args)
+    return _add_cut(out, cut, WINDOW_MAX_TREND_M, a, b, args, ctx.get("panel_span"))
 
 
 async def _tool_open_problems(args: dict, ctx: dict) -> dict:

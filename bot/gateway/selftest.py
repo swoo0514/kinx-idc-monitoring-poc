@@ -649,7 +649,7 @@ def _class_map_checks() -> int:
         assert pending.PATH.startswith(_tmpd), pending.PATH
         pending.PATH = _saved_pending
         shutil.rmtree(_tmpd, ignore_errors=True)
-        return 9
+        return 13
     finally:
         os.unlink(path)
         if saved is None:
@@ -3924,6 +3924,16 @@ def _panel_window_checks() -> int:
     a, b, cut = asktools.window_bounds({}, now=1787000000, max_m=60,
                                        default_span=(T0, T1))
     assert cut and b - a == 3600, (a, b, cut)
+
+    # ③-b **모델이 스스로 창을 넣으면** 화면 구간이 안 쓰인다. 그 자체는 옳지만,
+    #      모델이 최근 창 결과를 받고 "과거는 조회 불가" 라고 단정한 일이 있었다
+    #      (2026-08-18 실측). 되부르는 법을 결과에 적는다.
+    note = asktools.span_note(1787000000 - 3600, 1787000000, default)
+    assert "시간 인자를 모두 비우고" in note, note
+    assert not asktools.span_note(T0, T1, default)      # 같은 구간이면 안 붙인다
+    assert not asktools.span_note(T0, T1, None)
+    out = asktools._add_cut({}, False, 60, 1787000000 - 3600, 1787000000, {}, default)
+    assert "화면 구간" in out["note"], out
 
     # ④ 화면 구간이 없으면 예전대로 최근 창을 본다.
     a, b, cut = asktools.window_bounds({}, now=1787000000)
