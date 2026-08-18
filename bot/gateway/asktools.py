@@ -434,6 +434,25 @@ def check_answer(args: dict, images, windows) -> tuple:
     return True, ""
 
 
+def panel_pick(panel: dict, match: str = "") -> tuple:
+    """보고 있는 패널을 그대로 쓸 것인가. 반환 `(대시보드 uid, 패널 번호)`.
+
+    화면이 패널 번호를 넘겨 주면 제목으로 뒤지지 않는다. 제목으로 찾으면 이름이 비슷한
+    옆 패널이 걸린다(2026-08-18 실측: "인증 활동" 을 보고 물었는데 "보안 이벤트" 가
+    그려졌다).
+
+    사람이 다른 패널을 콕 집어 물으면 그때는 찾아 준다. 보고 있는 제목과 통하면 그대로.
+    """
+    p = panel or {}
+    uid, pid = p.get("uid"), p.get("panelId")
+    if not uid or pid in (None, ""):
+        return None, None
+    want = str(match or "").strip().lower()
+    if want and want not in str(p.get("title") or "").lower():
+        return None, None
+    return uid, pid
+
+
 def query_count(trace) -> int:
     """조회 횟수. **답 도구는 안 센다.**
 

@@ -3306,6 +3306,19 @@ def _ask_result_checks() -> int:
                                        max_m=asktools.WINDOW_MAX_TREND_M)
     assert not cut and b - a == 90 * 86400, (a, b, cut)
 
+    # (3)-d-1 **보고 있는 패널을 제목으로 뒤지지 않는다.** 화면이 패널 번호를 넘겨
+    #         주면 그것을 그대로 쓴다. 제목으로 찾으면 이름이 비슷한 옆 패널이 걸린다
+    #         (2026-08-18 실측: "인증 활동" 을 보고 물었는데 "보안 이벤트" 가 그려졌다).
+    ctx = {"uid": "kinx-overview", "panelId": 12, "title": "인증 활동 (Wazuh)"}
+    assert asktools.panel_pick(ctx, match="") == ("kinx-overview", 12)
+    # 사람이 다른 패널을 콕 집어 물으면 그때는 찾아 준다.
+    assert asktools.panel_pick(ctx, match="복제") == (None, None)
+    # 보고 있는 패널의 제목과 통하면 그대로 쓴다.
+    assert asktools.panel_pick(ctx, match="인증") == ("kinx-overview", 12)
+    # 번호가 없으면 예전처럼 찾는다.
+    assert asktools.panel_pick({"uid": "kinx-overview"}, match="") == (None, None)
+    assert asktools.panel_pick(None, match="") == (None, None)
+
     # (3)-d-2 **`at` 을 없앤다.** 모델이 90일 추이를 물을 때 window_m 대신 at 을 고르고
     #         엉뚱한 시점을 반복해서 라운드를 태웠다(2026-08-18 랩 실측 두 번). from/to 가
     #         특정 시점을, window_m 이 최근 기간을 덮으므로 at 은 덫이기만 하다.

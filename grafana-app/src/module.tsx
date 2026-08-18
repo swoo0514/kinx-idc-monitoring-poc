@@ -39,6 +39,15 @@ export const plugin = new AppPlugin<{}>()
       const srv = getTemplateSrv();
       const q = new URLSearchParams();
       q.set('panel', String(srv.replace(String(context.title ?? context.id ?? ''))));
+      // **식별자를 그대로 넘긴다.** 제목만 넘기면 게이트웨이가 대시보드를 뒤져 이름이
+      // 비슷한 옆 패널을 집는다(2026-08-18 실측: "인증 활동" 을 보고 물었는데
+      // "보안 이벤트" 가 그려졌다). 번호가 있는데 이름으로 찾을 이유가 없다.
+      if (context.id !== undefined && context.id !== null) {
+        q.set('panelId', String(context.id));
+      }
+      if (context.dashboard && context.dashboard.uid) {
+        q.set('uid', String(context.dashboard.uid));
+      }
       const host = srv.replace('$host');
       if (host && host !== '$host') {
         q.set('host', host);

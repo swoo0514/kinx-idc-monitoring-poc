@@ -559,7 +559,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
         "fetch_problems": lambda ent: fetch_problems(ent),
         "fetch_panel": (panel_fn or (lambda ent, m, a, b: fetch_panel(
-            ent, m, a, b, (panel or {}).get("uid", "")))),
+            ent, m, a, b, (panel or {}).get("uid", ""), panel))),
     }
 
     hist, dropped = trim_history(history)
@@ -863,11 +863,18 @@ async def fetch_problems(entry) -> dict:
 
 
 async def fetch_panel(entry: dict, match: str, start: int, end: int,
-                      prefer_uid: str = "") -> dict:
-    """관측 화면 한 장. 모델에는 손잡이만 가고 주소는 화면으로만 간다."""
-    from . import grafana
+                      prefer_uid: str = "", panel: dict = None) -> dict:
+    """관측 화면 한 장. 모델에는 손잡이만 가고 주소는 화면으로만 간다.
 
-    uid, panel_id, title = grafana.find_panel(match or "", prefer_uid)
+    **보고 있는 패널은 번호로 그린다.** 화면이 패널 번호를 넘겨 주는데도 제목으로
+    대시보드를 뒤지면 이름이 비슷한 옆 패널이 걸린다(2026-08-18 실측).
+    """
+    from . import asktools, grafana
+
+    uid, panel_id = asktools.panel_pick(panel, match)
+    title = str((panel or {}).get("title") or "")
+    if not uid:
+        uid, panel_id, title = grafana.find_panel(match or "", prefer_uid)
     if not uid:
         return {"error": "그 조건에 맞는 패널을 못 찾았다. match 를 바꿔 보라"}
     return {"id": "img-%d" % (abs(hash((uid, panel_id, start))) % 9000 + 1000),

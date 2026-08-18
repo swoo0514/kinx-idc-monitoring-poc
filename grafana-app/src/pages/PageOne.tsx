@@ -22,10 +22,22 @@ function prefillFromQuery(): string {
   return `지금${where} "${panel}" 패널을 보고 있습니다${when}.${who} 이 구간에 무슨 일이 있었는지 확인해 주십시오.`;
 }
 
+// 화면이 넘겨 준 식별자. 이것이 있으면 게이트웨이가 제목으로 뒤지지 않고 이 패널을
+// 그대로 그린다.
+function panelFromQuery() {
+  const p = new URLSearchParams(window.location.search);
+  const uid = p.get("uid");
+  const panelId = p.get("panelId");
+  if (!uid || panelId === null) {
+    return undefined;
+  }
+  return { uid, panelId: Number(panelId), title: p.get("panel") || "" };
+}
+
 export default function PageOne() {
   return (
     <PluginPage>
-      <AskChat prefill={prefillFromQuery()} />
+      <AskChat prefill={prefillFromQuery()} panel={panelFromQuery()} />
     </PluginPage>
   );
 }
