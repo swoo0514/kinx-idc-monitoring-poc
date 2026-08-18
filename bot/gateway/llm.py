@@ -429,7 +429,12 @@ def claude_tools(system: str, messages: list, tools: list,
     """
     import anthropic
     ad = ClaudeAdapter(model=model, kind="investigate")
-    client = anthropic.Anthropic(timeout=ad.timeout, max_retries=0)
+    # **질의는 사람이 화면 앞에서 기다린다.** 알림 분석용 여유 시간(LLM_TIMEOUT_S 는 랩에서
+    # 100초)을 그대로 쓰면 한 번의 느린 응답이 질의 전체 마감(ASK_DEADLINE_S 기본 60초)을
+    # 넘겨 버린다. 2026-08-18 랩 실측으로 한 호출이 96초 걸렸고, 사람은 조회를 한 번도
+    # 못 한 채 "상한에 닿아 멈췄다" 를 받았다.
+    timeout = min(ad.timeout, float(os.environ.get("ASK_LLM_TIMEOUT_S", "30")))
+    client = anthropic.Anthropic(timeout=timeout, max_retries=0)
     resp = client.messages.create(model=ad.model, max_tokens=MAX_TOKENS,
                                   system=cached_system(system),
                                   messages=messages, tools=tools)

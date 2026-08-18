@@ -4065,7 +4065,11 @@ def _cap_answer_checks() -> int:
                                                  "tool_use_id": "x", "content": "{}"}]}]
     assert len(ask.drop_dangling(done)) == 3
     assert ask.drop_dangling([]) == []
-    return 12
+
+    # 조회를 하나도 못 했으면 "조회한 것: 없음" 대신 무엇을 하라는 말을 준다.
+    assert "다시 물어보라" in ask.stall_note("deadline", [])
+    assert "host_logs" in ask.stall_note("rounds", [{"tool": "host_logs"}])
+    return 14
 
 
 def _ask_dispatch_checks() -> int:

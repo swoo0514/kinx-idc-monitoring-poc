@@ -721,14 +721,28 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
                               model_fn, exec_tool, trace):
             text = render_answer(final)
     if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not final:
-        text = ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
-                % (stopped, ", ".join(t["tool"] for t in trace) or "없음")
+        text = (stall_note(stopped, trace)
                 + ((chr(10) * 2 + text) if text else ""))
     remember(sid or "-", mk)
     return {"text": strip_handles(mk.unmask(text)), "trace": trace,
             "rounds": len(trace),
             "images": chosen_images(images, final), "stopped": stopped, "error": ""}
 
+
+
+def stall_note(stopped: str, trace: list) -> str:
+    """상한에 걸렸을 때 사람에게 하는 말.
+
+    조회를 하나도 못 했으면 "조회한 것: 없음" 은 사람에게 아무 도움이 안 된다. 그 경우는
+    대개 모델 응답이 늦은 것이다(2026-08-18 실측: 한 호출이 96초). 무엇을 하라는 말까지
+    적는다.
+    """
+    if not trace:
+        if stopped == "deadline":
+            return "모델 응답이 늦어 조회를 시작하지 못했다. 다시 물어보라."
+        return "조회를 시작하지 못한 채 상한(%s)에 닿았다. 다시 물어보라." % stopped
+    return ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
+            % (stopped, ", ".join(t["tool"] for t in trace)))
 
 
 def drop_dangling(msgs: list) -> list:
@@ -1061,8 +1075,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
                               specs, user, model_fn, exec_tool, trace):
             text = render_answer(final)
     if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not final:
-        text = ("여기까지 확인했고 상한(%s)에 닿아 멈췄다. 조회한 것: %s"
-                % (stopped, ", ".join(t["tool"] for t in trace) or "없음")
+        text = (stall_note(stopped, trace)
                 + ((chr(10) * 2 + text) if text else ""))
     remember(sid or "-", mk)
     return {"text": strip_handles(mk.unmask(text)), "trace": trace,
