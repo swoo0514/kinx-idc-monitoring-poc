@@ -18,6 +18,47 @@ function keepTildes(text: string): string {
   return String(text || '').replace(/~/g, '\\~');
 }
 
+// 패널 그림은 Grafana 가 헤들리스 브라우저로 그린다. 랩 실측으로 **질의가 없는 텍스트
+// 패널도 7초**가 걸린다(2026-08-18) — 질의 시간이 아니라 브라우저를 띄우는 고정 비용이라
+// 우리 쪽에서 줄일 것이 없다. 그동안 빈 칸이면 고장으로 보이므로 상태를 보여 준다.
+function PanelShot({ im, s }: { im: Img; s: any }) {
+  const [state, setState] = React.useState<'loading' | 'ok' | 'fail'>('loading');
+  return (
+    <figure className={s.shot}>
+      {state !== 'ok' && (
+        <div className={s.shotWait}>
+          {state === 'loading' ? (
+            <>
+              <Spinner size="sm" /> 관측 화면을 그리는 중입니다 (약 7초)
+            </>
+          ) : (
+            <>화면을 그리지 못했습니다. 아래 링크로 대시보드에서 보십시오.</>
+          )}
+        </div>
+      )}
+      <img
+        src={im.url}
+        alt={im.title}
+        className={s.shotImg}
+        style={{ display: state === 'ok' ? 'block' : 'none' }}
+        onLoad={() => setState('ok')}
+        onError={() => setState('fail')}
+      />
+      <figcaption className={s.shotCap}>
+        <Icon name="chart-line" size="xs" /> {im.title}
+        <a
+          className={s.shotLink}
+          href={im.url.replace('/render/d-solo/', '/d/')}
+          target="_blank"
+          rel="noreferrer"
+        >
+          대시보드에서 보기
+        </a>
+      </figcaption>
+    </figure>
+  );
+}
+
 function ago(at: number): string {
   const m = Math.max(0, (Date.now() / 1000 - at) / 60);
   if (m < 60) {
@@ -189,20 +230,7 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
                 {t.images && t.images.length > 0 && (
                   <div className={s.shots}>
                     {t.images.map((im) => (
-                      <figure key={im.id} className={s.shot}>
-                        <img src={im.url} alt={im.title} className={s.shotImg} />
-                        <figcaption className={s.shotCap}>
-                          <Icon name="chart-line" size="xs" /> {im.title}
-                          <a
-                            className={s.shotLink}
-                            href={im.url.replace('/render/d-solo/', '/d/')}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            대시보드에서 보기
-                          </a>
-                        </figcaption>
-                      </figure>
+                      <PanelShot key={im.id} im={im} s={s} />
                     ))}
                   </div>
                 )}
@@ -333,6 +361,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   shots: css`margin-top:${theme.spacing(1.5)};display:flex;flex-direction:column;gap:${theme.spacing(1)};`,
   shot: css`margin:0;border:1px solid ${theme.colors.border.weak};border-radius:8px;overflow:hidden;background:${theme.colors.background.canvas};`,
   shotImg: css`display:block;width:100%;height:auto;`,
+  shotWait: css`display:flex;align-items:center;gap:8px;min-height:120px;justify-content:center;color:${theme.colors.text.secondary};font-size:12px;padding:24px;`,
   shotCap: css`display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;color:${theme.colors.text.secondary};border-top:1px solid ${theme.colors.border.weak};`,
   shotLink: css`margin-left:auto;color:${theme.colors.text.link};`,
   trace: css`margin-top:${theme.spacing(1.5)};display:flex;flex-wrap:wrap;gap:5px;`,

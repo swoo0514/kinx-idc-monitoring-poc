@@ -1385,3 +1385,27 @@ haiku 로 "90일 추이" 를 물으면 `window_m` 대신 `at` 을 고르고, 값
 현재값으로 답합니다. 도구 자체는 온전합니다 — `window_m: 129600` 을 직접 주면 90일치
 508점을 추세로 읽습니다. 안내는 붙지만 haiku 가 그것을 읽고 고치지 않습니다. 조사 등급을
 큰 모델로 올리면 달라질 것으로 보이나 확인하지 않았습니다.
+
+## 30. 패널 그림이 7초 걸리는 이유
+
+**질의 시간이 아니라 브라우저를 띄우는 고정 비용입니다.** 2026-08-18 랩 실측입니다.
+
+| 패널 | 질의 | 시간 |
+|---|---|---|
+| 텍스트 (panelId=1) | 없음 | 6.91초 / 7.17초 |
+| 시계열 CPU (Zabbix) | 있음 | 7.17초 / 7.24초 |
+| 시계열 인증 (Wazuh) | 있음 | 7.23초 / 7.17초 |
+
+질의가 하나도 없는 텍스트 패널이 같은 시간을 씁니다. 크기를 1000×320에서 600×200으로
+줄여도, 렌더러를 `RENDERING_MODE: reusable` 로 바꿔도 값이 안 변했습니다.
+
+패널 한 장에 5~15초는 이 도구에서 흔히 보고되는 범위이고([Improve Rendering
+Times](https://github.com/grafana/grafana-image-renderer/issues/44)), 공식 문서에도 속도
+설정은 `--browser.readiness.prior-wait`(기본 1초)·`--browser.scroll-wait`(기본 50밀리초)
+정도뿐입니다([Troubleshoot image rendering](https://grafana.com/docs/grafana/latest/setup-grafana/image-rendering/troubleshooting/)).
+
+**그래서 줄이지 않고 보이게 했습니다.** 질의 창구가 그림을 그리는 동안 "관측 화면을
+그리는 중입니다 (약 7초)" 를 자리에 둡니다. 빈 칸이면 고장으로 보입니다. 실패하면
+대시보드 링크로 안내합니다.
+
+답 자체는 그림을 기다리지 않습니다. 글이 먼저 오고 그림이 뒤따릅니다.
