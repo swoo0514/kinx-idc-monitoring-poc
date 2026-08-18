@@ -3650,23 +3650,49 @@ def _ask_loop_checks() -> int:
         assert len(r["trace"]) <= 1, r["trace"]
         assert r["text"], "멈춰도 사람에게 할 말은 있어야 한다"
 
-        # ⑳ **사람이 보던 패널은 코드가 붙인다.** 모델 판단에 맡기면 안 붙는다
-        #    (2026-08-18 실측: 패널에서 열었는데 그림이 없었다). 라운드도 안 쓴다.
-        r = asyncio.run(ask.run_ask("이 구간 뭐였나", table=long_tbl,
-                                    model_fn=lambda *a: _text("확인했다"),
+        # ⑳ **보던 패널은 맥락으로만 알린다.** 무조건 붙이면 이어지는 질문마다 같은
+        #    그림이 다시 그려진다. 붙일지는 모델이 정하되, 무엇을 보고 있는지는
+        #    알려 줘야 고를 수 있다.
+        ctx_seen = []
+
+        def cap_ctx(system, messages, tools):
+            ctx_seen.append(str(messages[-1]["content"]))
+            return _text("확인했다")
+
+        r = asyncio.run(ask.run_ask("이 구간 뭐였나", table=long_tbl, model_fn=cap_ctx,
                                     panel={"uid": "d1", "panelId": 2,
                                            "host": "vm-p3-target-002.novalocal",
+                                           "title": "복제 지연",
                                            "from": 1786589786, "to": 1786604263}))
-        assert r["images"] and r["images"][0]["url"].startswith("/render/d-solo/d1"), r["images"]
-        assert r["rounds"] == 0, "그림을 붙이느라 라운드를 쓰면 안 된다"
+        assert "보고 있는 패널" in ctx_seen[0], ctx_seen[0][:200]
+        assert r["images"] == [], "모델이 안 불렀는데 그림이 붙었다"
+        # 지시문이 언제 붙일지 말해 줘야 모델이 고른다
+        assert "panel_image" in ask.ASK_SYSTEM, "그림 지침이 없다"
 
-        # ㉑ 모델이 죽어도 예외를 위로 던지지 않는다
+        # ㉑ **이력도 가린다.** 화면은 사람이 읽는 글(실명으로 되돌린 것)을 이력으로
+        #    되보낸다. 그대로 실으면 앞 턴의 실명이 모델에 간다. 실제로 갔다
+        #    (2026-08-18 실측: 도구 인자에 실명이 찍혔다).
+        nametable._terms = {"vm-p3-target-002.novalocal": "host"}
+        seen6 = []
+
+        def cap7(system, messages, tools):
+            seen6.append(json.dumps(messages, ensure_ascii=False))
+            return _text("확인")
+
+        asyncio.run(ask.run_ask(
+            "이어서", table=long_tbl, model_fn=cap7,
+            history=[{"role": "user", "content": "vm-p3-target-002.novalocal 상태"},
+                     {"role": "assistant",
+                      "content": "vm-p3-target-002.novalocal 은 정상입니다"}]))
+        assert "vm-p3-target-002.novalocal" not in seen6[0],             "이력의 실명이 모델에 갔다: %s" % seen6[0][:200]
+
+        # ㉒ 모델이 죽어도 예외를 위로 던지지 않는다
         def dead(system, messages, tools):
             raise RuntimeError("model down")
 
         r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
         assert r.get("error") and "모델" in r["error"], r
-        return 52
+        return 54
     finally:
         nametable._terms = saved
         ask.forget_all()

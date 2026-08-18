@@ -365,6 +365,9 @@ ASK_SYSTEM = """\
 - **범위를 지킨다.** 너는 이 회사의 관측 데이터(지표·로그·보안 기록)에 대해서만
   답한다. 관측과 무관한 질문(일반 지식·잡담·다른 주제)에는 답하지 말고, 무엇을 물어야
   하는지 한 문장으로 알려 준 뒤 끝내라. 길게 사양하지 마라.
+- **그림은 도움이 될 때만 붙인다.** panel_image 는 사람이 보고 있는 화면을 답과 함께
+  보여 줄 때, 또는 추이·모양을 말로 설명하기 어려울 때 한 번만 부른다. 같은 대화에서
+  이미 붙였으면 다시 붙이지 마라. "없다"·"정상이다" 만 말하는 답에는 붙이지 마라.
 - 대상 토큰을 모르면 list_hosts 를 먼저 부른다.
 - **사람이 절대 시각을 말하면 window_m 이 아니라 from·to 로 넘겨라.** "8월 13일 12시",
   "어제 새벽" 처럼 특정 시점을 가리키는 질문에 상대 창을 쓰면 엉뚱한 날을 보게 된다.
@@ -491,24 +494,34 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
 
     hist, dropped = trim_history(history)
     images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
-    # **사람이 보고 있던 패널은 코드가 붙인다.** 모델에게 맡기면 안 붙거나 한 라운드를
-    # 더 쓴다. 무엇을 보다가 물었는지는 이미 알고 있으므로 물어볼 이유가 없다.
+    # 사람이 보고 있던 패널은 **맥락으로만** 알려 준다. 무조건 붙이면 이어지는
+    # 질문마다 같은 그림이 다시 그려진다. 붙일지는 모델이 정하고, 판단 기준은 지시문에
+    # 적었다.
+    viewing = ""
     if panel and panel.get("uid") and panel.get("host"):
-        from . import grafana
-        try:
-            images.append({
-                "id": "img-panel",
-                "title": str(panel.get("title") or "보고 있던 패널"),
-                "url": grafana.panel_url(panel["uid"], panel.get("panelId"),
-                                         panel["host"],
-                                         int(panel.get("from") or now - 3600),
-                                         int(panel.get("to") or now))})
-        except Exception as e:
-            log.warning("보던 패널을 못 붙였다: %s", e)
-    messages = list(hist)
+        viewing = ("[사람이 보고 있는 패널] %s — 이 화면을 그림으로 붙이려면 "
+                   "panel_image 를 부르면 된다." + chr(10)
+                   ) % mk.mask(str(panel.get("title") or "제목 없음"))
+
+    ctx = {
+        "table": table, "now": now,
+        "fetch_logs": lambda q, a, b, lim: fetch_logs(q, a, b, lim, mk),
+        "fetch_security": lambda body: fetch_security(body, mk),
+        "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
+        "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
+        "fetch_problems": lambda ent: fetch_problems(ent),
+        "fetch_panel": (panel_fn or (lambda ent, m, a, b: fetch_panel(ent, m, a, b))),
+    }
+
+    hist, dropped = trim_history(history)
+    images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
+    # **이력도 가린다.** 화면은 사람이 읽는 글(실명으로 되돌린 것)을 이력으로
+    # 되보낸다. 그대로 실으면 앞 턴의 실명이 모델에 가고, 모델은 그 이름을 도구
+    # 인자로 쓴다(2026-08-18 실측).
+    messages = [{"role": m["role"], "content": mk.mask(m["content"])} for m in hist]
     if dropped:
         messages.insert(0, {"role": "user", "content": DROP_NOTE})
-    messages.append({"role": "user", "content": clean["text"]})
+    messages.append({"role": "user", "content": viewing + clean["text"]})
     trace, spent, stopped = [], 0, "end_turn"
     # 같은 조회를 두 번 하지 않는다. 라운드와 비용을 태우고, 결과가 같으므로 얻는 것도 없다.
     called = {}

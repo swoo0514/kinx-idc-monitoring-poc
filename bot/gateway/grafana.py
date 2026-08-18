@@ -108,7 +108,10 @@ def find_panel(match: str) -> tuple:
                     continue
                 for p in (dr.json().get("dashboard") or {}).get("panels") or []:
                     title = str(p.get("title") or "")
-                    if p.get("type") in ("timeseries", "graph") and (
+                    # 시계열만 보면 표·로그 패널을 "없다"고 답한다(2026-08-18 실측:
+                    # 인증 활동 패널이 있는데 없다고 했다).
+                    if p.get("type") in ("timeseries", "graph", "table", "logs",
+                                         "stat", "barchart", "piechart") and (
                             not match or match.lower() in title.lower()):
                         return uid, p.get("id"), title
     except Exception as e:
