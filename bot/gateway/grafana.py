@@ -177,6 +177,42 @@ def dashboard_titles(limit: int = 30) -> list:
         return []
 
 
+PANEL_TYPES = ("timeseries", "graph", "table", "logs", "stat", "barchart", "piechart")
+
+
+def panel_titles(dash_match: str, limit: int = 25) -> list:
+    """그 대시보드에 있는 패널 제목들. 못 읽으면 빈 목록.
+
+    대시보드만 지목하고 패널 제목을 모르는 경우가 있다. 목록을 주지 않으면 모델이
+    제목을 지어내거나 "특정하지 못했다" 로 끝난다(2026-08-18 실측).
+    """
+    base, want = _base(), str(dash_match or "").strip().lower()
+    if not base or not want:
+        return []
+    out = []
+    try:
+        with httpx.Client(timeout=TIMEOUT_S) as c:
+            r = c.get(base + "/api/search", params={"type": "dash-db", "limit": SEARCH_LIMIT},
+                      headers=_auth())
+            r.raise_for_status()
+            for d in r.json():
+                if want not in str(d.get("title") or "").lower():
+                    continue
+                dr = c.get(base + "/api/dashboards/uid/" + str(d.get("uid") or ""),
+                           headers=_auth())
+                if dr.status_code != 200:
+                    continue
+                for p in _flatten((dr.json().get("dashboard") or {}).get("panels")):
+                    title = str(p.get("title") or "")
+                    if title and p.get("type") in PANEL_TYPES:
+                        out.append(title)
+                    if len(out) >= limit:
+                        return out
+    except Exception as e:
+        log.warning("패널 목록 조회 실패: %s", e)
+    return out
+
+
 def panel_url(uid: str, panel_id, host: str, start: int, end: int) -> str:
     """브라우저가 그림을 받아 갈 주소.
 

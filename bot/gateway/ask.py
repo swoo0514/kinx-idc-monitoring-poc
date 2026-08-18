@@ -1008,9 +1008,15 @@ async def fetch_panel(entry: dict, match: str, start: int, end: int,
         # **무엇이 있는지 함께 준다.** 안 주면 모델이 "그 대시보드에는 없다" 를 지어낸다
         # (2026-08-18 실측).
         mask = masker.mask if masker is not None else (lambda x: x)
-        names = [mask(t) for t in grafana.dashboard_titles()]
+        if dash:
+            # 대시보드는 찾았는데 패널을 못 고른 경우가 많다. 그 안에 무엇이 있는지
+            # 주면 모델이 골라서 다시 부른다. 안 주면 "특정하지 못했다" 로 끝난다.
+            titles = [mask(t) for t in grafana.panel_titles(dash)]
+            if titles:
+                return {"error": "그 대시보드의 패널 목록이다. match 에 하나를 골라 넣어라",
+                        "panels": titles}
         return {"error": "그 조건에 맞는 패널을 못 찾았다. match 나 dashboard 를 바꿔 보라",
-                "dashboards": names}
+                "dashboards": [mask(t) for t in grafana.dashboard_titles()]}
     # **화면이 준 호스트 값을 먼저 쓴다.** 대시보드 변수의 실제 현재 값이다. Zabbix 축
     # 이름을 넣으면 Loki·Wazuh 패널이 빈 그래프로 나오고 사람은 "아무 일도 없었다" 로
     # 읽는다(축마다 이름이 다르다 — collector._resolve_label 참고).

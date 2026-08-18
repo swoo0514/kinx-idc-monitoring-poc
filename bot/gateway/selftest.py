@@ -3753,13 +3753,29 @@ def _panel_route_checks() -> int:
                                 panel={"uid": "kinx-overview", "panelId": 12, "title": "t"}))
         assert calls == [("인증", "", "월간 리포트")], calls
 
+        # ①-e **못 찾으면 무엇이 있는지 준다.** 안 주면 모델이 "그런 패널은 없다" 를
+        #      지어내거나 "특정하지 못했다" 로 끝난다(2026-08-18 실측 둘 다 나왔다).
+        saved_pt, saved_dt = grafana.panel_titles, grafana.dashboard_titles
+        try:
+            grafana.find_panel = lambda m, prefer="", dash="": (None, None, "")
+            grafana.panel_titles = lambda dash, limit=25: ["인증 활동 — web-01 실패"]
+            grafana.dashboard_titles = lambda limit=30: ["KINX 통합 관제"]
+            out = asyncio.run(ask.fetch_panel({"host": "web-01"}, "없는패널", 1, 2,
+                                              dash="월간 리포트",
+                                              masker=ask.proxy.build_masker()))
+            assert out.get("panels"), out
+            out2 = asyncio.run(ask.fetch_panel({"host": "web-01"}, "없는패널", 1, 2))
+            assert out2.get("dashboards") == ["KINX 통합 관제"], out2
+        finally:
+            grafana.panel_titles, grafana.dashboard_titles = saved_pt, saved_dt
+
         # ② 화면 맥락이 없으면 그때만 찾는다.
         r = asyncio.run(ask.run_ask("이 패널 뭐야", table=table, model_fn=model))
         assert calls, "맥락이 없는데도 안 찾았다"
     finally:
         grafana.find_panel = saved_find
         nametable._terms = saved_terms
-    return 12
+    return 15
 
 
 
