@@ -145,6 +145,23 @@ def window_label(start: int, end: int) -> str:
     return "%s → %s UTC" % (fmt(start), fmt(end))
 
 
+def note_if_no_points(out):
+    """지표를 받았는데 점이 0개면 그 사실을 결과에 적는다.
+
+    조회는 성공했고 아이템도 있는데 값이 없다면 구간을 잘못 고른 것이다. 안 알리면
+    모델은 현재 값(last)만 보고 "지금 정상" 으로 답한다. 2026-08-18 랩 실측으로 2025년
+    1월을 조회하고 90일 추이 질문에 현재 상태로 답했다.
+    """
+    if not isinstance(out, dict):
+        return out
+    items = out.get("metrics") or []
+    if items and all(int(m.get("sampled_from") or 0) == 0 for m in items):
+        msg = ("이 구간에는 값이 하나도 없다. 구간을 잘못 골랐을 수 있다. 긴 추이는 "
+               "window_m 에 분으로 준다(90일이면 129600). last 는 현재값이라 추이가 아니다.")
+        out["note"] = (str(out.get("note") or "") + " " + msg).strip()
+    return out
+
+
 def bad_when(args: dict) -> list:
     """시각으로 읽지 못한 인자 이름들.
 
@@ -574,7 +591,8 @@ async def _tool_host_metrics(args: dict, ctx: dict) -> dict:
     if err:
         return err
     a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_TREND_M)
-    out = await ctx["fetch_metrics"](ent, str(args.get("match") or ""), a, b)
+    out = note_if_no_points(
+        await ctx["fetch_metrics"](ent, str(args.get("match") or ""), a, b))
     return _add_cut(out, cut, WINDOW_MAX_TREND_M, a, b, args)
 
 

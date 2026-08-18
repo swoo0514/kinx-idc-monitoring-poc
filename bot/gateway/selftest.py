@@ -3316,6 +3316,15 @@ def _ask_result_checks() -> int:
     assert "at" in asktools.when_note({"at": 90}), asktools.when_note({"at": 90})
     assert asktools.when_note({"at": T0}) == ""
 
+    # (3)-f **구간에 값이 없으면 그 자리에서 말한다.** 조회는 성공했고 아이템도 있는데
+    #       점이 0개면 구간을 잘못 고른 것이다. 안 알리면 모델은 현재 값만 보고 답한다
+    #       (2026-08-18 랩 실측: 2025년 1월을 보고 "현재 0초" 로 답했다).
+    out = asktools.note_if_no_points(
+        {"metrics": [{"name": "repl", "sampled_from": 0, "last": "0"}], "status": "ok"})
+    assert "window_m" in (out.get("note") or ""), out
+    keep = {"metrics": [{"name": "repl", "sampled_from": 120}], "status": "ok"}
+    assert not (asktools.note_if_no_points(keep).get("note") or "")
+
     # (4) **잘린 사실은 도구 결과에 실린다.** 프롬프트가 아니라 결과에 실어야
     #     모델이 답에 옮긴다.
     note = asktools.cut_note(True, 1440)
