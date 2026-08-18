@@ -62,6 +62,31 @@ def allowed_sources() -> list:
     return [n for n in registry.source_names() if target_allowed(n)[0]]
 
 
+# 사람이 이름을 줄여 말할 때 쓰는 조각. 너무 짧으면 아무 데나 걸리므로 하한을 둔다.
+MENTION_MIN = 4
+_WORDY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{%d,}" % (MENTION_MIN - 1))
+
+
+def resolve_mentions(text: str, table: dict) -> str:
+    """질문에 적힌 이름 조각을 대상 토큰으로 바꾼다.
+
+    사람은 `vm-p3-target-002.novalocal` 을 `target-002` 로 줄여 말한다. 전체 이름과
+    도메인 뗀 이름만 가려서는 그 조각이 안 풀리고, 모델은 "등록되지 않은 호스트" 라고
+    답한 뒤 대화가 막힌다(2026-08-18 랩 실측).
+
+    **여러 호스트에 걸리는 조각은 풀지 않는다.** 엉뚱한 기계를 짚는 것이 못 짚는 것보다
+    나쁘다. 그때는 모델이 목록을 보고 되묻게 둔다.
+    """
+    out = str(text or "")
+    for frag in sorted(set(_WORDY.findall(out)), key=len, reverse=True):
+        low = frag.lower()
+        hits = [tok for tok, ent in (table or {}).items()
+                if low in str(ent.get("host", "")).lower()]
+        if len(hits) == 1:
+            out = out.replace(frag, hits[0])
+    return out
+
+
 def _alias(mk, name: str) -> None:
     """도메인 접미사를 뗀 짧은 이름을 **같은 토큰**에 묶는다.
 
@@ -281,6 +306,13 @@ async def fetch_judgments(host: str, days: int, masker: masking.Masker,
 # 끝내는 것이 가장 나쁘다.
 # ---------------------------------------------------------------------------
 
+# 대화 이력을 얼마나 실을지. **다 보내면 턴이 쌓일수록 비용과 지연이 늘고, 상한에
+# 닿으면 최신 질문이 밀린다.** 오래된 것부터 버리는 미끄럼창을 쓴다. 지금은 그대로
+# 버리지만, 버린 구간을 요약해 한 줄로 접는 것이 다음 단계다(next-steps 참조).
+HISTORY_MAX_MSGS = int(os.environ.get("ASK_HISTORY_MAX_MSGS", "12"))
+HISTORY_MAX_CHARS = int(os.environ.get("ASK_HISTORY_MAX_CHARS", "8000"))
+DROP_NOTE = "(앞선 대화 일부는 길이 때문에 생략되었다. 필요하면 다시 물어라)"
+
 MAX_ROUNDS = int(os.environ.get("ASK_MAX_ROUNDS", "6"))
 DEADLINE_S = float(os.environ.get("ASK_DEADLINE_S", "60"))
 RESULT_BYTES = int(os.environ.get("ASK_RESULT_BYTES", "60000"))
@@ -299,6 +331,29 @@ ASK_SYSTEM = """\
 - 근거로 쓴 조회를 답에 밝힌다. 확인하지 못한 것은 확인하지 못했다고 쓴다.
 - 되돌릴 수 없는 명령(RESET SLAVE·DROP·rm -rf·kill -9 등)을 권하지 마라.
 - 답은 공백 포함 1200자 이내로 쓴다."""
+
+
+def trim_history(history) -> tuple:
+    """이력을 창 안으로 자른다. 반환 `(자른 이력, 버렸는가)`.
+
+    최신 것을 먼저 지키고 오래된 것부터 버린다. 개수와 글자 수 두 상한을 함께 보는
+    이유는, 짧은 턴이 많은 대화와 긴 답이 몇 개인 대화가 서로 다른 방식으로 커지기
+    때문이다.
+
+    **버린 사실을 알린다.** 조용히 버리면 모델이 앞 대화를 다 기억한다고 여기고
+    "아까 말한 그 호스트" 같은 말을 근거로 쓴다.
+    """
+    msgs = [m for m in (history or [])
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+            and isinstance(m.get("content"), str)]
+    kept, chars = [], 0
+    for m in reversed(msgs):
+        if len(kept) >= HISTORY_MAX_MSGS or chars + len(m["content"]) > HISTORY_MAX_CHARS:
+            break
+        kept.append(m)
+        chars += len(m["content"])
+    kept.reverse()
+    return kept, len(kept) < len(msgs)
 
 
 def _blocks_text(content) -> str:
@@ -335,6 +390,9 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         return {"text": "", "trace": [], "rounds": 0, "stopped": "no_targets",
                 "error": "조회할 수 있는 대상이 없다. 감시 서버 연결과 허용 영역을 확인하라"}
 
+    # 이름 조각을 먼저 토큰으로 바꾼다. 마스커는 등록된 이름만 보므로 줄여 쓴 말을
+    # 못 잡는다. 여기서 풀어 두면 모델이 곧바로 도구를 부를 수 있다.
+    question = resolve_mentions(question, table)
     clean = sanitize_question(question, mk)
     if not clean["ok"]:
         return {"text": "", "trace": [], "rounds": 0, "stopped": "rejected",
@@ -349,7 +407,11 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_problems": lambda ent: fetch_problems(ent),
     }
 
-    messages = list(history or []) + [{"role": "user", "content": clean["text"]}]
+    hist, dropped = trim_history(history)
+    messages = list(hist)
+    if dropped:
+        messages.insert(0, {"role": "user", "content": DROP_NOTE})
+    messages.append({"role": "user", "content": clean["text"]})
     trace, spent, stopped = [], 0, "end_turn"
     text = ""
 

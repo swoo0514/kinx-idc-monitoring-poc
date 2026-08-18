@@ -3402,9 +3402,10 @@ def _ask_loop_checks() -> int:
         # ⑧ **줄여 쓴 이름도 같은 토큰으로 가린다.** 사람은 도메인 접미사를 빼고
         #    친다. 안 가리면 실명 조각이 그대로 나가고, 모델은 그 문자열을 도구
         #    인자로 넣어 '알 수 없는 대상' 으로 튕긴다(2026-08-18 랩 실측).
-        long_tbl = {ask.proxy.token_for("host", "vm-a.novalocal"):
-                    {"host": "vm-a.novalocal", "source": "zabbix-internal",
-                     "logs": "vm-a.novalocal", "security": "vm-a.novalocal"}}
+        long_tbl = {ask.proxy.token_for("host", "vm-p3-target-002.novalocal"):
+                    {"host": "vm-p3-target-002.novalocal", "source": "zabbix-internal",
+                     "logs": "vm-p3-target-002.novalocal",
+                     "security": "vm-p3-target-002.novalocal"}}
         seen2 = []
 
         def cap2(system, messages, tools):
@@ -3412,20 +3413,68 @@ def _ask_loop_checks() -> int:
             return _text("확인")
 
         nametable._terms = {}
-        asyncio.run(ask.run_ask("vm-a 로그 봐줘", table=long_tbl, model_fn=cap2))
-        assert "vm-a" not in seen2[0], "줄여 쓴 이름이 안 가려졌다: %s" % seen2[0]
+        asyncio.run(ask.run_ask("vm-p3-target-002 로그 봐줘", table=long_tbl, model_fn=cap2))
+        assert "vm-p3-target-002" not in seen2[0], "줄여 쓴 이름이 안 가려졌다: %s" % seen2[0]
 
         # ⑨ 호스트 목록은 지표 축도 알려 준다. 안 알리면 모델이 '지표가 없다'고 단정한다.
         got = asyncio.run(asktools.run_tool("list_hosts", {}, {"table": long_tbl}))
         assert "metrics" in got["hosts"][0]["axes"], got
 
-        # ⑩ 모델이 죽어도 예외를 위로 던지지 않는다
+        # ⑩ **일부만 적은 이름도 대상으로 푼다.** 사람은 vm-p3-target-002.novalocal 을
+        #    target-002 로 줄여 말한다. 못 풀면 모델이 '등록되지 않은 호스트' 라고
+        #    답하고 대화가 막힌다(2026-08-18 랩 실측).
+        seen3 = []
+
+        def cap3(system, messages, tools):
+            seen3.append(messages[-1]["content"])
+            return _text("확인")
+
+        nametable._terms = {}
+        asyncio.run(ask.run_ask("target-002 상태 알려줘", table=long_tbl, model_fn=cap3))
+        assert "target-002" not in seen3[0], "부분 이름이 안 풀렸다: %s" % seen3[0]
+
+        # 여러 호스트에 걸리는 조각은 **풀지 않는다.** 엉뚱한 기계를 짚으면 더 나쁘다.
+        two = dict(long_tbl)
+        two[ask.proxy.token_for("host", "vm-b.novalocal")] = {
+            "host": "vm-b.novalocal", "source": "zabbix-internal", "logs": "", "security": ""}
+        assert ask.resolve_mentions("vm 상태", two) == "vm 상태"
+
+        # ⑪ **이력은 창으로 자른다.** 다 보내면 턴이 쌓일수록 비용과 지연이 늘고
+        #    상한에 닿으면 최신 질문이 밀린다. 오래된 것부터 버리고, 버린 사실을
+        #    모델에게 알린다 — 조용히 버리면 모델이 앞 대화를 기억한다고 착각한다.
+        long_hist = []
+        for i in range(40):
+            long_hist.append({"role": "user", "content": "질문 %d %s" % (i, "가" * 400)})
+            long_hist.append({"role": "assistant", "content": "답 %d" % i})
+        seen4 = []
+
+        def cap4(system, messages, tools):
+            seen4.append(messages)
+            return _text("확인")
+
+        asyncio.run(ask.run_ask("마지막 질문", history=long_hist, table=long_tbl,
+                                model_fn=cap4))
+        sent = seen4[0]
+        assert len(sent) <= ask.HISTORY_MAX_MSGS + 2, len(sent)
+        blob = json.dumps(sent, ensure_ascii=False)
+        assert len(blob) <= ask.HISTORY_MAX_CHARS * 2, len(blob)
+        assert sent[-1]["content"].endswith("마지막 질문"), sent[-1]
+        assert any("앞선 대화" in str(m.get("content")) for m in sent), "생략 사실을 안 알렸다"
+
+        # 짧은 이력은 그대로 간다 — 필요 없는 안내를 붙이지 않는다
+        seen4.clear()
+        asyncio.run(ask.run_ask("짧게", history=[{"role": "user", "content": "안녕"},
+                                                 {"role": "assistant", "content": "네"}],
+                                table=long_tbl, model_fn=cap4))
+        assert not any("앞선 대화" in str(m.get("content")) for m in seen4[0]), seen4[0]
+
+        # ⑫ 모델이 죽어도 예외를 위로 던지지 않는다
         def dead(system, messages, tools):
             raise RuntimeError("model down")
 
         r = asyncio.run(ask.run_ask("무슨 호스트", table=table, model_fn=dead))
         assert r.get("error") and "모델" in r["error"], r
-        return 20
+        return 28
     finally:
         nametable._terms = saved
         ask.forget_all()
