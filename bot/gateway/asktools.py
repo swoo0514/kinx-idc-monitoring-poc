@@ -104,7 +104,9 @@ def window_bounds(args: dict, now: int, max_m: int = 0) -> tuple:
     if a is not None and b is not None:
         if a > b:
             a, b = b, a
-        return a, min(b, a + cap), (b - a) > cap
+        # 자를 때는 **최신 쪽을 남긴다.** 조회가 최신순 정렬이라 앞쪽을 남기면 사람이
+        # 보고 있는 화면의 오른쪽 끝이 통째로 빠지고, 방금 난 일을 못 본다.
+        return max(a, b - cap), b, (b - a) > cap
     at = parse_when((args or {}).get("at"))
     win = min(clamp_window((args or {}).get("window_m")) * 60, cap)
     if at is not None:                     # 그 시각을 가운데 두고 앞뒤로
@@ -120,8 +122,8 @@ def cut_note(cut: bool, max_m: int) -> str:
         span = "%d일" % (max_m // 1440)
     else:
         span = "%d분" % max_m
-    return ("물어본 구간이 상한(%s)보다 길어 앞쪽 %s만 조회했다. "
-            "나머지 구간은 확인하지 않았다 — 없다고 답하지 마라." % (span, span))
+    return ("물어본 구간이 상한(%s)보다 길어 **최근 %s만** 조회했다. 그보다 앞선 "
+            "구간은 확인하지 않았다 — 없다고 답하지 마라." % (span, span))
 
 
 def clamp_window(minutes) -> int:

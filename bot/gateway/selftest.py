@@ -3267,6 +3267,9 @@ def _ask_result_checks() -> int:
     a, b, cut = asktools.window_bounds({"from": T0, "to": T0 + 30 * 86400}, now=T0)
     assert cut, "7일을 1일로 자르고도 알리지 않았다"
     assert b - a == asktools.WINDOW_MAX_M * 60, (a, b)
+    # **남기는 쪽은 최신이다.** 조회가 최신순 정렬이라 앞쪽을 남기면 사람이 보고 있는
+    # 화면의 오른쪽 끝이 통째로 빠진다.
+    assert b == T0 + 30 * 86400, (a, b)
     a, b, cut = asktools.window_bounds({"from": T0, "to": T0 + 3600}, now=T0)
     assert not cut and b - a == 3600, (a, b, cut)
     # 보안·문제 조회는 건수 상한이 있어 더 긴 구간을 본다
@@ -3277,7 +3280,7 @@ def _ask_result_checks() -> int:
     # (4) **잘린 사실은 도구 결과에 실린다.** 프롬프트가 아니라 결과에 실어야
     #     모델이 답에 옮긴다.
     note = asktools.cut_note(True, 1440)
-    assert note and "1일" in note, note
+    assert note and "1일" in note and "최근" in note, note
     assert asktools.cut_note(False, 1440) == ""
 
     # (5) 그림 손잡이를 걷어내고 남은 빈 괄호까지 정리한다. "패널()의" 가 화면에
