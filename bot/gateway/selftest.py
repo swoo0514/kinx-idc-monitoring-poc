@@ -3544,6 +3544,11 @@ def _graph_state_checks() -> int:
     """
     from . import graph
 
+    # ⓪ **무거운 임포트를 기동 때 끝낸다.** 첫 질의가 그 값을 뒤집어쓰면 사람은 화면에서
+    #    502 를 본다(2026-08-18 실측: langgraph 첫 임포트 95초, Grafana 프록시가 먼저 끊음).
+    assert graph.warmup() in (True, False)
+    assert graph.warmup() is graph.warmup()      # 두 번 불러도 같은 답
+
     ok = {"trace": [{"tool": "host_logs"}], "called": {"k": 1}, "images": [],
           "spent": 10, "stopped": ""}
     assert graph.check_state(ok) == ""

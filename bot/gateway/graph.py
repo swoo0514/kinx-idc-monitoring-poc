@@ -28,6 +28,24 @@ def available() -> bool:
         return False
 
 
+def warmup() -> bool:
+    """무거운 모듈을 미리 불러 둔다. 반환은 쓸 수 있는가.
+
+    **첫 질의가 임포트 값을 뒤집어쓰면 사람은 화면에서 502 를 본다.** 2026-08-18 랩
+    실측으로 `langgraph` 첫 임포트가 95초 걸렸고, 게이트웨이가 멀쩡히 답하는 중에
+    Grafana 프록시가 30초에 먼저 끊었다. 기동은 사람이 기다리는 시간이 아니므로 여기서
+    치른다.
+    """
+    try:
+        from langchain_core.language_models.chat_models import BaseChatModel  # noqa: F401
+        from langchain_core.messages import AIMessage  # noqa: F401
+        from langgraph.graph import StateGraph  # noqa: F401
+        return True
+    except Exception as e:
+        log.info("langgraph 를 못 불러왔다(%s) — 기존 반복문으로 돈다", e)
+        return False
+
+
 def versions() -> dict:
     """무엇이 깔려 있는지. 판이 바뀌면 동작이 달라지므로 함께 남긴다."""
     out = {}

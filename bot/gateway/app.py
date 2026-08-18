@@ -13,7 +13,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from . import ask
+from . import ask, graph
 from . import collector
 from . import convo
 from . import heartbeat
@@ -117,6 +117,14 @@ async def _start_heartbeat():
     else:
         log.warning("대화 이력 저장소 없음 — 질의는 되지만 대화가 안 남는다 (REDIS_URL)")
     _beat.start()
+    # 무거운 모듈을 여기서 불러 둔다. 첫 질의가 임포트 값을 뒤집어쓰면 사람은 화면에서
+    # 502 를 본다(2026-08-18 실측: langgraph 첫 임포트 95초). 기동은 사람이 기다리는
+    # 시간이 아니다.
+    import time as _t
+    _t0 = _t.monotonic()
+    if graph.warmup():
+        log.info("질의 그래프 준비 완료 (%.1f초, %s)", _t.monotonic() - _t0,
+                 graph.versions())
     # 이름 표는 조회가 몇 초 걸리므로 별도 스레드에서 만든다. 만들어지기 전에도
     # 캐시가 있으면 그걸로 돌고, 없으면 오늘까지의 동작(맥락 기반 등록)으로 돈다.
     _names.start()
