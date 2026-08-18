@@ -733,6 +733,31 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
 
 
 
+def prewarm() -> str:
+    """기동 뒤 첫 질의가 느린 것을 미리 치른다. 반환은 사람이 읽을 결과 한 줄.
+
+    2026-08-18 랩 실측으로 재기동 직후 첫 호출이 96초, 다음 호출은 6초였다. 접두사
+    캐시가 비어 있고 연결도 처음이라 그렇다. 사람이 기다릴 시간이 아니므로 기동 때
+    작은 호출로 대신 치른다.
+
+    실패해도 조용히 넘어간다. 예열이 안 되면 첫 질의가 느릴 뿐이고, 기동을 막을 일은
+    아니다.
+    """
+    import asyncio
+
+    from . import asktools, llm
+
+    try:
+        table = asyncio.run(build_table(proxy.build_masker()))
+        if not table:
+            return "대상 표가 비어 예열을 건너뛴다"
+        specs = asktools.build_tool_specs(table)
+        llm.claude_tools(system_prompt(), [{"role": "user", "content": "준비"}], specs)
+        return "질의 예열 완료 (대상 %d개)" % len(table)
+    except Exception as e:
+        return "질의 예열 실패: %s" % e
+
+
 def stall_note(stopped: str, trace: list) -> str:
     """상한에 걸렸을 때 사람에게 하는 말.
 

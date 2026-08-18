@@ -128,6 +128,12 @@ async def _start_heartbeat():
     # 이름 표는 조회가 몇 초 걸리므로 별도 스레드에서 만든다. 만들어지기 전에도
     # 캐시가 있으면 그걸로 돌고, 없으면 오늘까지의 동작(맥락 기반 등록)으로 돈다.
     _names.start()
+    # 첫 질의가 느린 것을 기동 때 미리 치른다(2026-08-18 실측: 재기동 직후 첫 호출
+    # 96초, 다음 호출 6초). 별도 스레드라 기동을 붙잡지 않는다. 켜고 끄는 값은
+    # ASK_PREWARM 이며, 유료 호출이 한 번 나가므로 끄고 싶을 수 있다.
+    if os.environ.get("ASK_PREWARM", "1") not in ("0", "false", "no"):
+        threading.Thread(target=lambda: log.info("%s", ask.prewarm()),
+                         name="ask-prewarm", daemon=True).start()
 
 
 @app.on_event("shutdown")
