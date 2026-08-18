@@ -562,6 +562,10 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     pt = asktools.parse_when((panel or {}).get("to"))
     if pf is not None and pt is not None and pf < pt:
         panel_span = (pf, pt)
+    # 화면에서 열지 않고 질문 글만 붙여 넣는 일이 잦다. 그러면 패널 맥락이 아예 안 오고
+    # 도구는 최근 창을 본다. 사람이 글에 적어 놓은 구간을 읽어 쓴다(지어내지 않는다).
+    if panel_span is None:
+        panel_span = asktools.span_in_text(clean["text"])
 
     ctx = {
         "table": table, "now": now, "panel_span": panel_span,
@@ -570,8 +574,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
         "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
         "fetch_problems": lambda ent: fetch_problems(ent),
-        "fetch_panel": (panel_fn or (lambda ent, m, a, b: fetch_panel(
-            ent, m, a, b, (panel or {}).get("uid", ""), panel))),
+        "fetch_panel": (panel_fn or (lambda ent, m, a, b, scope="": fetch_panel(
+            ent, m, a, b, (panel or {}).get("uid", ""), panel, scope))),
     }
 
     images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
@@ -940,7 +944,8 @@ async def fetch_problems(entry) -> dict:
 
 
 async def fetch_panel(entry: dict, match: str, start: int, end: int,
-                      prefer_uid: str = "", panel: dict = None) -> dict:
+                      prefer_uid: str = "", panel: dict = None,
+                      scope: str = "") -> dict:
     """관측 화면 한 장. 모델에는 손잡이만 가고 주소는 화면으로만 간다.
 
     **보고 있는 패널은 번호로 그린다.** 화면이 패널 번호를 넘겨 주는데도 제목으로
@@ -948,19 +953,25 @@ async def fetch_panel(entry: dict, match: str, start: int, end: int,
     """
     from . import asktools, grafana
 
-    uid, panel_id = asktools.panel_pick(panel, match)
+    uid, panel_id = asktools.panel_pick(panel, match, scope)
     title = str((panel or {}).get("title") or "")
+    searched = False
     if not uid:
         uid, panel_id, title = grafana.find_panel(match or "", prefer_uid)
+        searched = True
     if not uid:
         return {"error": "그 조건에 맞는 패널을 못 찾았다. match 를 바꿔 보라"}
     # **화면이 준 호스트 값을 먼저 쓴다.** 대시보드 변수의 실제 현재 값이다. Zabbix 축
     # 이름을 넣으면 Loki·Wazuh 패널이 빈 그래프로 나오고 사람은 "아무 일도 없었다" 로
     # 읽는다(축마다 이름이 다르다 — collector._resolve_label 참고).
     var_host = str((panel or {}).get("host") or "") or entry.get("host", "")
-    return {"id": "img-%d" % (abs(hash((uid, panel_id, start))) % 9000 + 1000),
-            "title": title,
-            "url": grafana.panel_url(uid, panel_id, var_host, start, end)}
+    out = {"id": "img-%d" % (abs(hash((uid, panel_id, start))) % 9000 + 1000),
+           "title": title,
+           "url": grafana.panel_url(uid, panel_id, var_host, start, end)}
+    if searched and (panel or {}).get("uid"):
+        # **사람이 보던 패널이 아니다.** 밝히지 않으면 같은 패널을 봤다고 믿는다.
+        out["note"] = "사람이 보고 있는 패널이 아니라 제목으로 찾은 패널이다"
+    return out
 
 
 def engine_name() -> str:

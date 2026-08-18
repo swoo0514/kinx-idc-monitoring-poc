@@ -649,7 +649,7 @@ def _class_map_checks() -> int:
         assert pending.PATH.startswith(_tmpd), pending.PATH
         pending.PATH = _saved_pending
         shutil.rmtree(_tmpd, ignore_errors=True)
-        return 17
+        return 20
     finally:
         os.unlink(path)
         if saved is None:
@@ -3666,7 +3666,7 @@ def _panel_route_checks() -> int:
     """
     import asyncio
 
-    from . import ask, grafana, nametable
+    from . import ask, asktools, grafana, nametable
 
     saved_terms = dict(nametable._terms)
     saved_find = grafana.find_panel
@@ -3712,13 +3712,33 @@ def _panel_route_checks() -> int:
         assert [x["id"] for x in grafana._flatten(nested) if x.get("id")] == [7]
         assert grafana._flatten(None) == []
 
+        # ①-c **다른 대시보드 패널도 물을 수 있어야 한다.** 화면 패널로 고정해 두면
+        #      "MSP 대시보드 것도 같은 값이냐" 에 영영 답을 못 한다(2026-08-18 실측).
+        #      다만 모델이 scope 를 적었을 때만 푼다. match 만으로는 안 바뀐다.
+        assert asktools.panel_pick({"uid": "u1", "panelId": 3}, "CPU") == ("u1", 3)
+        assert asktools.panel_pick({"uid": "u1", "panelId": 3}, "CPU", "search") == (None, None)
+
+        def model2(system, messages, tools):
+            if len(messages) == 1:
+                return {"stop_reason": "tool_use", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "panel_image",
+                     "input": {"host": tok, "match": "MSP 인증", "scope": "search"}}]}
+            return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
+
+        calls[:] = []
+        r3 = asyncio.run(ask.run_ask("MSP 대시보드 것도 보여줘", table=table, model_fn=model2,
+                                     panel={"uid": "kinx-overview", "panelId": 12,
+                                            "title": "인증 활동"}))
+        assert calls == [("MSP 인증", "kinx-overview")], calls
+        assert "/render/d-solo/다른-대시보드/" in r3["images"][0]["url"], r3["images"]
+
         # ② 화면 맥락이 없으면 그때만 찾는다.
         r = asyncio.run(ask.run_ask("이 패널 뭐야", table=table, model_fn=model))
         assert calls, "맥락이 없는데도 안 찾았다"
     finally:
         grafana.find_panel = saved_find
         nametable._terms = saved_terms
-    return 6
+    return 10
 
 
 
@@ -3945,6 +3965,15 @@ def _panel_window_checks() -> int:
     capped = asktools.note_if_capped({"logs": [], "fetched": _col.LOKI_FETCH_LIMIT})
     assert "앞부분은 안 들어왔다" in capped["note"], capped
     assert not (asktools.note_if_capped({"logs": [], "fetched": 3}).get("note"))
+
+    # ③-d **화면 없이 글만 붙여 넣는 경우.** 패널 맥락이 아예 안 오고 도구는 최근 창을
+    #      본다. 2026-08-18 실측(게이트웨이 로그 `ask panel keys=[]`): 답은 8월 11~13일을
+    #      말하는데 붙은 그림은 최근 1시간의 남의 대시보드 패널이었다.
+    q = ('지금 대시보드 "KINX 통합 관제" 의 "인증 활동" 패널을 보고 있습니다 '
+         "(구간 2026-08-11T19:18:12.679Z ~ 2026-08-13T13:32:21.164Z).")
+    assert asktools.span_in_text(q) == (T0, T1), asktools.span_in_text(q)
+    assert asktools.span_in_text("어제 새벽에 무슨 일 있었어") is None
+    assert asktools.span_in_text("2026-08-11T19:18:12.679Z 이후") is None   # 하나뿐이면 안 쓴다
 
     # ④ 화면 구간이 없으면 예전대로 최근 창을 본다.
     a, b, cut = asktools.window_bounds({}, now=1787000000)
@@ -4396,7 +4425,7 @@ def _ask_loop_checks() -> int:
                      "input": {"host": list(long_tbl)[0], "match": "CPU"}}]}
             return _text("아래 그림을 보라 img-1")
 
-        async def fake_panel(ent, m, a, b):
+        async def fake_panel(ent, m, a, b, scope=""):
             return {"id": "img-1", "title": "CPU 사용률",
                     "url": "/render/d-solo/x?var-host=%s" % ent["host"]}
 

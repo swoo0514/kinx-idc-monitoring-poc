@@ -95,6 +95,30 @@ def parse_when(value):
         return None
 
 
+# 사람이 붙여 넣는 글에 든 시각. 화면이 넘긴 구간이 없을 때만 쓴다.
+_ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?")
+
+
+def span_in_text(text: str):
+    """질문 글에 적힌 구간 `(시작, 끝)`. 못 읽으면 None.
+
+    화면에서 열지 않고 질문 글만 붙여 넣는 일이 잦다. 그러면 패널 맥락이 아예 안 오고
+    도구는 최근 창을 본다. 사람은 글에 구간을 적어 놓고 물었는데 봇은 다른 구간을 보고
+    답한다(2026-08-18 실측: 답은 8월 11~13일을 말하는데 붙은 그림은 최근 1시간이었다).
+
+    **지어내지 않는다.** 글에서 시각 두 개를 실제로 읽었을 때만 쓴다.
+    """
+    found = []
+    for m in _ISO_RE.findall(str(text or "")):
+        t = parse_when(m)
+        if t:
+            found.append(t)
+    if len(found) < 2:
+        return None
+    a, b = min(found), max(found)
+    return (a, b) if a < b else None
+
+
 def window_bounds(args: dict, now: int, max_m: int = 0, default_span=None) -> tuple:
     """조회 구간 `(시작, 끝, 잘렸는가)`. 절대 구간이 있으면 그것을, 없으면 상대 창을.
 
@@ -458,7 +482,11 @@ def build_tool_specs(table: dict = None) -> list:
               dict(_WINDOW_PROPS,
                    host=_host_prop("조회할 호스트 토큰", toks),
                    match={"type": "string",
-                          "description": "패널 제목에 든 문자열 (예: CPU, 복제, 로그)"}),
+                          "description": "패널 제목에 든 문자열 (예: CPU, 복제, 로그)"},
+                   scope={"type": "string", "enum": ["screen", "search"],
+                          "description": ("기본은 screen 이라 사람이 보고 있는 패널을 "
+                                          "그린다. 다른 대시보드의 패널을 보여 줄 때만 "
+                                          "search 로 적고 match 에 제목을 넣는다")}),
               ["host"]),
         _spec("past_judgments", "봇이 전에 내린 판정 기록. 같은 일이 반복되는지 볼 때 쓴다.",
               {"host": _host_prop("비우면 전체", toks),
@@ -503,7 +531,7 @@ def check_answer(args: dict, images, windows) -> tuple:
     return True, ""
 
 
-def panel_pick(panel: dict, match: str = "") -> tuple:
+def panel_pick(panel: dict, match: str = "", scope: str = "") -> tuple:
     """보고 있는 패널을 그대로 쓸 것인가. 반환 `(대시보드 uid, 패널 번호)`.
 
     화면이 패널 번호를 넘겨 주면 제목으로 뒤지지 않는다. 제목으로 찾으면 이름이 비슷한
@@ -515,6 +543,12 @@ def panel_pick(panel: dict, match: str = "") -> tuple:
     패널이 그려진다. 사람은 같은 패널을 봤다고 믿는다. 사람이 다른 패널을 원하면
     그때는 화면에서 그 패널을 열고 다시 물으면 된다.
     """
+    # 다만 **사람이 다른 패널을 물을 수는 있어야 한다.** "MSP 대시보드 것도 같은 값이냐"
+    # 같은 질문이 그렇다. 화면 패널로 고정해 두면 그 질문에 영영 답을 못 한다
+    # (2026-08-18 실측). 그래서 모델이 `scope="search"` 를 **명시**하면 그때만 찾는다.
+    # 기본값이 화면이므로, 아무 생각 없이 match 를 넣는 것으로는 안 바뀐다.
+    if str(scope or "").strip() == "search":
+        return None, None
     p = panel or {}
     uid, pid = p.get("uid"), p.get("panelId")
     if not uid or pid in (None, ""):
@@ -733,7 +767,8 @@ async def _tool_panel_image(args: dict, ctx: dict) -> dict:
         return err
     a, b, _cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
                                default_span=ctx.get("panel_span"))
-    return await ctx["fetch_panel"](ent, str(args.get("match") or ""), a, b)
+    return await ctx["fetch_panel"](ent, str(args.get("match") or ""), a, b,
+                                    str(args.get("scope") or ""))
 
 
 _TOOLS = {
