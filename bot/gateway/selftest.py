@@ -282,7 +282,8 @@ def main():
                     + _ask_question_checks() + _ask_scope_checks()
                     + _ask_tool_checks() + _ask_result_checks() + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
-                    + _ask_user_checks() + _convo_checks())
+                    + _ask_user_checks() + _convo_checks()
+                    + _graph_engine_checks())
     store_checks = (_store_checks() + _store_schema_checks()
                     + _judgment_wiring_checks() + _feedback_checks()
                     + _route_record_checks() + _annotation_checks()
@@ -3829,6 +3830,88 @@ def _ask_loop_checks() -> int:
     finally:
         nametable._terms = saved
         ask.forget_all()
+
+
+
+def _graph_engine_checks() -> int:
+    """LangGraph 엔진이 기존 반복문과 **같은 계약**을 지키는가.
+
+    이관의 통과 조건이다. 프레임워크가 흐름만 맡고 도구·마스킹·상한은 우리 것이므로,
+    같은 가짜 모델을 주면 두 엔진의 답·추적·멈춘 이유가 같아야 한다. 다르면 그 차이가
+    곧 이관으로 잃은 것이다.
+
+    프레임워크가 안 깔린 곳에서는 건너뛴다 — 선택 의존이라 없다고 검사가 깨지면 안 된다.
+    """
+    import asyncio
+    import os
+
+    from . import ask, graph, nametable
+
+    if not graph.available():
+        return 0
+
+    saved_terms, saved_env = dict(nametable._terms), os.environ.get("ASK_ENGINE")
+    try:
+        nametable._terms = {"web-01": "host"}
+        table = {ask.proxy.token_for("host", "web-01"):
+                 {"host": "web-01", "source": "zabbix-internal",
+                  "logs": "web-01.example", "security": "web-01.example"}}
+
+        def _tool_use(name, args):
+            return {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "t1", "name": name, "input": args}]}
+
+        def _text(t):
+            return {"stop_reason": "end_turn", "content": [{"type": "text", "text": t}]}
+
+        def run(engine, model_fn, q="무슨 호스트가 있나"):
+            os.environ["ASK_ENGINE"] = engine
+            return asyncio.run(ask.run_ask(q, table=table, model_fn=model_fn))
+
+        # ① 한 번 부르고 답하는 흐름이 두 엔진에서 같다
+        def one_call():
+            n = {"i": 0}
+
+            def model(system, messages, tools):
+                n["i"] += 1
+                return _tool_use("list_hosts", {}) if n["i"] == 1 else _text("web-01 이 원인이다")
+            return model
+
+        a, b = run("loop", one_call()), run("graph", one_call())
+        assert a["text"] == b["text"] == "web-01 이 원인이다", (a["text"], b["text"])
+        assert [t["tool"] for t in a["trace"]] == [t["tool"] for t in b["trace"]], (a, b)
+        assert a["stopped"] == b["stopped"] == "end_turn", (a["stopped"], b["stopped"])
+
+        # ② **라운드 상한이 그래프에서도 걸린다.** 프레임워크 자체 상한에 먼저 닿으면
+        #    사람은 이유 대신 예외를 본다.
+        def forever(system, messages, tools):
+            return _tool_use("list_hosts", {})
+
+        g = run("graph", forever, q="무한")
+        assert len(g["trace"]) <= ask.MAX_ROUNDS, len(g["trace"])
+        assert g["stopped"] == "rounds", g["stopped"]
+        assert g["text"], "상한에 닿아도 사람에게 할 말은 있어야 한다"
+
+        # ③ **같은 조회를 두 번 하지 않는다.** 중복 차단이 두 엔진 공용이다.
+        assert sum(1 for t in g["trace"] if t.get("error")) >= 1, g["trace"]
+
+        # ④ 모델 호출이 실패하면 사람이 읽을 문장으로 끝난다
+        def blows(system, messages, tools):
+            raise RuntimeError("모델 없음")
+
+        f = run("graph", blows)
+        assert f["stopped"] == "llm_failed" and f["error"], f
+
+        # ⑤ 프레임워크가 없다고 적혀 있어도 답은 나온다(기존 반복문으로 떨어진다)
+        os.environ["ASK_ENGINE"] = "graph"
+        assert ask.engine_name() in ("graph", "loop")
+    finally:
+        nametable._terms = saved_terms
+        if saved_env is None:
+            os.environ.pop("ASK_ENGINE", None)
+        else:
+            os.environ["ASK_ENGINE"] = saved_env
+    return 12
 
 
 def _ask_user_checks() -> int:
