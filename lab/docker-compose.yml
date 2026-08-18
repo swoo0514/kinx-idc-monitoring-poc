@@ -167,6 +167,10 @@ services:
     container_name: kinx-grafana-renderer
     environment:
       ENABLE_METRICS: "false"
+      # 렌더 한 장에 7초가 걸린다(2026-08-18 실측, 크기와 무관). 기본값은 요청마다
+      # 브라우저를 새로 띄운다. 하나를 살려 두고 재사용해 그 준비 값을 없앤다.
+      RENDERING_MODE: reusable
+      RENDERING_VIEWPORT_MAX_WIDTH: "1200"
     networks:
       - lab_net
     restart: unless-stopped
