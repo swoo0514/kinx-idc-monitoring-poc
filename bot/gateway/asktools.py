@@ -28,6 +28,33 @@ ZBX_METHODS = frozenset((
 ))
 
 
+# 지표 표본을 얼마나 받아 얼마로 줄일지. 상한만큼만 최신순으로 받으면 긴 구간의
+# 앞부분이 통째로 잘려 먼저 난 스파이크를 못 본다(2026-08-18 실측).
+HISTORY_FETCH_MAX = 2000
+HISTORY_BUCKETS = 60
+
+
+def downsample(points: list, buckets: int = HISTORY_BUCKETS) -> list:
+    """시계열을 구간별로 줄이되 **극단값을 살린다.**
+
+    사람이 그래프를 보고 묻는 이유는 대개 튄 자리 때문이다. 균등하게 솎아 내면 그
+    한 점이 사라져 "정상입니다" 가 나온다. 구간마다 최소·최대만 남기면 모양이 유지된다.
+    """
+    pts = sorted(points or [], key=lambda p: p["t"])
+    if len(pts) <= buckets or buckets <= 0:
+        return pts
+    span = max(1, len(pts) // buckets)
+    out = []
+    for i in range(0, len(pts), span):
+        chunk = pts[i:i + span]
+        lo = min(chunk, key=lambda p: float(p["v"]))
+        hi = max(chunk, key=lambda p: float(p["v"]))
+        out.append(lo)
+        if hi is not lo:
+            out.append(hi)
+    return sorted(out, key=lambda p: p["t"])
+
+
 def parse_when(value):
     """시각 한 개를 유닉스 초로. 못 읽으면 None — 지어내지 않는다.
 

@@ -3169,6 +3169,21 @@ def _ask_tool_checks() -> int:
     a, b = asktools.window_bounds({"from": 200, "to": 100}, now=1787000000)
     assert a < b, (a, b)
 
+    # ①-c **구간을 골고루 보되 극단은 살린다.** 최신순으로 상한만큼만 받으면 긴
+    #      구간에서 앞부분이 통째로 잘려 **먼저 난 스파이크를 못 본다**
+    #      (2026-08-18 랩 실측: 4시간 구간에서 최근 1시간만 봤다).
+    pts = [{"t": i, "v": 1.0} for i in range(600)]
+    pts[10]["v"] = 99.0          # 앞쪽 스파이크
+    pts[590]["v"] = 98.0         # 뒤쪽 스파이크
+    got = asktools.downsample(pts, 60)
+    assert len(got) <= 60 * 2, len(got)
+    vals = [p["v"] for p in got]
+    assert max(vals) >= 99.0, "앞쪽 스파이크가 사라졌다"
+    assert 98.0 in vals, "뒤쪽 스파이크가 사라졌다"
+    assert got == sorted(got, key=lambda p: p["t"]), "시각순이 아니다"
+    # 적으면 그대로 둔다 — 없는 가공을 하지 않는다
+    assert asktools.downsample(pts[:20], 60) == pts[:20]
+
     # ② 로그 필터는 정규식이 아니라 문자열이다. 질의문을 깨뜨릴 글자는 거부한다.
     for bad in ('a"b', "a}b", "a{b", "a\nb", "a\\b", "x" * 200):
         ok, why = asktools.check_filter(bad)
@@ -3198,7 +3213,7 @@ def _ask_tool_checks() -> int:
     body = asktools.build_wazuh_query("vm-a.example", 60, 7, 1786590000)
     assert body["query"]["bool"]["filter"][0]["term"]["agent.name"] == "vm-a.example", body
     assert set(body) <= {"size", "sort", "query", "_source"}, body
-    return 27
+    return 32
 
 
 def _ask_dispatch_checks() -> int:

@@ -514,7 +514,7 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
     """
     import httpx
 
-    from . import collector
+    from . import asktools, collector
 
     try:
         zbx = collector.ZabbixClient(source=entry.get("source", ""))
@@ -540,15 +540,21 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
                 vt = int(it.get("value_type", 3))
                 hist = []
                 if vt in (0, 3):         # 수치형만 추이가 뜻이 있다
+                    # **구간 전체를 받아 놓고 줄인다.** 상한만큼만 최신순으로 받으면
+                    # 앞부분이 잘려 먼저 난 스파이크를 못 본다(2026-08-18 실측).
                     hist = await zbx.call(c, "history.get", {
                         "itemids": it["itemid"], "history": vt,
                         "time_from": start, "time_till": end, "output": "extend",
-                        "sortfield": "clock", "sortorder": "DESC", "limit": 60})
+                        "sortfield": "clock", "sortorder": "ASC",
+                        "limit": asktools.HISTORY_FETCH_MAX})
+                raw = [{"t": int(h["clock"]), "v": h["value"]} for h in hist]
+                shown = asktools.downsample(raw)
                 out.append({
                     "name": it.get("name"), "key": it.get("key_"),
                     "units": it.get("units"), "last": it.get("lastvalue"),
-                    "series": [{"t": int(h["clock"]), "v": h["value"]}
-                               for h in reversed(hist)],
+                    # 몇 점을 읽어 몇 점으로 줄였는지 함께 준다. 안 알리면 모델이
+                    # 실린 점이 전부라고 여긴다.
+                    "sampled_from": len(raw), "series": shown,
                 })
     except Exception as e:
         log.warning("지표 조회 실패: %s", e)
