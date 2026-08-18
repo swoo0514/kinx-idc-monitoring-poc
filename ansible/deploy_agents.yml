@@ -12,6 +12,12 @@
     # 사내는 internal, MSP 고객은 인벤토리에서 customer=customer-b 처럼 준다(DEPLOY_GUIDE 참고).
     host_metadata: "linux-3agent-bundle:{{ customer | default('internal') }}"
     zabbix_release_rpm: "https://repo.zabbix.com/zabbix/7.0/rhel/9/x86_64/zabbix-release-latest-7.0.el9.noarch.rpm"
+    # 명부 조각을 모을 자리. 게이트웨이가 읽는 hosts.yml 은 이 조각들로 만든다.
+    # 손으로 적은 항목과 안 섞이게 조각은 별도 디렉토리에 둔다.
+    registry_fragment_dir: "{{ playbook_dir }}/registry.d"
+    # 감시 서버 이름과 영역. 자동등록 그룹을 가르는 customer 와 같은 축이다.
+    zabbix_source: "zabbix-{{ customer | default('internal') }}"
+    host_realm: "{{ customer | default('internal') }}"
 
   tasks:
     - name: agent_identity 기본값 = 시스템 FQDN
@@ -117,6 +123,26 @@
         state: started
         daemon_reload: true
       loop: [zabbix-agent2, alloy, wazuh-agent]
+
+    # 이름 세 개가 확정되는 순간은 여기다. 세 에이전트에 같은 agent_identity 를 심었으므로
+    # 그 사실을 기록해 둔다. 안 적으면 게이트웨이가 나중에 인터페이스 dns 를 훑어 추측하고,
+    # 추측은 틀릴 수 있으며 조회가 실패하면 아예 비어 버린다.
+    - name: 명부 조각 남기기 (게이트웨이가 이름을 추측하지 않게)
+      delegate_to: localhost
+      become: false
+      ansible.builtin.copy:
+        dest: "{{ registry_fragment_dir }}/{{ agent_identity }}.yml"
+        mode: "0644"
+        content: |
+          # {{ agent_identity }} — deploy_agents.yml 이 남김. 손으로 고치지 말 것.
+          # 고칠 일이 있으면 플레이북을 고치고 다시 배포한다.
+          - name: {{ zabbix_host_name | default(agent_identity) }}
+            source: {{ zabbix_source }}
+            realm: {{ host_realm }}
+            loki: {{ agent_identity }}
+            wazuh: {{ agent_identity }}
+            logs: true
+            security: true
 
   handlers:
     - name: restart zabbix-agent2

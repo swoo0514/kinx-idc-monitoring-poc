@@ -280,7 +280,7 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _item_rank_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
+                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _item_rank_checks() + _registry_fill_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
                     + _panel_route_checks()
                     + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
@@ -3761,6 +3761,50 @@ def _item_rank_checks() -> int:
     assert not (asktools.note_if_cut({"metrics": []}, total=3, shown=3,
                                      dropped=[]).get("note") or "")
     return 8
+
+
+
+def _registry_fill_checks() -> int:
+    """명부가 이름의 주인 노릇을 하는가.
+
+    지금은 세 시스템의 이름을 **살아 있는 조회로 추측**한다. 인터페이스 목록을 훑어 점이
+    든 첫 dns 를 고른다. 추측이라 틀릴 수 있고 조회가 실패하면 빈다. 그 세 이름이
+    확정되는 순간은 따로 있다 — Ansible 이 세 에이전트에 같은 FQDN 을 심는 때다.
+
+    읽는 쪽(`_resolve_label` → `registry.label`)은 이미 있다. 여기서는 **명부가 인터페이스
+    추측을 실제로 이기는지**와 **중복 항목이 조용히 사라지지 않는지**를 잠근다.
+    """
+    import logging
+
+    from . import collector, registry
+
+    saved = list(registry._ENTRIES)
+    try:
+        # ① 명부가 이기면 인터페이스를 안 본다. 둘이 다를 때가 진짜 시험이다.
+        registry._ENTRIES = [{"name": "node1", "source": "zabbix-internal",
+                              "loki": "vm-target-001.novalocal",
+                              "wazuh": "vm-target-001.novalocal"}]
+        host_obj = {"interfaces": [{"dns": "node1.mgmt.local"}]}
+        got = collector._resolve_label("node1", host_obj, "zabbix-internal", "logs")
+        assert got == "vm-target-001.novalocal", got
+        assert collector._resolve_label("node1", host_obj, "zabbix-internal",
+                                        "security") == "vm-target-001.novalocal"
+
+        # ② 명부에 없으면 예전 경로로 떨어진다. 등록 안 된 호스트도 돌아야 한다.
+        got = collector._resolve_label("node9", host_obj, "zabbix-internal", "logs")
+        assert got == "node1.mgmt.local", got
+
+        # ③ **같은 이름을 두 줄 적으면 알린다.** 지금은 뒷줄이 조용히 무시된다.
+        registry._ENTRIES = [
+            {"name": "node1", "source": "zabbix-internal", "loki": "a"},
+            {"name": "node1", "source": "zabbix-internal", "loki": "b"},
+        ]
+        assert registry.duplicates() == [("zabbix-internal", "node1")],             registry.duplicates()
+        registry._ENTRIES = [{"name": "node1", "source": "zabbix-internal"}]
+        assert registry.duplicates() == []
+    finally:
+        registry._ENTRIES = saved
+    return 6
 
 
 def _ask_dispatch_checks() -> int:

@@ -356,6 +356,10 @@ async def gen_registry(source: str = "zabbix-internal", limit: int = 500):
                     known_wz.add(h["host"])
 
     print("# 호스트 명부 초안 — probe.py registry 로 생성. 읽고 고친 뒤 저장한다.")
+    print("# ⚠ loki·wazuh 값은 **추측이다.** 인터페이스 dns 를 훑어 점이 든 첫 값을")
+    print("#   골랐다. 그대로 저장하면 추측이 사실로 굳는다. 정답은 배포가 남기는")
+    print("#   명부 조각이다 — ansible/deploy_agents.yml + assemble_registry.yml.")
+    print("#   이 초안은 그 배포를 안 거친 옛 호스트를 메울 때만 쓴다.")
     print("# logs·security 는 '그 축이 있는가'다. false 면 조회하지 않는다.")
     print("# realm 은 감시 영역. 감시 서버가 하나면 전부 같은 값이면 된다.")
     print("hosts:")

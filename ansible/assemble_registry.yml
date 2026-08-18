@@ -1,0 +1,80 @@
+---
+# 명부 조각을 모아 게이트웨이가 읽는 hosts.yml 을 만든다. 근거는 ansible/DEPLOY_GUIDE.md.
+#
+# 왜 조각을 모으는가. 호스트의 이름 세 개(Zabbix 이름 / Loki 라벨 / Wazuh 에이전트명)가
+# 확정되는 순간은 배포할 때다. 그때 남긴 조각을 여기서 한 파일로 합친다. 안 그러면
+# 게이트웨이가 나중에 인터페이스 dns 를 훑어 추측하고, 추측은 틀릴 수 있으며 조회가
+# 실패하면 아예 빈다.
+#
+# 손으로 적은 항목은 registry.manual.yml 에 둔다. 배포가 남긴 조각과 섞이면 어느 쪽이
+# 사실인지 알 수 없다.
+#
+#   ansible-playbook assemble_registry.yml
+#   ansible-playbook assemble_registry.yml -e gateway_host=core   # 게이트웨이로 배달까지
+- name: Assemble host registry from deploy fragments
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    registry_fragment_dir: "{{ playbook_dir }}/registry.d"
+    manual_file: "{{ playbook_dir }}/registry.manual.yml"
+    out_file: "{{ playbook_dir }}/hosts.yml"
+    # 게이트웨이가 읽는 자리. HOST_REGISTRY_FILE 과 같아야 한다.
+    gateway_registry_path: "~/.kinx-gateway/hosts.yml"
+
+  tasks:
+    - name: 조각 디렉토리 확인
+      ansible.builtin.file:
+        path: "{{ registry_fragment_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: 조각 목록
+      ansible.builtin.find:
+        paths: "{{ registry_fragment_dir }}"
+        patterns: "*.yml"
+      register: fragments
+
+    - name: 조각이 하나도 없으면 알린다
+      ansible.builtin.debug:
+        msg: >-
+          조각이 없다. deploy_agents.yml 을 한 번도 안 돌렸거나 registry_fragment_dir 이
+          다르다. 이대로 만들면 명부가 비어 게이트웨이가 예전처럼 추측한다.
+      when: fragments.matched | int == 0
+
+    - name: 손으로 적은 항목 읽기 (없으면 빈 것으로)
+      ansible.builtin.slurp:
+        src: "{{ manual_file }}"
+      register: manual_raw
+      failed_when: false
+
+    # 조각을 이어 붙인다. 각 조각은 목록 항목 하나이므로 그대로 이으면 된다.
+    - name: hosts.yml 만들기
+      ansible.builtin.copy:
+        dest: "{{ out_file }}"
+        mode: "0644"
+        content: |
+          # 자동 생성 — assemble_registry.yml. 손으로 고치지 말 것.
+          # 배포가 남긴 조각({{ registry_fragment_dir }})과 손으로 적은 항목
+          # ({{ manual_file }})을 합친 결과다. 고칠 것이 있으면 그쪽을 고치고 다시 만든다.
+          hosts:
+          {% for f in fragments.files | sort(attribute='path') %}
+          {{ lookup('file', f.path) | regex_replace('(?m)^#.*$', '') | trim | indent(2, true) }}
+          {% endfor %}
+          {% if manual_raw.content is defined %}
+          {{ manual_raw.content | b64decode | trim | indent(2, true) }}
+          {% endif %}
+
+    - name: 결과 요약
+      ansible.builtin.debug:
+        msg: "조각 {{ fragments.matched }}개 → {{ out_file }}"
+
+    # 게이트웨이 호스트를 주면 배달까지 한다. 안 주면 파일만 만든다.
+    - name: 게이트웨이로 배달
+      ansible.builtin.copy:
+        src: "{{ out_file }}"
+        dest: "{{ gateway_registry_path }}"
+        mode: "0644"
+      delegate_to: "{{ gateway_host }}"
+      when: gateway_host is defined

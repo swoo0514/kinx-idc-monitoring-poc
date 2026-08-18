@@ -51,6 +51,10 @@ def _load():
                  PATH, len(_ENTRIES), len(_SOURCES))
         if len(_ENTRIES) != len(rows):
             log.warning("명부에서 이름 없는 항목 %d건을 건너뛰었다", len(rows) - len(_ENTRIES))
+        dup = duplicates()
+        if dup:
+            log.warning("명부에 같은 이름이 두 번 적힌 항목 %d건 — 앞줄이 이긴다: %s",
+                        len(dup), ", ".join("%s/%s" % (s or "-", n) for s, n in dup))
     except Exception as e:
         _LOAD_ERROR = str(e)
         # 조용히 비우면 명부에 적어 둔 성질이 통째로 무시되고 아무도 모른다.
@@ -135,6 +139,21 @@ def realm(source: str, host: str, env_map: dict) -> str:
     if source in env_map:
         return env_map[source]
     return source or ""
+
+
+def duplicates() -> list:
+    """같은 `(source, name)` 이 두 줄 이상인 것. 반환 `[(source, name), ...]`.
+
+    지금은 뒷줄이 조용히 무시된다. 배포가 명부 조각을 자동으로 남기기 시작하면 손으로
+    적은 줄과 겹칠 수 있고, 그때 어느 쪽이 이겼는지 아무도 모르면 안 된다.
+    """
+    seen, dup = set(), []
+    for e in _ENTRIES:
+        key = (str(e.get("source") or ""), str(e.get("name") or ""))
+        if key in seen and key not in dup:
+            dup.append(key)
+        seen.add(key)
+    return dup
 
 
 def label(source: str, host: str, axis: str) -> str:
