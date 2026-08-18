@@ -280,7 +280,7 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _model_tier_checks() + _graph_state_checks()
+                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
                     + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
@@ -3557,6 +3557,50 @@ def _graph_state_checks() -> int:
                                  max_calls=6, stop_now=lambda: True,
                                  answered=lambda: False) is False
     return 14
+
+
+
+def _prompt_file_checks() -> int:
+    """프롬프트를 파일에서 읽는가.
+
+    동기분 코드는 노드마다 프롬프트를 .md 한 장으로 둔다. 코드를 안 건드리고 문구만
+    고칠 수 있다. 다만 **파일이 없다고 기동을 막으면 안 된다** — 배포에서 파일 하나가
+    빠졌다고 봇 전체가 죽는 것이 문구가 조금 옛것인 것보다 나쁘다.
+    """
+    import os
+    import tempfile
+
+    from . import prompts
+
+    d = tempfile.mkdtemp(prefix="prompt-")
+    saved = prompts.PROMPT_DIR
+    try:
+        prompts.PROMPT_DIR = d
+        prompts.forget()
+        # ① 파일이 없으면 예비 문구로 떨어진다.
+        assert prompts.load("ask", "예비 문구") == "예비 문구"
+
+        # ② 파일이 있으면 그 내용이 쓰인다.
+        with open(os.path.join(d, "ask.md"), "w", encoding="utf-8") as f:
+            f.write("파일에서 온 문구" + chr(10))
+        prompts.forget()
+        assert prompts.load("ask", "예비 문구") == "파일에서 온 문구"
+
+        # ③ **실행 중에 다시 읽지 않는다.** 문구가 바뀌면 캐시 접두사가 바뀌어 그때까지
+        #    쌓인 캐시가 통째로 무효가 된다.
+        with open(os.path.join(d, "ask.md"), "w", encoding="utf-8") as f:
+            f.write("몰래 바뀐 문구" + chr(10))
+        assert prompts.load("ask", "예비 문구") == "파일에서 온 문구"
+    finally:
+        prompts.PROMPT_DIR = saved
+        prompts.forget()
+
+    # ④ 실제 세 프롬프트가 비어 있지 않다.
+    from . import ask, llm
+    assert len(ask.system_prompt()) > 200
+    assert len(llm.TRIAGE_SYSTEM) > 200
+    assert len(llm.MONTHLY_SYSTEM) > 100
+    return 8
 
 
 def _ask_dispatch_checks() -> int:

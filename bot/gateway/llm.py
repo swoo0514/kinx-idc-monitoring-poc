@@ -309,7 +309,8 @@ def monthly_reply(stats: dict, incidents: list) -> dict:
     payload = build_monthly_context(stats, incidents, masker)
     user = ("다음은 한 고객사의 한 달치 사건 집계다. 월간 리포트의 분석 절을 작성하라.\n\n"
             + json.dumps(payload, ensure_ascii=False, indent=1))
-    res = egress.call(_adapters("write"), MONTHLY_SYSTEM, user, kind="monthly")
+    res = egress.call(_adapters("write"), _prompt("monthly", MONTHLY_SYSTEM),
+                      user, kind="monthly")
     if not res["degraded"]:
         return {**res, "text": masker.unmask(res["text"])}
     # 열화 — 리포트는 실시간이 아니므로 빈 문장 대신 "생성 실패"를 그대로 남긴다.
@@ -344,7 +345,7 @@ def triage_reply(context: dict, sev: str) -> dict:
     masked = build_llm_context(context, sev, masker)
     user = build_user_prompt(masked)
 
-    res = egress.call(_adapters(), TRIAGE_SYSTEM, user,
+    res = egress.call(_adapters(), _prompt("triage", TRIAGE_SYSTEM), user,
                       exempt=(sev == "SEV1"), kind="triage")
     if not res["degraded"]:
         text = masker.unmask(res["text"])
@@ -393,6 +394,13 @@ if __name__ == "__main__":
     print(build_user_prompt(masked))
     print("\n=== 가명 맵 (게이트웨이 내부에만 존재, 전송 안 됨) ===")
     print(json.dumps(masker._rev, ensure_ascii=False, indent=1))
+
+
+def _prompt(name: str, fallback: str) -> str:
+    """프롬프트를 파일에서. 없으면 코드에 있는 예비 문구."""
+    from . import prompts
+
+    return prompts.load(name, fallback)
 
 
 def cached_system(system: str):

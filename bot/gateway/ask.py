@@ -495,11 +495,17 @@ def strip_handles(text: str) -> str:
 
 
 def system_prompt() -> str:
-    """모델에 줄 지시문. 기본 규칙 뒤에 우리 환경의 사실을 붙인다."""
+    """모델에 줄 지시문. 기본 규칙 뒤에 우리 환경의 사실을 붙인다.
+
+    규칙 본문은 `bot/prompts/ask.md` 에서 읽는다. 파일이 없으면 아래 상수로 돈다.
+    """
+    from . import prompts
+
+    base = prompts.load("ask", ASK_SYSTEM)
     facts = load_facts()
     if not facts:
-        return ASK_SYSTEM
-    return ASK_SYSTEM + (chr(10) * 2) + "[이 환경의 사실]" + chr(10) + facts
+        return base
+    return base + (chr(10) * 2) + "[이 환경의 사실]" + chr(10) + facts
 
 
 def _blocks_text(content) -> str:
