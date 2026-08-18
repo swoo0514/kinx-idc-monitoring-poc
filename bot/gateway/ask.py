@@ -771,8 +771,13 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
             if not items:
                 return {"metrics": [], "status": collector.SOURCE_OK,
                         "note": "그 조건에 맞는 아이템이 없다. match 를 넓혀 보라"}
+            # **가나다순 앞에서 자르지 않는다.** 랩 실측으로 `cpu` 는 17개가 걸리고
+            # 앞 5개가 guest·idle 시간으로 채워져 CPU utilization 이 한 번도 안 들어왔다.
+            items = asktools.rank_items(items, match)
+            total = len(items)
+            dropped = [str(x.get("name") or "") for x in items[asktools.ITEM_LIMIT:]]
             out = []
-            for it in items[:5]:
+            for it in items[:asktools.ITEM_LIMIT]:
                 vt = int(it.get("value_type", 3))
                 raw, kind = [], ""
                 if vt in (0, 3):         # 수치형만 추이가 뜻이 있다
@@ -815,8 +820,10 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
         log.warning("지표 조회 실패: %s", e)
         return {"metrics": [], "status": collector.SOURCE_UNAVAILABLE,
                 "note": "조회하지 못했다. 이 결과를 '없음'으로 읽지 마라"}
-    return {"metrics": out, "matched": len(items), "window": [start, end],
-            "status": collector.SOURCE_OK}
+    return asktools.note_if_cut(
+        {"metrics": out, "matched": total, "window": [start, end],
+         "status": collector.SOURCE_OK},
+        total=total, shown=len(out), dropped=dropped)
 
 
 async def fetch_problems(entry) -> dict:

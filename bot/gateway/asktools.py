@@ -145,6 +145,51 @@ def window_label(start: int, end: int) -> str:
     return "%s → %s UTC" % (fmt(start), fmt(end))
 
 
+# 이름으로 아이템을 고를 때 몇 개까지 볼 것인가. 접두사가 캐시에 올라가 있어 여유가 있다.
+ITEM_LIMIT = 8
+
+_WORD = re.compile(r"[A-Za-z0-9]+")
+
+
+def rank_items(items: list, match: str) -> list:
+    """이름 검색 결과를 관련도 순으로. 검색어가 없으면 순서를 안 바꾼다.
+
+    Zabbix 는 이름 가나다순으로 돌려주는데, 그 앞쪽이 원하는 값이라는 보장이 없다.
+    2026-08-18 랩 실측으로 `cpu` 는 17개가 걸리고 앞 5개가 guest·idle·interrupt·iowait·
+    nice 로 채워져 **`CPU utilization` 이 한 번도 안 들어왔다.**
+
+    기준은 둘이다. 검색어가 낱말로 맞는 것을 먼저 보고, 그다음 이름이 짧은 것을 먼저
+    본다. 낱말이 적은 이름일수록 그 값을 직접 가리킨다("CPU utilization" 대 "CPU guest
+    nice time"). 잡음 낱말 목록을 코드에 박지 않는다 — 환경마다 다르고 금방 낡는다.
+    """
+    want = str(match or "").strip().lower()
+    if not want:
+        return list(items or [])
+
+    def score(it):
+        name = str(it.get("name") or "")
+        words = [w.lower() for w in _WORD.findall(name)]
+        exact = 0 if want in words else 1          # 낱말로 맞으면 앞
+        return (exact, len(words), len(name), name)
+
+    return sorted(items or [], key=score)
+
+
+def note_if_cut(out, total: int, shown: int, dropped: list):
+    """이름 검색이 잘렸으면 몇 개를 못 봤고 그것이 무엇인지 결과에 적는다.
+
+    이름은 짧아서 열 몇 개라도 부담이 없다. 안 알리면 모델은 실린 것이 전부인 줄 알고
+    "정상" 이라 답한다.
+    """
+    if not isinstance(out, dict) or int(total or 0) <= int(shown or 0):
+        return out
+    names = ", ".join(str(n) for n in (dropped or [])[:20])
+    msg = ("이름이 맞는 아이템 %d개 중 %d개만 실었다. 안 실은 것: %s. 원하는 것이 없으면 "
+           "match 를 더 좁혀서 다시 불러라." % (int(total), int(shown), names))
+    out["note"] = (str(out.get("note") or "") + " " + msg).strip()
+    return out
+
+
 def note_if_no_points(out):
     """지표를 받았는데 점이 0개면 그 사실을 결과에 적는다.
 

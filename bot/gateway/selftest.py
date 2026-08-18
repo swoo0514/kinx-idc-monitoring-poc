@@ -280,7 +280,7 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
+                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _item_rank_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
                     + _panel_route_checks()
                     + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
@@ -3718,6 +3718,49 @@ def _panel_route_checks() -> int:
         grafana.find_panel = saved_find
         nametable._terms = saved_terms
     return 6
+
+
+
+def _item_rank_checks() -> int:
+    """이름으로 아이템을 고를 때 정작 원하는 것이 빠지지 않는가.
+
+    2026-08-18 랩 실측: `cpu` 로 찾으면 17개가 걸리는데 정렬이 가나다순이라 앞 5개가
+    guest·idle·interrupt·iowait·nice 로 채워지고 **`CPU utilization` 이 한 번도 안
+    들어온다.** 사람이 "CPU 사용률 어때" 를 물으면 봇은 idle 시간을 보고 답한다.
+    잘렸다는 말도 없었다.
+    """
+    from . import asktools
+
+    names = ["CPU guest nice time", "CPU guest time", "CPU idle time",
+             "CPU interrupt time", "CPU iowait time", "CPU nice time",
+             "CPU softirq time", "CPU steal time", "CPU system time",
+             "CPU user time", "CPU utilization", "Load average (1m avg)",
+             "Load average (5m avg)", "Load average (15m avg)",
+             "Number of CPUs", "Context switches per second",
+             "Interrupts per second"]
+    items = [{"itemid": str(i), "name": n} for i, n in enumerate(names)]
+
+    ranked = asktools.rank_items(items, "cpu")
+    top = [x["name"] for x in ranked[:asktools.ITEM_LIMIT]]
+    assert "CPU utilization" in top, top
+    # 낱말이 적은 이름이 앞선다. 그 값을 직접 가리키기 때문이다.
+    order = [x["name"] for x in ranked]
+    assert order.index("CPU utilization") < order.index("CPU guest nice time"), order[:6]
+    # 낱말로 안 맞는 것("Number of CPUs" 의 CPUs)은 뒤로 간다.
+    assert order.index("CPU idle time") < order.index("Number of CPUs"), order
+
+    # 검색어가 없으면 순서를 바꾸지 않는다. 근거 없는 재배열은 하지 않는다.
+    assert [x["name"] for x in asktools.rank_items(items, "")] == names
+
+    # **잘렸으면 안 본 이름을 말한다.** 이 저장소는 다른 곳에서 잘림을 꼬박 알린다.
+    out = asktools.note_if_cut({"metrics": [{"name": n} for n in names[:8]]},
+                               total=17, shown=8, dropped=names[8:])
+    note = out.get("note") or ""
+    assert "17" in note and "8" in note, note
+    assert "Load average (1m avg)" in note, note
+    assert not (asktools.note_if_cut({"metrics": []}, total=3, shown=3,
+                                     dropped=[]).get("note") or "")
+    return 8
 
 
 def _ask_dispatch_checks() -> int:
