@@ -857,10 +857,10 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
         # 이력의 assistant 는 글만 남아 있다. 도구 호출 이력은 다시 싣지 않는다.
         lc.append(AIMessage(content=m["content"]) if m["role"] == "assistant"
                   else HumanMessage(content=m["content"]))
-    app = G.build(system, asktools.TOOL_SPECS, user, exec_tool, model_fn)
+    app = G.build(system, asktools.TOOL_SPECS, user, exec_tool, model_fn,
+                  guard=guard, result_bytes=RESULT_BYTES, max_calls=MAX_ROUNDS)
     state = {"messages": lc, "trace": [], "images": [], "spent": 0, "called": {},
-             "stopped": "", "guard": guard, "result_bytes": RESULT_BYTES,
-             "max_calls": MAX_ROUNDS}
+             "stopped": "", "error": ""}
     try:
         # 노드가 라운드마다 둘이라 프레임워크 상한은 넉넉히 두고, 실제 제한은 우리
         # `route` 가 건다. 프레임워크 상한에 먼저 닿으면 사람이 이유를 못 읽는다.

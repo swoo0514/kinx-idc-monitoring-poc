@@ -155,59 +155,90 @@ class ModelBlocked(Exception):
 # 그래프
 # ---------------------------------------------------------------------------
 
-def build(system: str, specs: list, user: str, run_tool, model_fn=None):
+def build(system: str, specs: list, user: str, run_tool, model_fn=None,
+          guard=None, result_bytes: int = 60000, max_calls: int = 6):
     """`(state) -> state` 로 도는 그래프를 만든다.
 
-    노드는 둘이다. 모델에게 묻는 자리와 도구를 실행하는 자리. 상한(라운드·시간·바이트)과
-    멈춤은 도구 자리에서 본다 — 모델을 부르기 전에 봐야 상한을 넘긴 호출이 안 나간다.
+    노드는 둘이다. 모델에게 묻는 자리와 도구를 실행하는 자리.
+
+    **상한과 멈춤 판단은 상태가 아니라 클로저로 받는다.** 상태에 함수를 넣으면 나중에
+    체크포인트를 켰을 때 직렬화할 수 없고, 상태 열쇠는 노드가 돌려준 것만 남으므로
+    한 노드가 빠뜨리면 조용히 사라진다(2026-08-18 랩 실측: `guard` 가 사라져 그래프가
+    통째로 실패했다).
     """
+    from typing import Any, Dict, List
+
+    try:                       # 3.9 는 typing 에 있고 상위 판은 typing_extensions 를 쓴다
+        from typing import TypedDict
+    except ImportError:        # pragma: no cover
+        from typing_extensions import TypedDict
+
     from langgraph.graph import END, StateGraph
 
     model = make_model(system, specs, user, model_fn)
+    stop_now = guard or (lambda: False)
 
-    async def ask_model(state: dict) -> dict:
+    class State(TypedDict, total=False):
+        """상태에 담는 것은 **노드 사이를 오가는 값**뿐이다.
+
+        열쇠를 여기 적어야 노드가 안 돌려준 값도 유지된다.
+        """
+        messages: List[Any]
+        trace: List[Dict[str, Any]]
+        images: List[Dict[str, Any]]
+        spent: int
+        called: Dict[str, int]
+        stopped: str
+        error: str
+
+    async def ask_model(state: State) -> dict:
         try:
             reply = await asyncio.to_thread(model.invoke, state["messages"])
         except ModelBlocked as e:
             return {"stopped": "llm_failed", "error": str(e)}
-        return {"messages": state["messages"] + [reply]}
+        except Exception as e:              # 가짜 모델이 터지는 경우까지 사람 문장으로
+            return {"stopped": "llm_failed", "error": str(e)}
+        return {"messages": list(state["messages"]) + [reply]}
 
-    async def use_tools(state: dict) -> dict:
+    async def use_tools(state: State) -> dict:
+        from langchain_core.messages import ToolMessage
+
         last = state["messages"][-1]
-        outs, trace, images = [], list(state.get("trace") or []), list(state.get("images") or [])
-        spent, stopped = int(state.get("spent") or 0), ""
+        trace = list(state.get("trace") or [])
+        images = list(state.get("images") or [])
         called = dict(state.get("called") or {})
+        spent, stopped, outs = int(state.get("spent") or 0), "", []
         for call in (last.tool_calls or []):
             name, args = call.get("name", ""), (call.get("args") or {})
             image, out, blob = await run_tool(name, args, called, len(trace) + 1)
             if image:
                 images.append(image)
             spent += len(blob)
-            if spent > state["result_bytes"]:
+            if spent > result_bytes:
                 out = {"error": "조회 결과가 예산을 넘어 더 못 본다. 지금까지 본 것으로 답하라"}
                 blob = _json.dumps(out, ensure_ascii=False)
                 stopped = "budget"
             trace.append({"tool": name, "args": args,
                           "error": (out or {}).get("error", ""), "bytes": len(blob)})
             outs.append((call.get("id"), blob))
-        from langchain_core.messages import ToolMessage
-        msgs = state["messages"] + [ToolMessage(content=b, tool_call_id=i) for i, b in outs]
+        msgs = list(state["messages"]) + [ToolMessage(content=b, tool_call_id=i)
+                                          for i, b in outs]
         return {"messages": msgs, "trace": trace, "images": images,
                 "spent": spent, "called": called, "stopped": stopped}
 
-    def route(state: dict) -> str:
+    def route(state: State) -> str:
         if state.get("stopped"):
             return END
         last = state["messages"][-1]
         if not getattr(last, "tool_calls", None):
             return END
-        if state["guard"]():                     # 시간 상한·사람이 누른 멈춤
+        if stop_now():                       # 시간 상한·사람이 누른 멈춤
             return END
-        if len(state.get("trace") or []) >= state["max_calls"]:
+        if len(state.get("trace") or []) >= max_calls:
             return END
         return "tools"
 
-    g = StateGraph(dict)
+    g = StateGraph(State)
     g.add_node("model", ask_model)
     g.add_node("tools", use_tools)
     g.set_entry_point("model")
