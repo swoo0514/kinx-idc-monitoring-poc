@@ -114,7 +114,21 @@ async def forward(body: dict, headers: dict) -> tuple:
         return r.status_code, {"error": {"message": r.text[:300]}}
 
 
-async def handle(body: dict, tenant_scoped: bool = False) -> tuple:
+def blocked_when_empty() -> bool:
+    """이름 표가 비었을 때 막을 것인가.
+
+    **호출자가 신고한 값으로 정하지 않는다.** 예전에는 요청 본문의 `metadata.user_id` 가
+    "msp" 로 시작하면 막고 아니면 통과시켰다. 고객사 도구가 `customer-msp-01` 로 적으면
+    통과하고, 사내 사용자 `mspark` 는 막혔다. 같은 앱의 질의 경로는 명부와 환경변수로만
+    영역을 정하는데 여기만 호출자 말을 믿었다.
+
+    기본은 차단이다. 못 가리면 안 내보낸다. 통과가 필요한 배포는 운영자가 파일에 적는다.
+    """
+    v = os.environ.get("PROXY_ALLOW_UNMASKED", "").strip().lower()
+    return v not in ("1", "true", "yes")
+
+
+async def handle(body: dict) -> tuple:
     """마스킹 → 중계 → 역치환. 반환 (상태코드, 응답 dict)."""
     if body.get("stream"):
         return 400, {"error": {"type": "unsupported",
@@ -126,9 +140,11 @@ async def handle(body: dict, tenant_scoped: bool = False) -> tuple:
 
     if not nametable.terms():
         log.error("이름 표가 비었다 — 가릴 대상을 모른다 (§23-6)")
-        if tenant_scoped:
+        if blocked_when_empty():
             return 503, {"error": {"type": "masking_unavailable",
-                                   "message": "이름 표가 비어 마스킹을 보장할 수 없다"}}
+                                   "message": "이름 표가 비어 마스킹을 보장할 수 없다. "
+                                              "통과가 필요하면 PROXY_ALLOW_UNMASKED 를 "
+                                              "운영자가 설정에 적는다"}}
 
     mk = build_masker()
     masked = mask_json(body, mk)

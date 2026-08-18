@@ -333,8 +333,9 @@ async def llm_messages(req: Request, x_api_key: str = Header(default=""),
         body = await req.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid json")
-    tenant = str(body.get("metadata", {}).get("user_id", "")).startswith("msp")
-    status, resp = await llm_proxy.handle(body, tenant_scoped=tenant)
+    # **호출자가 신고한 값으로 막을지 정하지 않는다.** 판단은 proxy 안에서 운영자 설정으로
+    # 한다. 예전에는 metadata.user_id 가 "msp" 로 시작하는지를 봤다.
+    status, resp = await llm_proxy.handle(body)
     return JSONResponse(status_code=status, content=resp)
 
 

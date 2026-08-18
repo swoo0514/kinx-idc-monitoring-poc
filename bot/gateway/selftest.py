@@ -280,7 +280,7 @@ def main():
     nametable_checks = _nametable_checks()
     proxy_checks = (_proxy_mask_checks() + _ask_masking_checks()
                     + _ask_question_checks() + _ask_scope_checks()
-                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _item_rank_checks() + _registry_fill_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
+                    + _ask_tool_checks() + _ask_result_checks() + _tool_schema_checks() + _cache_checks() + _item_rank_checks() + _registry_fill_checks() + _proxy_gate_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
                     + _panel_route_checks()
                     + _ask_dispatch_checks()
                     + _ask_table_checks() + _ask_loop_checks()
@@ -3790,6 +3790,19 @@ def _registry_fill_checks() -> int:
         assert collector._resolve_label("node1", host_obj, "zabbix-internal",
                                         "security") == "vm-target-001.novalocal"
 
+        # ①-b **추측이 갈릴 때는 조용히 넘어가지 않는다.** FQDN 이 둘이면 어느 쪽이 그
+        #      축의 이름인지 고를 근거가 없다. 관리망 쪽이 먼저 오면 로그가 0줄이 되고
+        #      사람은 "로그 없음" 으로 읽는다.
+        two = {"interfaces": [{"dns": "node1.mgmt.local"}, {"dns": "node1.svc.local"}]}
+        seen = []
+        saved_warn = collector.log.warning
+        try:
+            collector.log.warning = lambda *a, **k: seen.append(a[0] if a else "")
+            collector._resolve_label("node9", two, "zabbix-internal", "logs")
+        finally:
+            collector.log.warning = saved_warn
+        assert seen, "FQDN 이 둘인데 아무 말도 안 했다"
+
         # ② 명부에 없으면 예전 경로로 떨어진다. 등록 안 된 호스트도 돌아야 한다.
         got = collector._resolve_label("node9", host_obj, "zabbix-internal", "logs")
         assert got == "node1.mgmt.local", got
@@ -3838,6 +3851,41 @@ def _registry_fill_checks() -> int:
         assert "OK" in (r.stdout or ""), (r.stdout, r.stderr[-300:])
     finally:
         registry._ENTRIES = saved
+    return 6
+
+
+
+def _proxy_gate_checks() -> int:
+    """마스킹을 보장 못 할 때 무엇이 나가는가.
+
+    지금은 **호출자가 스스로 적은** `metadata.user_id` 가 "msp" 로 시작할 때만 막았다.
+    고객사 도구가 `customer-msp-01` 로 적으면 통과하고, 사내 사용자 `mspark` 는 막히며,
+    같은 앱의 질의 경로는 "호출자가 신고한 값은 쓰지 않는다" 를 지킨다. 원칙이 갈렸다.
+    """
+    import os
+
+    from . import proxy
+
+    saved = os.environ.get("PROXY_ALLOW_UNMASKED")
+    try:
+        os.environ.pop("PROXY_ALLOW_UNMASKED", None)
+        # ① 기본은 차단이다. 호출자가 무엇을 적었든 상관없다.
+        assert proxy.blocked_when_empty() is True
+        # ② 운영자가 파일에 적으면 통과한다. 호출자의 주장이 아니다.
+        os.environ["PROXY_ALLOW_UNMASKED"] = "1"
+        assert proxy.blocked_when_empty() is False
+        os.environ["PROXY_ALLOW_UNMASKED"] = "0"
+        assert proxy.blocked_when_empty() is True
+    finally:
+        if saved is None:
+            os.environ.pop("PROXY_ALLOW_UNMASKED", None)
+        else:
+            os.environ["PROXY_ALLOW_UNMASKED"] = saved
+
+    # ③ 호출자가 적은 값은 판정에 안 쓴다. 함수 서명에서 사라져야 한다.
+    import inspect
+    src = inspect.getsource(proxy.handle)
+    assert "tenant_scoped" not in src, "호출자 신고 값이 아직 판정에 쓰인다"
     return 6
 
 

@@ -151,6 +151,13 @@ async def _zabbix_alert_context(zbx: ZabbixClient, client: httpx.AsyncClient,
     )
     host = {}
     hosts = (trigger[0].get("hosts") if trigger else None) or []
+    if len(hosts) > 1:
+        # 랩에서는 트리거 3,000개 중 0건이었다(2026-08-18). 실환경(사내 321대)에 있으면
+        # 이 줄로 드러난다. 조용히 첫 번째를 쓰면 튄 것이 vm-b 인데 vm-a 의 로그를 보고
+        # 판정 행에도 vm-a 가 남는다.
+        log.warning("트리거 %s 가 호스트 %d개를 참조한다 — 첫 번째(%s)로 조사한다: %s",
+                    trigger_id, len(hosts), hosts[0].get("host", "?"),
+                    ", ".join(h.get("host", "?") for h in hosts[:5]))
     if hosts:
         got = await zbx.call(client, "host.get", {
             "hostids": hosts[0]["hostid"], "output": ["hostid", "host", "name", "status"],
@@ -450,6 +457,16 @@ def _resolve_label(zbx_host: str, host_obj: dict, source: str = "", axis: str = 
             mapping[k.strip()] = v.strip()
     if zbx_host in mapping:
         return mapping[zbx_host]
+    fqdns = [(i.get("dns") or "").strip() for i in (host_obj.get("interfaces") or [])
+             if "." in (i.get("dns") or "")]
+    if len(fqdns) > 1:
+        # 어느 쪽이 그 축의 이름인지 고를 근거가 없다. 관리망 FQDN 이 먼저 오면 로그가
+        # 0줄로 나오고 사람은 "로그 없음" 으로 읽는다. 명부에 적으면 이 경로를 안 탄다.
+        log.warning("%s 에 FQDN 인터페이스가 %d개다 — 첫 번째(%s)를 쓴다. 명부에 %s 를 "
+                    "적으면 추측하지 않는다: %s",
+                    zbx_host, len(fqdns), fqdns[0],
+                    {"logs": "loki", "security": "wazuh"}.get(axis, axis),
+                    ", ".join(fqdns[:5]))
     for iface in (host_obj.get("interfaces") or []):
         dns = (iface.get("dns") or "").strip()
         if "." in dns:
