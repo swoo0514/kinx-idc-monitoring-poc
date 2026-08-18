@@ -104,12 +104,18 @@ def _owner(cid: str) -> str:
         return ""
 
 
-def append(cid: str, user: str, role: str, text: str) -> bool:
-    """한 줄 더한다. **주인이 아니면 아무것도 하지 않는다.**"""
+def append(cid: str, user: str, role: str, text: str, images: list = None) -> bool:
+    """한 줄 더한다. **주인이 아니면 아무것도 하지 않는다.**
+
+    답에 붙었던 그림도 함께 남긴다. 본문만 저장하면 새로고침한 순간 화면에서 그림이
+    사라진다(2026-08-18 실측). 그림은 바이트가 아니라 주소라서 부피는 작다.
+    """
     if _backend is None or not cid or _owner(cid) != user:
         return False
-    row = json.dumps({"role": role, "content": text, "at": time.time()},
-                     ensure_ascii=False)
+    body = {"role": role, "content": text, "at": time.time()}
+    if images:
+        body["images"] = images
+    row = json.dumps(body, ensure_ascii=False)
     now = time.time()
     if _backend == "mem":
         _mem["convo"].setdefault(cid, []).append(row)

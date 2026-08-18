@@ -253,7 +253,8 @@ async def ask_endpoint(req: AskRequest, request: Request,
                             sid=req.session or cid or user, user=user, panel=req.panel)
     convo.append(cid, user, "user", req.question)
     if res.get("text"):
-        convo.append(cid, user, "assistant", res["text"])
+        # 그림도 함께 남긴다. 안 남기면 새로고침한 순간 화면에서 사라진다.
+        convo.append(cid, user, "assistant", res["text"], images=res.get("images"))
     res["convo_id"] = cid
     log.info("ask user=%s rounds=%s stopped=%s", user, res.get("rounds"),
              res.get("stopped"))

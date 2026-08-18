@@ -3903,6 +3903,16 @@ def _convo_checks() -> int:
         assert convo.load(cid, "kim") == [], "남의 대화가 열렸다"
         assert len(convo.load(cid, "hong")) == 2
 
+        # **그림도 함께 남긴다.** 답 본문만 저장하면 새로고침한 순간 화면에 붙어 있던
+        # 패널 그림이 사라진다(2026-08-18 실측). 주소만 남기므로 부피는 작다.
+        imgs = [{"id": "img-1234", "title": "복제 지연",
+                 "url": "/render/d-solo/abc?panelId=7"}]
+        convo.append(cid, "hong", "assistant", "답 2", images=imgs)
+        rows = convo.load(cid, "hong")
+        assert rows[-1].get("images") == imgs, rows[-1]
+        # 그림이 없는 줄에는 아무것도 붙이지 않는다
+        assert not rows[-2].get("images"), rows[-2]
+
         # ② 제목은 첫 질문에서 만들되 사람이 바꿀 수 있다
         convo.rename(cid, "hong", "백업 때문에 밀린 복제")
         assert convo.listing("hong")[0]["title"] == "백업 때문에 밀린 복제"

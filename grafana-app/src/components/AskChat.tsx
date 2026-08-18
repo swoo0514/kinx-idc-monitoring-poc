@@ -64,7 +64,8 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
     setConvoId(id);
     try {
       const r: any = await getBackendSrv().get(GATEWAY + '/ask/convos/' + id);
-      setTurns((r?.messages || []).map((m: any) => ({ role: m.role, text: m.content })));
+      setTurns((r?.messages || []).map((m: any) => ({
+        role: m.role, text: m.content, images: m.images })));
     } catch (e: any) {
       setErr(String(e?.message || e));
     }
