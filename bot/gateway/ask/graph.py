@@ -129,8 +129,13 @@ def to_ai_message(reply: dict):
         usage = {"input_tokens": inp, "output_tokens": out, "total_tokens": inp + out,
                  "input_token_details": {"cache_read": cache_read,
                                          "cache_creation": cache_write}}
+    # **모델 이름도 규약대로 적는다.** 토큰만 실으면 추적 화면이 개수는 보여 주지만
+    # 단가를 모른다 — 어느 모델인지 알아야 비용이 계산된다. 우리는 모델 자리를 직접
+    # 만들었으므로 이 두 값을 아무도 대신 채워 주지 않는다.
     return AIMessage(content=text, tool_calls=calls, usage_metadata=usage,
-                     response_metadata={"usage": u})
+                     response_metadata={"usage": u,
+                                        "ls_provider": "anthropic",
+                                        "ls_model_name": reply.get("model") or ""})
 
 
 def make_model(system: str, specs: list, user: str, model_fn=None):

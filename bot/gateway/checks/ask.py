@@ -1118,9 +1118,15 @@ def _usage_metadata_checks() -> int:
         return 0
     msg = graph.to_ai_message({
         "content": [{"type": "text", "text": "끝"}],
+        "model": "claude-haiku-4-5-20251001",
         "usage": {"input_tokens": 326, "output_tokens": 12,
                   "cache_read_input_tokens": 8803, "cache_creation_input_tokens": 0},
     })
+    # **모델 이름이 없으면 개수는 떠도 단가를 모른다.** 토큰만 싣고 끝내면 비용 칸이
+    # 비고, 그러면 비용을 보려고 켠 뜻이 없다.
+    rm = getattr(msg, "response_metadata", None) or {}
+    assert rm.get("ls_model_name") == "claude-haiku-4-5-20251001", rm
+    assert rm.get("ls_provider") == "anthropic", rm
     um = getattr(msg, "usage_metadata", None)
     assert um, "토큰 수를 안 실었다 — 추적 화면의 비용 칸이 빈다"
     assert um["input_tokens"] == 326 + 8803, um
