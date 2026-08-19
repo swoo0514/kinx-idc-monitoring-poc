@@ -226,6 +226,12 @@ def sanitize_question(text: str, mk: masking.Masker) -> dict:
     raw = _CTRL_RE.sub("", str(text or "")).strip()
     if not raw:
         return {"ok": False, "text": "", "reason": "질문이 비어 있다"}
+    # **가릴 수 없으면 안 보낸다.** 표가 비면 아는 이름이 없어 누수 검사가 통과해 버린다.
+    # 프록시 경로는 같은 상황을 이미 막는데 질의 경로에는 그 게이트가 없었다(2026-08-19).
+    if masking.cannot_mask(mk):
+        return {"ok": False, "text": "",
+                "reason": ("이름 표가 비어 이름을 가릴 수 없다. 감시 서버 연결을 확인하라 "
+                           "(가림 없이 보내려면 PROXY_ALLOW_UNMASKED=1)")}
     if len(raw) > QUESTION_MAX_CHARS:
         return {"ok": False, "text": "",
                 "reason": "질문 길이가 %d자를 넘는다 (%d자)" % (QUESTION_MAX_CHARS, len(raw))}
@@ -586,8 +592,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_logs": lambda q, a, b, lim: fetch_logs(q, a, b, lim, mk),
         "fetch_security": lambda body: fetch_security(body, mk),
         "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
-        "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
-        "fetch_problems": lambda ent: fetch_problems(ent),
+        "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b, mk),
+        "fetch_problems": lambda ent: fetch_problems(ent, mk),
         # 패널 손잡이는 이번 턴 안에서만 뜻이 있다. 모델은 pnl-3 만 보고 대시보드
         # 식별자는 서버가 들고 있는다.
         "panel_refs": {},
@@ -898,7 +904,53 @@ def user_budget_ok(user: str, now: float = None) -> tuple:
     return True, ""
 
 
-async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
+def metric_item(it: dict, raw: list, shown: list, kind: str, mask) -> dict:
+    """지표 아이템 하나의 전송 형태.
+
+    **이름과 키를 이름 표에 거친다.** 인증서 감시 아이템 키가
+    `web.certificate.get[<도메인>,443]` 형태라, 가리지 않으면 "인증서 며칠 남았어" 한 마디에
+    고객 도메인이 통째로 나간다(2026-08-19 감사).
+    """
+    return {"name": mask(str(it.get("name") or "")),
+            "key": mask(str(it.get("key_") or "")),
+            "units": it.get("units"), "last": it.get("lastvalue"),
+            # 몇 점을 읽어 몇 점으로 줄였는지, 그리고 **무엇을 읽었는지** 준다.
+            # 안 알리면 모델이 실린 점이 전부라고 여기고 간격도 지어낸다.
+            "sampled_from": len(raw), "series": shown,
+            "source_kind": kind,
+            "point_meaning": ("1시간 최대값(추세). avg·min 동봉"
+                              if kind == "trend" else "원본 측정값")}
+
+
+def metrics_result(items: list, series: dict, masker: masking.Masker = None) -> dict:
+    """지표 결과 한 벌. 조회 없이 조립만 한다 — 검사가 실경로와 같은 조립을 쓰게."""
+    from . import asktools
+
+    mask = masker.mask if masker is not None else (lambda x: x)
+    out = []
+    for it in items or []:
+        raw = list((series or {}).get(str(it.get("itemid"))) or [])
+        out.append(metric_item(it, raw, asktools.downsample(raw), "history", mask))
+    return {"metrics": out}
+
+
+def problems_result(rows: list, masker: masking.Masker = None) -> dict:
+    """열린 문제 결과 한 벌.
+
+    Zabbix 문제명은 매크로가 풀린 문장이라 `Zabbix agent is not available on <호스트명>`
+    처럼 호스트명이 박혀 있다. 같은 값을 알림 경로는 이미 가린다(masking.py).
+    """
+    from . import collector
+
+    mask = masker.mask if masker is not None else (lambda x: x)
+    return {"problems": [{"name": mask(str(p.get("name") or "")),
+                          "sev": p.get("severity"),
+                          "t": int(p.get("clock") or 0)} for p in rows or []],
+            "status": collector.SOURCE_OK}
+
+
+async def fetch_metrics(entry: dict, match: str, start: int, end: int,
+                        masker: masking.Masker = None) -> dict:
     """호스트의 지표 추이. 아이템 이름·키에 든 문자열로 고른다.
 
     `at` 을 주면 그 시각 앞뒤를 본다. 사람은 "어제 2시에 튀었다" 로 묻지 "지금부터
@@ -908,6 +960,7 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
 
     from . import asktools, collector
 
+    mask = masker.mask if masker is not None else (lambda x: x)
     try:
         zbx = collector.ZabbixClient(source=entry.get("source", ""))
         async with httpx.AsyncClient() as c:
@@ -931,7 +984,7 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
             # 앞 5개가 guest·idle 시간으로 채워져 CPU utilization 이 한 번도 안 들어왔다.
             items = asktools.rank_items(items, match)
             total = len(items)
-            dropped = [str(x.get("name") or "") for x in items[asktools.ITEM_LIMIT:]]
+            dropped = [mask(str(x.get("name") or "")) for x in items[asktools.ITEM_LIMIT:]]
             out = []
             for it in items[:asktools.ITEM_LIMIT]:
                 vt = int(it.get("value_type", 3))
@@ -961,17 +1014,8 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
                             "limit": asktools.HISTORY_FETCH_MAX})
                         raw = [{"t": int(h["clock"]), "v": h["value"]} for h in hist]
                         kind = "history"
-                shown = asktools.downsample(raw)
-                out.append({
-                    "name": it.get("name"), "key": it.get("key_"),
-                    "units": it.get("units"), "last": it.get("lastvalue"),
-                    # 몇 점을 읽어 몇 점으로 줄였는지, 그리고 **무엇을 읽었는지** 준다.
-                    # 안 알리면 모델이 실린 점이 전부라고 여기고 간격도 지어낸다.
-                    "sampled_from": len(raw), "series": shown,
-                    "source_kind": kind,
-                    "point_meaning": ("1시간 최대값(추세). avg·min 동봉"
-                                      if kind == "trend" else "원본 측정값"),
-                })
+                out.append(metric_item(it, raw, asktools.downsample(raw), kind,
+                                       mask))
     except Exception as e:
         log.warning("지표 조회 실패: %s", e)
         return {"metrics": [], "status": collector.SOURCE_UNAVAILABLE,
@@ -982,7 +1026,7 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int) -> dict:
         total=total, shown=len(out), dropped=dropped)
 
 
-async def fetch_problems(entry) -> dict:
+async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
     """지금 열려 있는 문제. 호스트를 안 주면 허용된 감시 서버 전체."""
     import httpx
 
@@ -1002,9 +1046,8 @@ async def fetch_problems(entry) -> dict:
                     if not hosts:
                         continue
                     params["hostids"] = hosts[0]["hostid"]
-                for p in await zbx.call(c, "problem.get", params):
-                    out.append({"name": p.get("name"), "sev": p.get("severity"),
-                                "t": int(p.get("clock") or 0)})
+                out.extend(problems_result(
+                    await zbx.call(c, "problem.get", params), masker)["problems"])
     except Exception as e:
         log.warning("열린 문제 조회 실패: %s", e)
         return {"problems": [], "status": collector.SOURCE_UNAVAILABLE,

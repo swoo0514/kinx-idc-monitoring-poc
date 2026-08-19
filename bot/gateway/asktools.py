@@ -238,16 +238,21 @@ def note_if_no_points(out):
     return out
 
 
-def note_if_capped(out):
+def note_if_capped(out, limit: int = 0):
     """받을 수 있는 줄 수를 다 채웠으면 그 사실을 결과에 적는다.
 
     로그는 최신순으로 받는다. 상한을 채웠다는 것은 구간 앞부분이 안 실렸다는 뜻이다.
     안 알리면 모델은 실린 것이 그 구간 전부인 줄 알고 "없었다" 로 답한다.
+
+    **그 조회에 실제로 쓴 상한을 받는다.** 예전에는 알림 경로의 상수(300)와 견줬는데
+    질의는 늘 60줄로 조회하므로 통지가 한 번도 안 붙었다(2026-08-19 감사). 고쳤다고
+    적어 둔 고장이 임계값 불일치로 살아 있었다.
     """
     if not isinstance(out, dict):
         return out
     from . import collector
-    if int(out.get("fetched") or 0) >= collector.LOKI_FETCH_LIMIT:
+    cap = int(limit or 0) or collector.LOKI_FETCH_LIMIT
+    if int(out.get("fetched") or 0) >= cap:
         msg = ("받을 수 있는 줄 수를 다 채웠다. 최신 쪽만 실렸고 구간 앞부분은 안 들어왔다. "
                "구간을 좁히거나 contains 로 걸러서 다시 불러라.")
         out["note"] = (str(out.get("note") or "") + " " + msg).strip()
@@ -402,6 +407,8 @@ def build_wazuh_query(agent_name: str, start: int, end: int, min_level: int,
 # ---------------------------------------------------------------------------
 
 LOG_LIMIT_DEFAULT = 60
+# 모델이 더 달라고 할 수 있는 최대. 알림 경로가 받는 줄 수와 같다(collector.LOKI_FETCH_LIMIT).
+LOG_LIMIT_MAX = 300
 JUDGMENT_DAYS_DEFAULT = 7
 # 판정 이력은 90일까지 남는다(store.KEEP_DAYS). **분 단위 상한을 쓰면 안 된다** —
 # days 를 분 상한(1440)에 통과시켜 30일이 1일이 됐다(2026-08-18 실측).
@@ -416,11 +423,17 @@ JUDGMENT_DAYS_MAX = 90
 # 바뀌면 그 뒤 전부가 캐시에서 빠진다. 그래서 요청 내내 안 바뀌는 값(호스트 토큰)만
 # enum 으로 묶고, 턴 중에 생기는 값(그림 손잡이·조회 구간)은 코드가 검증한다.
 
-def _host_prop(desc: str, tokens=None) -> dict:
+def _host_prop(desc: str, tokens=None, allow_all: bool = False) -> dict:
+    """대상 호스트 인자. `allow_all` 이면 "전체" 를 뜻하는 빈 값도 고를 수 있다.
+
+    빈 값을 목록에 안 넣으면 설명이 "전체면 빈 문자열" 이어도 모델이 그 값을 넣지
+    못한다. 2026-08-19 실측으로 `open_problems` 를 필수 인자로 옮기면서 "열린 문제
+    전부" 가 통째로 막혔다. 설명과 목록이 어긋나면 목록이 이긴다.
+    """
     p = {"type": "string", "description": desc}
     if tokens:
         # 정렬은 필수다. 순서가 흔들리면 접두사 바이트가 달라져 캐시가 한 번도 안 걸린다.
-        p["enum"] = sorted(tokens)
+        p["enum"] = ([""] if allow_all else []) + sorted(tokens)
     return p
 
 
@@ -480,6 +493,9 @@ def build_tool_specs(table: dict = None) -> list:
               "그 호스트의 로그. 기간과 문자열 필터로 좁힌다. 정규식은 못 쓴다.",
               dict(_WINDOW_PROPS,
                    host=_host_prop("조회할 호스트 토큰", toks),
+                   limit={"type": "integer",
+                          "description": ("받을 줄 수. 기본 60, 최대 300. 잘렸다는 안내를 "
+                                          "받으면 늘려서 다시 부른다")},
                    contains={"type": "string",
                              "description": "이 문자열이 든 줄만. 세로줄로 이으면 "
                                             "그중 하나라도 든 줄(failed|timeout), 5개까지"}),
@@ -503,7 +519,7 @@ def build_tool_specs(table: dict = None) -> list:
                                          "(예: replication, cpu, memory)"}),
               ["host"]),
         _spec("open_problems", "그 호스트에 지금 열려 있는 문제(Zabbix).",
-              {"host": _host_prop("전체면 빈 문자열", toks)}, ["host"]),
+              {"host": _host_prop("전체면 빈 문자열", toks, allow_all=True)}, ["host"]),
         _spec("panel_image",
               "그 호스트의 관측 화면(패널)을 그림으로 붙인다. 사람이 보고 있는 그래프를 "
               "답과 함께 보여 줄 때 쓴다. 반환된 id 를 answer 의 image_ids 에 적는다.",
@@ -521,7 +537,7 @@ def build_tool_specs(table: dict = None) -> list:
                              "description": "대시보드 제목의 일부. 전체면 빈 문자열"}},
               ["dashboard"]),
         _spec("past_judgments", "봇이 전에 내린 판정 기록. 같은 일이 반복되는지 볼 때 쓴다.",
-              {"host": _host_prop("비우면 전체", toks),
+              {"host": _host_prop("전체면 빈 문자열", toks, allow_all=True),
                "days": {"type": "integer", "description": "며칠 전까지. 최대 90"}}),
         _spec("answer",
               "사람에게 줄 최종 답. 조사가 끝나면 이 도구로 답한다. 산문에 그림 손잡이나 "
@@ -756,8 +772,12 @@ async def _tool_host_logs(args: dict, ctx: dict) -> dict:
     # 결과 크기는 구간이 아니라 줄 수 상한이 정하므로 넓혀도 무겁지 않다.
     a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
                               default_span=ctx.get("panel_span"))
-    limit = int(args.get("limit") or LOG_LIMIT_DEFAULT)
-    out = note_if_capped(await ctx["fetch_logs"](q, a, b, limit))
+    # 상한 자체도 상한이 있다. 모델이 큰 값을 넣어도 여기서 잘린다.
+    try:
+        limit = max(1, min(int(args.get("limit") or LOG_LIMIT_DEFAULT), LOG_LIMIT_MAX))
+    except (TypeError, ValueError):
+        limit = LOG_LIMIT_DEFAULT
+    out = note_if_capped(await ctx["fetch_logs"](q, a, b, limit), limit)
     return _add_cut(out, cut, WINDOW_MAX_WIDE_M, a, b, args, ctx.get("panel_span"))
 
 

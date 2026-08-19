@@ -307,10 +307,21 @@ def build(system: str, specs: list, user: str, run_tool, model_fn=None,
         return "tools" if should_continue(state, max_calls, stop_now,
                                           got_answer) else END
 
+    def after_tools(state: State) -> str:
+        """도구를 돌린 뒤 모델로 돌아갈 것인가.
+
+        **답을 받았으면 돌아가지 않는다.** 예전에는 무조건 돌아갔고, 모델은 할 일이
+        없으니 짧은 글을 하나 내고 끝났다. 질의마다 유료 호출 하나와 5~15초가 그냥 더
+        들었다(2026-08-19 감사). 직접 구현한 반복문은 `if final: break` 로 이미 안 불렀다.
+        """
+        if state.get("stopped") or got_answer():
+            return END
+        return "model"
+
     g = StateGraph(State)
     g.add_node("model", ask_model)
     g.add_node("tools", use_tools)
     g.set_entry_point("model")
     g.add_conditional_edges("model", route, {"tools": "tools", END: END})
-    g.add_edge("tools", "model")
+    g.add_conditional_edges("tools", after_tools, {"model": "model", END: END})
     return g.compile()

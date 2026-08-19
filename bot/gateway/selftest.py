@@ -284,6 +284,8 @@ def main():
                     + _panel_window_checks() + _model_tier_checks() + _graph_state_checks() + _prompt_file_checks()
                     + _panel_route_checks()
                     + _ask_dispatch_checks() + _cap_answer_checks()
+                    + _query_masking_checks() + _empty_table_checks()
+                    + _log_cap_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -3222,6 +3224,14 @@ def _ask_tool_checks() -> int:
     plain = asktools.build_wazuh_query("vm-a.example", 60, 70, 0)
     assert all("rule.groups" not in str(f) for f in plain["query"]["bool"]["filter"]), plain
 
+    # ⑥-a-2 **"전체" 를 뜻하는 빈 값이 실제로 통과해야 한다.** 인자를 필수로 옮기면서
+    #        enum 에 빈 값을 안 넣으면, 설명은 "전체면 빈 문자열" 인데 모델이 그 값을
+    #        넣을 수 없다. 2026-08-19 실측: 그렇게 "열린 문제 전부" 가 막혔다.
+    for name in ("open_problems", "past_judgments"):
+        prop = {t["name"]: t for t in asktools.build_tool_specs(
+            {"[h-1]": {}})}[name]["input_schema"]["properties"]["host"]
+        assert "" in (prop.get("enum") or []), (name, prop)
+
     # ⑥-b **선택 인자 한도는 선택만 센다.** 지울 필요 없이 필수로 옮기면 자리가 난다.
     #      항목을 지우면 기능이 없어지지만, 필수로 옮기면 모델이 매번 적을 뿐이다.
     names = {t["name"]: t for t in asktools.build_tool_specs({"[h]": {}})}
@@ -3236,7 +3246,7 @@ def _ask_tool_checks() -> int:
     assert set(body) <= {"size", "sort", "query", "_source", "track_total_hits"}, body
     # **총 건수를 함께 받는다.** 50건만 받아 세면 그보다 많을 때 조용히 적게 센다.
     assert body.get("track_total_hits") is True, body
-    return 38
+    return 40
 
 
 
@@ -4136,6 +4146,180 @@ def _cap_answer_checks() -> int:
     return 14
 
 
+def _log_cap_checks() -> int:
+    """로그가 잘렸을 때 그 사실이 **실경로로** 결과에 붙는가.
+
+    통지는 있었는데 임계값이 서로 달라 한 번도 발화하지 않았다. 조회는 늘 60줄로 나가는데
+    통지는 300줄을 채웠을 때만 붙었다(2026-08-19 감사 A-1). 검사가 못 잡은 이유는
+    `note_if_capped` 에 300을 직접 넣어 불렀기 때문이다. 조립기만 부르고 배선을 안 지나갔다.
+
+    그래서 이 검사는 도구를 실제로 돌린다.
+    """
+    import asyncio
+
+    from . import asktools
+
+    got = {}
+
+    async def logs(q, a, b, limit):
+        got["limit"] = limit
+        # 상한을 꽉 채워 돌려준다. 최신 쪽만 실렸다는 뜻이다.
+        return {"logs": [{"t": 1, "line": "x"}] * limit, "fetched": limit, "status": "ok"}
+
+    ctx = {"table": {"[h-1]": {"host": "web-01", "source": "s", "logs": "web-01",
+                               "security": ""}},
+           "now": 1786590000, "fetch_logs": logs}
+    out = asyncio.run(asktools.run_tool("host_logs", {"host": "[h-1]"}, ctx))
+    assert "앞부분은 안 들어왔다" in (out.get("note") or ""), out
+    assert got["limit"] == asktools.LOG_LIMIT_DEFAULT, got
+
+    # 잘렸다는 안내를 받으면 모델이 더 달라고 할 수 있다. 안내만 하고 늘릴 길이 없으면
+    # 사람에게 "구간을 좁혀 다시 물어라" 밖에 못 준다.
+    out3 = asyncio.run(asktools.run_tool("host_logs", {"host": "[h-1]", "limit": 300}, ctx))
+    assert got["limit"] == 300, got
+    assert "앞부분은 안 들어왔다" in (out3.get("note") or ""), out3
+    # 그 상한에도 상한이 있다.
+    asyncio.run(asktools.run_tool("host_logs", {"host": "[h-1]", "limit": 99999}, ctx))
+    assert got["limit"] == asktools.LOG_LIMIT_MAX, got
+
+    # 상한을 안 채웠으면 붙이지 않는다. 늘 붙으면 사람이 통지를 무시한다.
+    async def few(q, a, b, limit):
+        return {"logs": [], "fetched": 3, "status": "ok"}
+
+    out2 = asyncio.run(asktools.run_tool("host_logs", {"host": "[h-1]"},
+                                         dict(ctx, fetch_logs=few)))
+    assert "앞부분은 안 들어왔다" not in (out2.get("note") or ""), out2
+    return 7
+
+
+def _empty_table_checks() -> int:
+    """이름 표가 비었을 때 안전한 쪽으로 실패하는가.
+
+    `_leaks` 는 아는 이름이 남았는지 보는데, 표가 비면 볼 이름이 없어 "누수 없음" 을
+    돌려줬다(`any([])`). 예외가 났을 때는 True 를 돌려 막으면서 표가 빈 경우만 통과시키던
+    셈이다. 판단 방향이 반대였다.
+
+    표가 비는 상황은 드물지만 있다. 재기동 직후 캐시 파일이 없고 첫 갱신이 전부 실패하면
+    그렇다. 그때 그룹명은 아무도 안 가린다. 프록시 경로는 같은 상황을 503 으로 막는다
+    (`proxy.blocked_when_empty`). 질의 경로에는 그 게이트가 없었다.
+    """
+    import asyncio
+    import os
+
+    from . import ask, masking, nametable
+
+    saved, saved_env = dict(nametable._terms), os.environ.get("PROXY_ALLOW_UNMASKED")
+    try:
+        nametable._terms = {}
+        os.environ.pop("PROXY_ALLOW_UNMASKED", None)
+        # 앞선 검사가 남긴 세션 토큰이 합쳐지면 마스커가 이름을 들고 있게 된다.
+        ask.forget_all()
+        # ① 표가 비면 "가릴 수 없다" 로 답한다. 안전한 쪽은 막는 쪽이다.
+        #    `_leaks` 로는 이것을 알 수 없다 — 볼 이름이 없어 통과한다.
+        assert masking._leaks("아무 문장") is False
+        assert masking.cannot_mask() is True
+
+        # ② 이름을 하나도 안 들고 있으면 질의가 나가지 않는다. 사유를 사람에게 말한다.
+        def model(system, messages, tools):
+            raise AssertionError("가릴 수 없는데 모델을 불렀다")
+
+        r = asyncio.run(ask.run_ask("뭐 있어", table={"[host-1]": {}}, model_fn=model))
+        assert r["stopped"] == "rejected", r
+        assert "이름" in r["error"], r
+
+        # ②-b 대상 표에서 이름을 등록했으면 그 이름들은 가려지므로 질의는 나간다.
+        #     전역 표가 비었다고 무조건 막으면 정상 조회까지 멈춘다.
+        table = {ask.proxy.token_for("host", "web-01"):
+                 {"host": "web-01", "source": "s", "logs": "", "security": ""}}
+        called = {}
+
+        def model2(system, messages, tools):
+            called["yes"] = True
+            return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
+
+        asyncio.run(ask.run_ask("뭐 있어", table=table, model_fn=model2))
+        assert called.get("yes"), "가릴 수 있는데 막았다"
+
+        # ③ 운영자가 파일에 적어 둔 배포는 통과한다. 랩이 그 설정이다.
+        os.environ["PROXY_ALLOW_UNMASKED"] = "1"
+        assert masking.cannot_mask() is False
+    finally:
+        nametable._terms = saved
+        os.environ.pop("PROXY_ALLOW_UNMASKED", None)
+        if saved_env is not None:
+            os.environ["PROXY_ALLOW_UNMASKED"] = saved_env
+    return 8
+
+
+def _query_masking_checks() -> int:
+    """질의 도구 결과에 실명이 남아 모델로 가지 않는가.
+
+    알림 경로는 화이트리스트(`masking.build_llm_context`)가 지킨다. 질의 경로는 조회 결과를
+    그대로 직렬화해 보내므로 배선을 한 곳만 빠뜨려도 원문이 나간다. 2026-08-19 감사에서
+    지표와 열린 문제 두 도구가 마스커를 안 거치는 것이 확인됐다.
+
+    아픈 자리는 인증서 감시다. 아이템 키가 `web.certificate.get[<도메인>,443]` 형태라
+    "인증서 며칠 남았어" 한 마디에 고객 도메인이 통째로 나간다.
+    """
+    import asyncio
+    import json as _js
+
+    from . import ask, nametable
+
+    saved = dict(nametable._terms)
+    try:
+        nametable._terms = {"cust-web-01": "host", "shop.example.co.kr": "host"}
+        mk = ask.proxy.build_masker()
+
+        # ① 지표 — 아이템 이름과 키에 실명이 들어 있다.
+        items = [{"itemid": "1", "name": "Cert expiry: shop.example.co.kr",
+                  "key_": "web.certificate.get[shop.example.co.kr,443]",
+                  "units": "s", "lastvalue": "10"}]
+        out = ask.metrics_result(items, {"1": []}, mk)
+        blob = _js.dumps(out, ensure_ascii=False)
+        assert "shop.example.co.kr" not in blob, blob
+
+        # ② 열린 문제 — Zabbix 문제명은 매크로가 풀려 호스트명이 박혀 있다.
+        rows = [{"name": "Zabbix agent is not available on cust-web-01",
+                 "severity": "4", "clock": "1786590000"}]
+        out2 = ask.problems_result(rows, mk)
+        assert "cust-web-01" not in _js.dumps(out2, ensure_ascii=False), out2
+
+        # ③ 실경로 — ctx 배선이 빠지면 위 두 검사가 통과해도 원문이 나간다.
+        table = {ask.proxy.token_for("host", "cust-web-01"):
+                 {"host": "cust-web-01", "source": "zabbix-internal",
+                  "logs": "", "security": ""}}
+        tok = list(table)[0]
+        seen = {}
+
+        def model(system, messages, tools):
+            if len(messages) == 1:
+                return {"stop_reason": "tool_use", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "open_problems",
+                     "input": {"host": tok}}]}
+            seen["blob"] = str(messages[-1])
+            return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
+
+        # 조회 자체를 대신하되 **마스커는 배선이 준 것을 쓴다.** 검사가 자기 마스커를
+        # 쓰면 배선이 빠져도 통과한다(2026-08-19 에 그렇게 한 번 놓쳤다).
+        saved_fp = ask.fetch_problems
+        try:
+            async def spy(ent, masker=None):
+                seen["masker"] = masker
+                return ask.problems_result(rows, masker)
+
+            ask.fetch_problems = spy
+            r = asyncio.run(ask.run_ask("문제 뭐 있어", table=table, model_fn=model))
+        finally:
+            ask.fetch_problems = saved_fp
+        assert seen.get("masker") is not None, "배선이 마스커를 안 넘긴다"
+        assert "cust-web-01" not in seen.get("blob", ""), seen.get("blob", "")[:200]
+        assert r["stopped"] == "end_turn", r
+    finally:
+        nametable._terms = saved
+    return 6
+
+
 def _ask_dispatch_checks() -> int:
     """도구를 실제로 부를 때 무엇을 막는가.
 
@@ -4725,6 +4909,27 @@ def _graph_engine_checks() -> int:
         assert a["text"] == b["text"] == "web-01 이 원인이다", (a["text"], b["text"])
         assert [t["tool"] for t in a["trace"]] == [t["tool"] for t in b["trace"]], (a, b)
         assert a["stopped"] == b["stopped"] == "end_turn", (a["stopped"], b["stopped"])
+
+        # ①-b **답을 받으면 모델을 더 부르지 않는다.** 그래프가 도구 뒤에 무조건 모델로
+        #      돌아가 답 뒤에 한 번 더 불렀다(2026-08-19 감사 E-2). 질의마다 유료 호출
+        #      하나와 5~15초가 그냥 더 들었다.
+        def answering():
+            n = {"i": 0}
+
+            def model(system, messages, tools):
+                n["i"] += 1
+                if n["i"] == 1:
+                    return _tool_use("list_hosts", {})
+                if n["i"] == 2:
+                    return _tool_use("answer", {"summary": "web-01 하나뿐이다"})
+                raise AssertionError("답을 받고도 모델을 또 불렀다")
+            return model, n
+
+        for engine in ("loop", "graph"):
+            m, n = answering()
+            r = run(engine, m)
+            assert "web-01 하나뿐이다" in r["text"], (engine, r["text"])
+            assert n["i"] == 2, (engine, n["i"])
 
         # ② **라운드 상한이 그래프에서도 걸린다.** 프레임워크 자체 상한에 먼저 닿으면
         #    사람은 이유 대신 예외를 본다.

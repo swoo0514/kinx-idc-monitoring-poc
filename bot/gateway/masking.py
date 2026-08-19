@@ -146,6 +146,32 @@ def _leaks(text: str) -> bool:
         return True
 
 
+def cannot_mask(masker=None) -> bool:
+    """지금 이름을 가릴 수 없는 상태인가.
+
+    **`_leaks` 로는 이것을 알 수 없다.** 그 함수는 "아는 이름이 남았나" 를 보므로 표가
+    비면 볼 이름이 없어 "누수 없음" 이 된다(`any([])`). 볼 이름이 없는 것과 가렸다는 것은
+    다르다(2026-08-19 감사).
+
+    표가 비는 상황은 드물지만 있다. 재기동 직후 캐시 파일이 없고 첫 갱신이 전부 실패하면
+    그렇다. 그때 그룹명은 아무도 안 가린다. 프록시 경로는 같은 상황을 이미 막는다.
+    """
+    from . import nametable, proxy
+
+    # 이번 요청의 마스커가 이름을 들고 있으면 가릴 수 있다. 대상 표를 만들 때 호스트명이
+    # 등록되므로, 전역 표가 비어도 그 이름들은 가려진다.
+    if masker is not None and any(str(k).strip()
+                                  for k in (getattr(masker, "_fwd", None) or {})):
+        return False
+    try:
+        if list(nametable.terms()):
+            return False
+    except Exception as e:
+        log.warning("이름 표를 읽지 못했다: %s", e)
+        return True
+    return proxy.blocked_when_empty()
+
+
 def _prior_item(p: dict, m) -> dict:
     """과거 결론 1건의 전송 형태.
 
