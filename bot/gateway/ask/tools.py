@@ -267,7 +267,7 @@ def note_if_capped(out, limit: int = 0):
     """
     if not isinstance(out, dict):
         return out
-    from . import collector
+    from .. import collector
     cap = int(limit or 0) or collector.LOKI_FETCH_LIMIT
     if int(out.get("fetched") or 0) >= cap:
         msg = ("받을 수 있는 줄 수를 다 채웠다. 최신 쪽만 실렸고 구간 앞부분은 안 들어왔다. "
@@ -712,7 +712,7 @@ async def run_tool(name: str, args: dict, ctx: dict) -> dict:
     except asyncio.TimeoutError:
         # **다른 조회 실패와 같은 형태로 돌려준다.** 새 형태를 만들면 모델이 그것만
         # 다르게 읽는다. 비어 있다는 뜻이 아니라는 것도 함께 적는다.
-        from . import collector
+        from .. import collector
         log.warning("도구 %s 시한 초과 (%.0f초)", name, tool_timeout_s())
         return {"status": collector.SOURCE_UNAVAILABLE,
                 "note": ("조회가 %.0f초 안에 끝나지 않아 중단했다. 구간을 좁히거나 "

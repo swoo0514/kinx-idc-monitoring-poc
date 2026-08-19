@@ -29,7 +29,8 @@ async def fetch_panel(entry: dict, target, start: int, end: int,
     `target` 이 있으면 그 패널을(list_panels 가 준 손잡이를 서버가 푼 값), 없으면
     사람이 보고 있는 패널을 그린다. **제목으로 찾는 길은 없다.**
     """
-    from ... import asktools, grafana
+    from ... import grafana
+    from .. import tools as asktools
     if target:
         uid, panel_id, title = target
         note = "사람이 보고 있는 패널이 아니라 목록에서 고른 패널이다"

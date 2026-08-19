@@ -143,7 +143,7 @@ def make_model(system: str, specs: list, user: str, model_fn=None):
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.outputs import ChatGeneration, ChatResult
 
-    from . import egress, llm, store
+    from .. import egress, llm, store
 
     class GatewayChat(BaseChatModel):
         """Anthropic 을 직접 부르지 않고 게이트웨이 출구를 부른다."""
@@ -230,7 +230,7 @@ def should_continue(state: dict, max_calls: int, stop_now, answered) -> bool:
         return False
     if stop_now():                       # 시간 상한·사람이 누른 멈춤
         return False
-    from . import asktools
+    from . import tools as asktools
 
     return asktools.query_count(state.get("trace")) < max_calls
 

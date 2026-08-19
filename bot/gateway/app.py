@@ -14,7 +14,8 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from . import ask, graph, tracing
+from . import ask, tracing
+from .ask import graph
 from . import collector
 from . import convo
 from . import heartbeat

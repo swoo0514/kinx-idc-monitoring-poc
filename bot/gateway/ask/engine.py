@@ -22,7 +22,7 @@ def engine_name() -> str:
     답을 아예 못 받는 상황이 가장 나쁘다. `ASK_ENGINE=loop` 이 되돌리는 길이며,
     두 엔진이 같은 답을 내는지는 셀프테스트가 지킨다.
     """
-    from .. import graph
+    from . import graph
     want = os.environ.get("ASK_ENGINE", "graph").strip().lower()
     if want == "loop":
         return "loop"
@@ -43,9 +43,9 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
     """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-    from .. import asktools
+    from . import tools as asktools
     from .loop import force_answer
-    from .. import graph as G
+    from . import graph as G
     def guard() -> bool:
         """더 돌면 안 되는가. 시간 상한과 사람이 누른 멈춤을 함께 본다."""
         if tick() - started > DEADLINE_S:

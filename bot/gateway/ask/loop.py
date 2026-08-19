@@ -45,7 +45,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     import asyncio
     import json as _json
 
-    from .. import asktools, egress, llm
+    from .. import egress, llm
+    from . import tools as asktools
     tick = clock or time.monotonic
     started = tick()
     now = int(time.time()) if now is None else now
@@ -279,7 +280,8 @@ def prewarm() -> str:
     """
     import asyncio
 
-    from .. import asktools, egress, llm
+    from .. import egress, llm
+    from . import tools as asktools
     try:
         from . import build_table as _build_table
         table = asyncio.run(_build_table(proxy.build_masker()))

@@ -3165,7 +3165,7 @@ def _ask_tool_checks() -> int:
     두 축의 등가물은 **호출자가 질의문을 못 주는 것**이다. 도구는 라벨·기간·문자열
     필터만 받고 질의문은 코드가 만든다.
     """
-    from . import asktools
+    from .ask import tools as asktools
 
     # ① 창 길이는 상한을 넘지 못한다. 모델이 큰 값을 넣어도 잘린다.
     assert asktools.clamp_window(999999) == asktools.WINDOW_MAX_M
@@ -3270,7 +3270,8 @@ def _ask_result_checks() -> int:
     보안 경보 50건이 왔고 그 50건이 전부 공백으로 채워져 있었다. 조회 실패가 아니라
     **성공한 조회를 없음으로 바꾸는** 경로였다. 그런 경로만 모은다.
     """
-    from . import asktools, collector, masking, ask
+    from . import collector, masking, ask
+    from .ask import tools as asktools
 
     # (1) **Wazuh 응답은 중첩이고 화이트리스트는 평탄하다.** 옮기는 단계를 건너뛰면
     #     50건이 전부 공백이 되고, 모델은 그것을 "기록 없음" 으로 읽는다.
@@ -3429,7 +3430,7 @@ def _tool_schema_checks() -> int:
     """
     import json
 
-    from . import asktools
+    from .ask import tools as asktools
 
     table = {"[host-b]": {"host": "b1"}, "[host-a]": {"host": "a1"}}
 
@@ -3484,7 +3485,7 @@ def _tool_schema_checks() -> int:
     assert asktools.check_answer({"summary": "정상"}, images=set(), windows=set())[0]
 
     # ⑦ 중복 키가 없다. 같은 키를 여러 번 쓰면 마지막 것만 남아 조용히 사라진다.
-    src = _read_source("gateway/asktools.py")
+    src = _read_source("gateway/ask/tools.py")
     assert src.count('"description": "절대 구간 시작. ISO8601 또는 유닉스 초"') <= 2,         "from/to 정의가 중복돼 있다"
     return 22
 
@@ -3503,7 +3504,8 @@ def _cache_checks() -> int:
     캐싱은 접두사 일치다. 앞에서 한 바이트만 달라져도 그 뒤 전부가 캐시에서 빠진다.
     걸리지 않아도 오류가 나지 않으므로 **조용히 비용만 낸다.** 그래서 모양을 검사로 잠근다.
     """
-    from . import asktools, llm, store
+    from . import llm, store
+    from .ask import tools as asktools
 
     # ① 시스템 문구를 블록으로 감싸고 마지막 블록에 표시를 단다. 렌더 순서가
     #    도구 → 시스템 → 대화라서 이 한 곳이 도구와 시스템을 함께 캐시한다.
@@ -3609,7 +3611,7 @@ def _graph_state_checks() -> int:
 
     langgraph 없이도 도는 순수 함수라 개발 PC 에서도 검사된다.
     """
-    from . import graph
+    from .ask import graph
 
     # ⓪ **무거운 임포트를 기동 때 끝낸다.** 첫 질의가 그 값을 뒤집어쓰면 사람은 화면에서
     #    502 를 본다(2026-08-18 실측: langgraph 첫 임포트 95초, Grafana 프록시가 먼저 끊음).
@@ -3639,7 +3641,7 @@ def _graph_state_checks() -> int:
 
     # ④-b **답 도구는 조회 상한에 안 센다.** 답은 조사가 아니라 마무리다. 세면 조사할 수
     #      있는 횟수가 하나 줄고, 그만큼 답이 얕아진다(2026-08-18 실측: rounds 로 끝났다).
-    from . import asktools
+    from .ask import tools as asktools
     assert asktools.query_count([{"tool": "host_logs"}, {"tool": "answer"}]) == 1
     assert asktools.query_count([{"tool": "answer"}]) == 0
     assert asktools.query_count([]) == 0
@@ -3718,7 +3720,8 @@ def _panel_route_checks() -> int:
     """
     import asyncio
 
-    from . import ask, asktools, grafana, nametable
+    from . import ask, grafana, nametable
+    from .ask import tools as asktools
 
     saved_terms = dict(nametable._terms)
     saved_list = grafana.list_panels
@@ -3836,7 +3839,7 @@ def _item_rank_checks() -> int:
     들어온다.** 사람이 "CPU 사용률 어때" 를 물으면 봇은 idle 시간을 보고 답한다.
     잘렸다는 말도 없었다.
     """
-    from . import asktools
+    from .ask import tools as asktools
 
     names = ["CPU guest nice time", "CPU guest time", "CPU idle time",
              "CPU interrupt time", "CPU iowait time", "CPU nice time",
@@ -4007,7 +4010,7 @@ def _panel_window_checks() -> int:
 
     구간을 쥐고 있으면서 모델에게 받아 적으라고 시키지 않는다.
     """
-    from . import asktools
+    from .ask import tools as asktools
 
     T0, T1 = 1786475892, 1786627941      # 2026-08-11 19:18 ~ 08-13 13:32
     default = (T0, T1)
@@ -4182,7 +4185,7 @@ def _usage_metadata_checks() -> int:
     수치는 랭체인 규약을 따른다 — 입력 토큰에 캐시 읽기·쓰기를 포함하고, 그 내역을
     input_token_details 에 나눠 적는다. 그래야 다른 모델과 나란히 볼 수 있다.
     """
-    from . import graph
+    from .ask import graph
 
     if not graph.available():
         return 0
@@ -4253,7 +4256,8 @@ def _list_truncation_checks() -> int:
     """
     import asyncio
 
-    from . import ask, asktools
+    from . import ask
+    from .ask import tools as asktools
 
     # ① 열린 문제 — 총계를 함께 받아 잘림을 밝힌다.
     rows = [{"name": "p%d" % i, "severity": "3", "clock": "1786500000"}
@@ -4384,7 +4388,8 @@ def _tool_timeout_checks() -> int:
     import asyncio
     import os
 
-    from . import asktools, collector
+    from . import collector
+    from .ask import tools as asktools
 
     saved = os.environ.get("ASK_TOOL_TIMEOUT_S")
     try:
@@ -4720,7 +4725,8 @@ def _panel_status_checks() -> int:
     """
     import asyncio
 
-    from . import ask, asktools, collector, grafana
+    from . import ask, collector, grafana
+    from .ask import tools as asktools
 
     saved = grafana.list_panels
     try:
@@ -4935,7 +4941,7 @@ def _log_cap_checks() -> int:
     """
     import asyncio
 
-    from . import asktools
+    from .ask import tools as asktools
 
     got = {}
 
@@ -5107,7 +5113,8 @@ def _ask_dispatch_checks() -> int:
     import asyncio
     import json
 
-    from . import asktools, store
+    from . import store
+    from .ask import tools as asktools
 
     table = {
         "[host-aaa]": {"host": "web-01", "source": "zabbix-internal",
@@ -5264,7 +5271,8 @@ def _ask_loop_checks() -> int:
     import asyncio
     import json
 
-    from . import ask, asktools, nametable
+    from . import ask, nametable
+    from .ask import tools as asktools
 
     saved = dict(nametable._terms)
     try:
@@ -5656,7 +5664,8 @@ def _graph_engine_checks() -> int:
     import asyncio
     import os
 
-    from . import ask, graph, nametable
+    from . import ask, nametable
+    from .ask import graph
 
     if not graph.available():
         return 0

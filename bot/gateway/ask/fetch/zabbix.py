@@ -31,7 +31,7 @@ def metric_item(it: dict, raw: list, shown: list, kind: str, mask) -> dict:
 
 def metrics_result(items: list, series: dict, masker: masking.Masker = None) -> dict:
     """지표 결과 한 벌. 조회 없이 조립만 한다 — 검사가 실경로와 같은 조립을 쓰게."""
-    from ... import asktools
+    from .. import tools as asktools
     mask = masker.mask if masker is not None else (lambda x: x)
     out = []
     for it in items or []:
@@ -73,7 +73,8 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int,
     """
     import httpx
 
-    from ... import asktools, collector
+    from ... import collector
+    from .. import tools as asktools
     mask = masker.mask if masker is not None else (lambda x: x)
     try:
         zbx = collector.ZabbixClient(source=entry.get("source", ""))
