@@ -139,6 +139,29 @@ def guard(kind: str = "", exempt: bool = False, max_per_hour: int = None,
         _sem.release()
 
 
+def _log_usage(adapter, kind: str) -> None:
+    """나간 호출의 사용량을 표에 남긴다. 여기 한 곳에서만 적는다.
+
+    질의 경로만 적으면 실환경 비용을 못 낸다 — 알림 분석이 더 잦고 입력도 크다.
+    """
+    from . import store
+
+    u = getattr(adapter, "last_usage", None)
+    try:
+        if u:
+            store.record_tokens(kind or "?", "", u.get("in", 0), u.get("out", 0),
+                                cache_write=u.get("cache_write", 0),
+                                cache_read=u.get("cache_read", 0),
+                                model=u.get("model", ""))
+        else:
+            # 사용량을 안 주는 경로(심층조사는 자기 키로 자기가 여러 번 부른다).
+            # 건수는 남기되 0 이 "공짜"로 읽히지 않게 모델 자리에 사실을 적는다.
+            store.record_tokens(kind or "?", "", 0, 0,
+                                model="%s:계측불가" % getattr(adapter, "name", "?"))
+    except Exception as e:      # 기록 실패가 분석을 막으면 안 된다
+        log.warning("사용량 기록 실패 (%s): %s", kind or "?", e)
+
+
 def call(adapters, system: str, user: str, exempt: bool = False,
          kind: str = "") -> dict:
     """외부 LLM 호출. 예외를 던지지 않는다."""
@@ -156,6 +179,7 @@ def call(adapters, system: str, user: str, exempt: bool = False,
                 record()           # 이 어댑터로 실제로 나간다 — 여기서 센다
                 try:
                     text = adapter.complete(system, user)
+                    _log_usage(adapter, kind)
                     return _out(text, adapter.name, False)
                 except Exception as e:  # 타임아웃·429·529 포함 — 다음 어댑터로 폴백
                     log.warning("adapter %s failed (%s): %s", adapter.name, kind or "?", e)
@@ -163,6 +187,23 @@ def call(adapters, system: str, user: str, exempt: bool = False,
         return _out("", "none", True, b.reason)
     # 어댑터가 하나도 안 붙었거나 전부 실패. 붙을 어댑터가 없었으면 아무것도 안 셌다.
     return _out("", "none", True, BLOCKED_NONE)
+
+
+def _log_raw_usage(value, kind: str, user: str) -> None:
+    """응답에 실려 온 사용량을 표에 남긴다. 없으면 아무것도 적지 않는다(추정 금지)."""
+    from . import store
+
+    u = (value or {}).get("usage") if isinstance(value, dict) else None
+    if not u:
+        return
+    try:
+        store.record_tokens(
+            kind or "?", user, u.get("input_tokens"), u.get("output_tokens"),
+            cache_write=u.get("cache_creation_input_tokens") or 0,
+            cache_read=u.get("cache_read_input_tokens") or 0,
+            model=(value.get("model") or ""))
+    except Exception as e:
+        log.warning("사용량 기록 실패 (%s): %s", kind or "?", e)
 
 
 def call_raw(fn, exempt: bool = False, kind: str = "", user: str = "") -> dict:
@@ -176,7 +217,9 @@ def call_raw(fn, exempt: bool = False, kind: str = "", user: str = "") -> dict:
     try:
         with guard(kind, exempt, user=user) as record:
             record()
-            return _out(True, fn())
+            value = fn()
+            _log_raw_usage(value, kind, user)
+            return _out(True, value)
     except Blocked as b:
         return _out(False, reason=b.reason)
     except Exception as e:

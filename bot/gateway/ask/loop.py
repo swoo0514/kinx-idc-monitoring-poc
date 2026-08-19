@@ -187,15 +187,6 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
                     "stopped": "llm_failed",
                     "error": "모델을 부르지 못했다: %s" % res["reason"]}
         reply = res["value"]
-        # **실제로 쓴 토큰으로 센다.** 추정하지 않고 응답에 실려 온 값을 남긴다.
-        u = reply.get("usage") or {}
-        if u:
-            from .. import store
-            store.record_tokens(
-                    "ask", user, u.get("input_tokens"), u.get("output_tokens"),
-                    cache_write=u.get("cache_creation_input_tokens") or 0,
-                    cache_read=u.get("cache_read_input_tokens") or 0,
-                    model=reply.get("model") or "")
         text = _blocks_text(reply.get("content")) or text
         uses = [b for b in (reply.get("content") or [])
                 if isinstance(b, dict) and b.get("type") == "tool_use"]

@@ -103,6 +103,7 @@ class ClaudeAdapter:
     def __init__(self, model: str = "", kind: str = ""):
         self.model = model or model_for(kind)
         self.timeout = float(os.environ.get("LLM_TIMEOUT_S", DEFAULT_TIMEOUT_S))
+        self.last_usage = None
 
     def available(self) -> bool:
         return bool(os.environ.get("ANTHROPIC_API_KEY"))
@@ -113,6 +114,14 @@ class ClaudeAdapter:
         resp = client.messages.create(
             model=self.model, max_tokens=MAX_TOKENS,
             system=system, messages=[{"role": "user", "content": user}])
+        u = getattr(resp, "usage", None)
+        self.last_usage = {
+            "in": int(getattr(u, "input_tokens", 0) or 0),
+            "out": int(getattr(u, "output_tokens", 0) or 0),
+            "cache_write": int(getattr(u, "cache_creation_input_tokens", 0) or 0),
+            "cache_read": int(getattr(u, "cache_read_input_tokens", 0) or 0),
+            "model": getattr(resp, "model", "") or self.model,
+        }
         return "".join(b.text for b in resp.content if b.type == "text")
 
 
@@ -122,6 +131,7 @@ class OllamaAdapter:
     def __init__(self):
         self.url = os.environ.get("OLLAMA_URL", "").rstrip("/")
         self.model = os.environ.get("OLLAMA_MODEL", "qwen3:8b")
+        self.last_usage = None
 
     def available(self) -> bool:
         return bool(self.url)
@@ -134,7 +144,13 @@ class OllamaAdapter:
                          {"role": "user", "content": user}],
             "options": {"num_predict": MAX_TOKENS}})
         r.raise_for_status()
-        return r.json().get("message", {}).get("content", "")
+        body = r.json()
+        # 온프렘은 캐시 개념이 없어 두 칸은 0 이다. 이름은 응답이 준 것을 쓴다.
+        self.last_usage = {"in": int(body.get("prompt_eval_count") or 0),
+                           "out": int(body.get("eval_count") or 0),
+                           "cache_write": 0, "cache_read": 0,
+                           "model": body.get("model") or self.model}
+        return body.get("message", {}).get("content", "")
 
 
 def build_user_prompt(masked_ctx: dict) -> str:

@@ -474,6 +474,110 @@ def _llm_concurrency_checks() -> int:
 
 
 
+def _llm_usage_checks() -> int:
+    """나가는 호출이 전부 사용량 표에 남는가.
+
+    질의 경로만 기록하면 실환경 비용을 낼 수 없다. 알림 분석이 질의보다 잦고 입력도
+    크다. 근거는 GATEWAY_GUIDE §29.
+    """
+    import os
+    import tempfile
+
+    from .. import egress, llm, store
+
+    class _WithUsage:
+        name = "fake"
+
+        def __init__(self):
+            self.last_usage = None
+
+        def available(self):
+            return True
+
+        def complete(self, _s, _u):
+            self.last_usage = {"in": 11, "out": 22, "cache_write": 33,
+                               "cache_read": 44, "model": "m1"}
+            return "분석"
+
+    class _NoUsage:
+        name = "holmes"
+
+        def available(self):
+            return True
+
+        def complete(self, _s, _u):
+            return "조사 결과"
+
+    class _Dead:
+        name = "dead"
+
+        def available(self):
+            return True
+
+        def complete(self, _s, _u):
+            raise RuntimeError("죽음")
+
+    d = tempfile.mkdtemp(prefix="usage-")
+    saved = store.PATH
+    try:
+        store.PATH = os.path.join(d, "u.db")
+        store.close()
+        store.init()
+
+        # ① 어댑터가 낸 사용량이 그대로 남는다. 용도도 함께 남아야 질의와 갈린다.
+        egress.call([_WithUsage()], "sys", "user", exempt=True, kind="triage")
+        got = store.tokens_since(3600, kind="triage")
+        assert got["in"] == 11 and got["out"] == 22, got
+        assert got["cache_write"] == 33 and got["cache_read"] == 44, got
+        assert store.tokens_since(3600, kind="ask")["in"] == 0, "용도가 섞이면 안 된다"
+
+        # ② 못 재는 경로(심층조사)는 0 으로 남기되 그 사실이 드러나야 한다.
+        #    0 을 그냥 두면 "공짜"로 읽힌다 — 이 리포에서 반복해서 겪은 실패 모양이다.
+        egress.call([_NoUsage()], "sys", "user", exempt=True, kind="holmes")
+        rows = store._exec("SELECT in_tok, out_tok, model FROM usage WHERE kind = ?",
+                           ("holmes",), fetch="all") or []
+        assert len(rows) == 1, rows
+        assert rows[0][0] == 0 and rows[0][1] == 0, rows
+        assert "계측" in (rows[0][2] or ""), "잴 수 없다는 사실이 모델 자리에 남아야 한다"
+
+        # ③ 실패한 호출은 기록하지 않는다. 안 나간 것을 쓴 것으로 세면 안 된다.
+        egress.call([_Dead()], "sys", "user", exempt=True, kind="write")
+        assert store.tokens_since(3600, kind="write")["in"] == 0
+        assert not (store._exec("SELECT 1 FROM usage WHERE kind = ?",
+                                ("write",), fetch="all") or [])
+
+        # ④ 실제 어댑터에도 자리가 있어야 한다. 없으면 위 계약이 가짜에만 맞는 것이다.
+        assert hasattr(llm.ClaudeAdapter(), "last_usage")
+        assert hasattr(llm.OllamaAdapter(), "last_usage")
+
+        # ⑤ **다른 출구(call_raw)도 기록한다.** 질의 경로는 이쪽을 쓰는데, 예열과
+        #    마무리 호출은 반복문 밖이라 안에서 적던 방식으로는 빠진다.
+        def _raw():
+            return {"usage": {"input_tokens": 7, "output_tokens": 3,
+                              "cache_creation_input_tokens": 1,
+                              "cache_read_input_tokens": 2},
+                    "model": "m2", "content": []}
+
+        egress.call_raw(_raw, exempt=True, kind="ask", user="사람1")
+        got = store.tokens_since(3600, kind="ask")
+        assert got["in"] == 7 and got["out"] == 3, got
+        assert got["cache_write"] == 1 and got["cache_read"] == 2, got
+        rows = store._exec("SELECT user, model FROM usage WHERE kind = ?",
+                           ("ask",), fetch="all") or []
+        assert len(rows) == 1, "한 번 부르면 한 행 — 두 곳에서 적으면 두 배로 센다"
+        assert rows[0][0] == "사람1", "사람별 사용량의 근거라 이름이 남아야 한다"
+        assert rows[0][1] == "m2"
+
+        # ⑥ 사용량을 안 실어 보내는 응답이면 행을 만들지 않는다(추정하지 않는다).
+        egress.call_raw(lambda: {"content": []}, exempt=True, kind="route")
+        assert not (store._exec("SELECT 1 FROM usage WHERE kind = ?",
+                                ("route",), fetch="all") or [])
+    finally:
+        store.close()
+        store.PATH = saved
+    return 17
+
+
 def _registry_checks() -> int:
     """호스트 명부 — 한 호스트의 사실이 한 곳에서 읽히는지."""
     import importlib
