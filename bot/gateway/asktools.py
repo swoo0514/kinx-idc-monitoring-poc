@@ -346,7 +346,11 @@ def check_filter(text: str) -> tuple:
     if len(s) > FILTER_MAX_CHARS:
         return False, "필터가 %d자를 넘는다" % FILTER_MAX_CHARS
     if _UNSAFE.search(s):
-        return False, "질의문을 깨뜨리는 글자가 있다(따옴표·중괄호·역슬래시·줄바꿈)"
+        # 무엇을 잘못했는지까지 적는다. 실측으로 모델이 구간 값을 contains 에 밀어 넣고
+        # 거부당한 뒤 같은 인자로 두 번 더 불렀다(2026-08-19).
+        return False, ("질의문을 깨뜨리는 글자가 있다(따옴표·중괄호·역슬래시·줄바꿈). "
+                       "contains 에는 찾을 낱말만 넣는다. 기간은 range 에, 대상은 host 에 "
+                       "따로 넣어라")
     terms = filter_terms(s)
     if s and not terms:
         return False, "찾을 낱말이 없다"

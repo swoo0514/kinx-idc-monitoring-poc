@@ -552,6 +552,19 @@ def render_answer(args: dict, had_evidence: bool = True) -> str:
     return (chr(10)).join(p for p in parts if p)
 
 
+def with_evidence_note(text: str, trace: list, ok_count: int) -> str:
+    """근거가 하나도 없으면 그 사실을 붙인다.
+
+    답 도구를 안 쓰고 산문으로 끝내는 길이 남아 있다. 그 길로 나가도 사실은 같다 —
+    조회가 전부 실패했는데 "없습니다" 로 닫히면 사람에게는 조회가 된 것처럼 보인다.
+    """
+    if not text or not trace or int(ok_count) > 0:
+        return text
+    if NO_EVIDENCE in text:
+        return text
+    return text + chr(10) + NO_EVIDENCE
+
+
 def strip_handles(text: str) -> str:
     """답에서 그림 손잡이를 걷어 낸다. 앞뒤 공백도 정리한다."""
     # 마크다운 그림 표기는 통째로 걷어 낸다. 손잡이만 빼면 `![image]()` 가 남아
@@ -805,6 +818,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not final:
         text = (stall_note(stopped, trace)
                 + ((chr(10) * 2 + text) if text else ""))
+    text = with_evidence_note(text, trace, ok_queries["n"])
     remember(sid or "-", mk)
     return {"text": strip_handles(mk.unmask(text)), "trace": trace,
             "rounds": len(trace),
@@ -1267,6 +1281,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
     if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not final:
         text = (stall_note(stopped, trace)
                 + ((chr(10) * 2 + text) if text else ""))
+    text = with_evidence_note(text, trace, int((ok_queries or {}).get("n", 1)))
     remember(sid or "-", mk)
     return {"text": strip_handles(mk.unmask(text)), "trace": trace,
             "rounds": len(trace),

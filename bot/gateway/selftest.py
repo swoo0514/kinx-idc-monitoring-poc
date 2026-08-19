@@ -4208,7 +4208,19 @@ def _no_evidence_checks() -> int:
 
     r2 = asyncio.run(ask.run_ask("호스트 뭐 있어", table=table, model_fn=ok_model))
     assert ask.NO_EVIDENCE not in r2["text"], r2["text"]
-    return 2
+
+    # 답 도구를 안 쓰고 산문으로 끝내도 마찬가지다. 그 길이 열려 있는 한 같은 일이 난다.
+    def prose(system, messages, tools):
+        if len(messages) == 1:
+            return {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "t1", "name": "host_logs",
+                 "input": {"host": tok, "contains": '깨진 "값" {x}'}}]}
+        return {"stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "그 시간대에는 로그가 없습니다"}]}
+
+    r3 = asyncio.run(ask.run_ask("어제 로그", table=table, model_fn=prose))
+    assert ask.NO_EVIDENCE in r3["text"], r3["text"]
+    return 4
 
 
 def _now_context_checks() -> int:
