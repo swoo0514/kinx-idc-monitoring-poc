@@ -481,6 +481,24 @@ def _cache_checks() -> int:
         else:
             os.environ["LLM_CACHE"] = saved
 
+    # ③ 유효 시간을 정할 수 있어야 한다. 기본 5분인데 질문 간격 중앙값이 6.4분이라
+    #    (2026-08-19 실측) 대부분이 냉시작으로 떨어진다. 1시간이면 간격의 89%를 덮는다.
+    saved_ttl = os.environ.get("LLM_CACHE_TTL")
+    try:
+        os.environ["LLM_CACHE_TTL"] = "1h"
+        cc = llm.cached_system("긴 시스템 문구")[-1]["cache_control"]
+        assert cc.get("ttl") == "1h", "1h 로 두면 그 값이 실려야 한다"
+        assert cc["type"] == "ephemeral", "1h 도 ephemeral 종류다(공식 문서)"
+        os.environ["LLM_CACHE_TTL"] = "5m"
+        assert "ttl" not in llm.cached_system("x")[-1]["cache_control"],             "5m 은 기본값이라 실어 보내지 않는다"
+        os.environ["LLM_CACHE_TTL"] = "이상한값"
+        assert "ttl" not in llm.cached_system("x")[-1]["cache_control"],             "모르는 값이면 기본으로 떨어진다 — 잘못 적어도 호출이 죽지 않아야 한다"
+    finally:
+        if saved_ttl is None:
+            os.environ.pop("LLM_CACHE_TTL", None)
+        else:
+            os.environ["LLM_CACHE_TTL"] = saved_ttl
+
     # ③ 도구 정의가 같은 표에 대해 같은 바이트다(캐시 접두사의 맨 앞).
     t = {"[host-b]": {}, "[host-a]": {}}
     import json
@@ -508,7 +526,7 @@ def _cache_checks() -> int:
     finally:
         store.close()
         store.PATH = saved_path
-    return 12
+    return 16
 
 
 

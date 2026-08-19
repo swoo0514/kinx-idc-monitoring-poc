@@ -383,12 +383,26 @@ def _prompt(name: str, fallback: str) -> str:
     return prompts.load(name, fallback)
 
 
+# 캐시 유효 시간. 기본 5분은 쓰기가 1.25배, 1시간은 2배이고 읽기는 둘 다 0.1배다.
+# 읽을 때마다 시간이 갱신된다. 근거와 실측은 GATEWAY_GUIDE §29.
+CACHE_TTLS = ("5m", "1h")
+
+
+def cache_ttl() -> str:
+    """실어 보낼 유효 시간. 기본값(5m)이면 빈 문자열 — 값을 안 싣는다."""
+    v = os.environ.get("LLM_CACHE_TTL", "").strip().lower()
+    return v if v in CACHE_TTLS and v != "5m" else ""
+
+
 def cached_system(system: str):
     """시스템 문구를 캐시 표시가 붙은 블록으로. 끄면 문자열 그대로."""
     if os.environ.get("LLM_CACHE", "1").strip().lower() in ("0", "false", "no"):
         return system
-    return [{"type": "text", "text": system,
-             "cache_control": {"type": "ephemeral"}}]
+    cc = {"type": "ephemeral"}
+    ttl = cache_ttl()
+    if ttl:
+        cc["ttl"] = ttl
+    return [{"type": "text", "text": system, "cache_control": cc}]
 
 
 def claude_tools(system: str, messages: list, tools: list,
