@@ -119,6 +119,27 @@ def span_in_text(text: str):
     return (a, b) if a < b else None
 
 
+# 절대 구간을 잇는 글자. 사람도 모델도 물결표를 가장 많이 쓴다.
+_SPAN_SEP = re.compile(r"\s*(?:~|\.\.|—|–|to)\s*")
+
+
+def span_of(args: dict) -> tuple:
+    """절대 구간 `(시작, 끝)`. 못 읽으면 `(None, None)`.
+
+    인자 하나(`range`)로 받는다. 예전에는 `from`·`to` 두 개였는데 도구마다 두 칸씩
+    차지해 도구 정의가 한도를 넘었다. 한쪽만 준 요청이 조용히 무시되던 문제도 함께
+    사라진다(2026-08-19 감사 A-5).
+    """
+    a = (args or {}).get("range")
+    if a in (None, ""):
+        # 예전 형태도 계속 읽는다. 스키마에는 없지만 이력이나 손 호출로 들어올 수 있다.
+        return parse_when((args or {}).get("from")), parse_when((args or {}).get("to"))
+    parts = [p for p in _SPAN_SEP.split(str(a).strip()) if p]
+    if len(parts) != 2:
+        return None, None
+    return parse_when(parts[0]), parse_when(parts[1])
+
+
 def window_bounds(args: dict, now: int, max_m: int = 0, default_span=None) -> tuple:
     """조회 구간 `(시작, 끝, 잘렸는가)`. 절대 구간이 있으면 그것을, 없으면 상대 창을.
 
@@ -129,8 +150,7 @@ def window_bounds(args: dict, now: int, max_m: int = 0, default_span=None) -> tu
     7일 내내 아무 일도 없었다고 읽는다(2026-08-18 랩 실측).
     """
     cap = int(max_m or WINDOW_MAX_M) * 60
-    a = parse_when((args or {}).get("from"))
-    b = parse_when((args or {}).get("to"))
+    a, b = span_of(args)
     # **사람이 보던 구간을 모델에게 받아 적으라고 시키지 않는다.** 화면이 이미 넘겨 준
     # 값이 있는데 모델이 인자로 안 옮기면 조용히 최근 창으로 떨어진다. 2026-08-18 실측:
     # 8월 11~13일 패널을 보고 물었는데 최근 1시간만 조회하고 "과거 구간 조회가
@@ -271,6 +291,9 @@ def bad_when(args: dict) -> list:
         v = (args or {}).get(key)
         if v not in (None, "") and parse_when(v) is None:
             out.append(key)
+    rng = (args or {}).get("range")
+    if rng not in (None, "") and span_of(args) == (None, None):
+        out.append("range")
     return out
 
 
@@ -279,7 +302,8 @@ def when_note(args: dict) -> str:
     bad = bad_when(args)
     if not bad:
         return ""
-    return ("%s 값을 시각으로 읽지 못해 무시했다. 유닉스 초나 ISO8601 로 준다. "
+    return ("%s 값을 시각으로 읽지 못해 무시했다. 절대 구간은 range 에 "
+            "'2026-08-13T00:00Z ~ 2026-08-13T06:00Z' 처럼 물결표로 이어 준다. "
             "긴 기간은 window_m 에 분으로 준다(90일이면 129600)."
             % ", ".join("%s=%r" % (k, (args or {}).get(k)) for k in bad))
 
@@ -441,8 +465,12 @@ _WINDOW_PROPS = {
     "window_m": {"type": "integer",
                  "description": ("지금부터 거슬러 볼 분. 90일이면 129600. 셋 다 비우면 "
                                  "사람이 화면에서 보고 있는 구간을 본다")},
-    "from": {"type": "string", "description": "절대 구간 시작. ISO8601 또는 유닉스 초"},
-    "to": {"type": "string", "description": "절대 구간 끝"},
+    # **시작과 끝을 인자 두 개로 받지 않는다.** 도구 네 개에 두 개씩이라 정의가 커지고,
+    # 2026-08-19 랩 실측으로 그 상태에서 API 가 "Schema is too complex for compilation"
+    # 으로 모든 질의를 거부했다. 하나로 합치니 통과한다. 한쪽만 주는 실수도 사라진다.
+    "range": {"type": "string",
+              "description": ("절대 구간. '2026-08-13T00:00Z ~ 2026-08-13T06:00Z' 처럼 "
+                              "물결표로 잇는다. 유닉스 초도 된다")},
 }
 
 

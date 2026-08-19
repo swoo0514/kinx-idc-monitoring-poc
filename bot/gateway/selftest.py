@@ -652,7 +652,7 @@ def _class_map_checks() -> int:
         assert pending.PATH.startswith(_tmpd), pending.PATH
         pending.PATH = _saved_pending
         shutil.rmtree(_tmpd, ignore_errors=True)
-        return 20
+        return 24
     finally:
         os.unlink(path)
         if saved is None:
@@ -4024,6 +4024,19 @@ def _panel_window_checks() -> int:
     a, b, cut = asktools.window_bounds({}, now=1787000000, max_m=60,
                                        default_span=(T0, T1))
     assert cut and b - a == 3600, (a, b, cut)
+
+    # ③-a-2 **절대 구간은 인자 하나로 받는다.** 도구 네 개에 시작·끝 두 개씩이면 정의가
+    #        커져 API 가 "Schema is too complex for compilation" 으로 **모든 질의를**
+    #        거부한다(2026-08-19 랩 실측). 하나로 합치니 통과한다.
+    for t in asktools.build_tool_specs({"[h]": {}}):
+        props = t["input_schema"]["properties"]
+        assert "from" not in props and "to" not in props, t["name"]
+    assert asktools.span_of({"range": "2026-08-11T19:18:12Z ~ 2026-08-13T13:32:21Z"})         == (T0 - 12 + 12, T1 - 21 + 21), asktools.span_of({"range": "x"})
+    a, b, cut = asktools.window_bounds({"range": "1786475892 .. 1786627941"},
+                                       now=1787000000, max_m=asktools.WINDOW_MAX_WIDE_M)
+    assert (a, b) == (T0, T1), (a, b)
+    # 못 읽으면 지어내지 않고 알린다.
+    assert "range" in asktools.bad_when({"range": "어제쯤"}), asktools.bad_when({"range": "어제쯤"})
 
     # ③-b **모델이 스스로 창을 넣으면** 화면 구간이 안 쓰인다. 그 자체는 옳지만,
     #      모델이 최근 창 결과를 받고 "과거는 조회 불가" 라고 단정한 일이 있었다
