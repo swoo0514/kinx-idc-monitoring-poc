@@ -643,15 +643,19 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     # 사람이 보고 있던 패널은 **맥락으로만** 알려 준다. 무조건 붙이면 이어지는
     # 질문마다 같은 그림이 다시 그려진다. 붙일지는 모델이 정하고, 판단 기준은 지시문에
     # 적었다.
-    viewing = ""
+    # **지금이 언제인지 알려 준다.** 사람은 "어제 오후 3시" 처럼 상대 시각으로 말하는데,
+    # 모델이 오늘 날짜를 모르면 조회를 못 하고 되묻는다(2026-08-19 랩 실측). 서버 시각을
+    # 주면 모델이 계산해서 range 로 넘긴다.
+    viewing = "[지금] %s UTC%s" % (asktools.window_label(now, now).split(" → ")[0],
+                                   chr(10))
     if panel and panel.get("uid"):
         span = ""
         if panel_span:
             span = " 조회 구간은 %s 이며 도구가 기본으로 그 구간을 본다." % (
                 asktools.window_label(*panel_span))
-        viewing = ("[사람이 보고 있는 패널] %s — 이 화면을 그림으로 붙이려면 "
-                   "panel_image 를 부르면 된다.%s" + chr(10)
-                   ) % (mk.mask(str(panel.get("title") or "제목 없음")), span)
+        viewing += ("[사람이 보고 있는 패널] %s — 이 화면을 그림으로 붙이려면 "
+                    "panel_image 를 부르면 된다.%s" + chr(10)
+                    ) % (mk.mask(str(panel.get("title") or "제목 없음")), span)
 
     hist, dropped = trim_history(history)
     # **이력도 가린다.** 화면은 사람이 읽는 글(실명으로 되돌린 것)을 이력으로

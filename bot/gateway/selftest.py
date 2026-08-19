@@ -289,7 +289,7 @@ def main():
                     + _repo_secret_checks() + _session_isolation_checks()
                     + _panel_status_checks() + _token_scope_checks()
                     + _event_loop_checks() + _nametable_freshness_checks()
-                    + _model_kind_wiring_checks()
+                    + _model_kind_wiring_checks() + _now_context_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -4165,6 +4165,38 @@ def _cap_answer_checks() -> int:
     assert "다시 물어보라" in ask.stall_note("deadline", [])
     assert "host_logs" in ask.stall_note("rounds", [{"tool": "host_logs"}])
     return 14
+
+
+def _now_context_checks() -> int:
+    """모델이 지금이 언제인지 아는가.
+
+    2026-08-19 랩 실측: "어제 오후 3시부터 4시 사이 로그" 를 물었더니 봇이 조회를 한 번도
+    안 하고 "어제가 몇 월 며칠인지 알려 달라" 고 되물었다. 오늘 날짜를 아무도 안 알려
+    줬기 때문이다. 사람은 늘 상대 시각으로 말한다.
+    """
+    import asyncio
+
+    from . import ask
+
+    seen = {}
+
+    def model(system, messages, tools):
+        seen["blob"] = str(messages)
+        return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
+
+    table = {ask.proxy.token_for("host", "web-01"):
+             {"host": "web-01", "source": "s", "logs": "", "security": ""}}
+    asyncio.run(ask.run_ask("어제 로그 보여줘", table=table, model_fn=model,
+                            now=1786600000))
+    # 지금이 언제인지 UTC 로 적어 준다. 값을 지어내지 않게 형식도 함께 준다.
+    assert "2026-08-13" in seen["blob"], seen["blob"][:300]
+    assert "UTC" in seen["blob"], seen["blob"][:300]
+
+    asyncio.run(ask.run_ask("이 패널 뭐야", table=table, model_fn=model, now=1786600000,
+                            panel={"uid": "u1", "panelId": 2, "title": "t"}))
+    assert "2026-08-13" in seen["blob"], "패널 맥락이 지금 시각을 덮어썼다"
+    assert "보고 있는 패널" in seen["blob"], seen["blob"][:300]
+    return 4
 
 
 def _model_kind_wiring_checks() -> int:
