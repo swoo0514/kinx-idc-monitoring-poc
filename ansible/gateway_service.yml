@@ -46,6 +46,14 @@
 
     # 저널이 자리를 다 먹지 않게 상한을 둔다. 실 호스트명이 남는 기록이라 보존 기간도
     # 함께 정한다.
+    - name: 저널 설정 디렉토리
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: 저널 보존 한도
       ansible.builtin.copy:
         dest: /etc/systemd/journald.conf.d/kinx-gateway.conf
