@@ -115,8 +115,22 @@ def to_ai_message(reply: dict):
     calls = [{"name": b.get("name", ""), "args": b.get("input") or {},
               "id": b.get("id"), "type": "tool_call"}
              for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
-    return AIMessage(content=text, tool_calls=calls,
-                     response_metadata={"usage": reply.get("usage") or {}})
+    # **토큰 수를 규약대로 싣는다.** `response_metadata` 에만 넣으면 추적 화면이 못 읽어
+    # 토큰과 비용 칸이 빈다(2026-08-19 확인). 비용을 보려고 켜는 것이므로 그러면 켠 뜻이
+    # 없다. 입력에는 캐시 읽기·쓰기를 포함하고 내역을 따로 적는다 — 랭체인이 다른
+    # 공급자에도 그렇게 적어 나란히 볼 수 있다.
+    u = reply.get("usage") or {}
+    usage = None
+    if u:
+        cache_read = int(u.get("cache_read_input_tokens") or 0)
+        cache_write = int(u.get("cache_creation_input_tokens") or 0)
+        inp = int(u.get("input_tokens") or 0) + cache_read + cache_write
+        out = int(u.get("output_tokens") or 0)
+        usage = {"input_tokens": inp, "output_tokens": out, "total_tokens": inp + out,
+                 "input_token_details": {"cache_read": cache_read,
+                                         "cache_creation": cache_write}}
+    return AIMessage(content=text, tool_calls=calls, usage_metadata=usage,
+                     response_metadata={"usage": u})
 
 
 def make_model(system: str, specs: list, user: str, model_fn=None):

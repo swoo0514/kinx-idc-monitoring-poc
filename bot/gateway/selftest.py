@@ -293,6 +293,7 @@ def main():
                     + _no_evidence_checks() + _metric_batch_checks()
                     + _tool_timeout_checks() + _table_cache_checks()
                     + _list_truncation_checks() + _tracing_checks()
+                    + _usage_metadata_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -4168,6 +4169,37 @@ def _cap_answer_checks() -> int:
     assert "다시 물어보라" in ask.stall_note("deadline", [])
     assert "host_logs" in ask.stall_note("rounds", [{"tool": "host_logs"}])
     return 14
+
+
+def _usage_metadata_checks() -> int:
+    """추적 화면에 토큰 수와 비용이 뜨는가.
+
+    우리 모델 자리는 직접 만든 것이라 응답을 프레임워크 메시지로 옮길 때 토큰 수를
+    같이 실어야 한다. `response_metadata` 에만 넣으면 랭스미스가 못 읽어 **추적은 뜨는데
+    토큰과 비용 칸이 빈다**(2026-08-19 확인). 비용을 보려고 켠 것이므로 그러면 켠 뜻이
+    없다.
+
+    수치는 랭체인 규약을 따른다 — 입력 토큰에 캐시 읽기·쓰기를 포함하고, 그 내역을
+    input_token_details 에 나눠 적는다. 그래야 다른 모델과 나란히 볼 수 있다.
+    """
+    from . import graph
+
+    if not graph.available():
+        return 0
+    msg = graph.to_ai_message({
+        "content": [{"type": "text", "text": "끝"}],
+        "usage": {"input_tokens": 326, "output_tokens": 12,
+                  "cache_read_input_tokens": 8803, "cache_creation_input_tokens": 0},
+    })
+    um = getattr(msg, "usage_metadata", None)
+    assert um, "토큰 수를 안 실었다 — 추적 화면의 비용 칸이 빈다"
+    assert um["input_tokens"] == 326 + 8803, um
+    assert um["output_tokens"] == 12, um
+    assert um["total_tokens"] == 326 + 8803 + 12, um
+    assert um["input_token_details"]["cache_read"] == 8803, um
+    # 사용량이 안 실려 온 응답에서도 터지지 않는다.
+    assert graph.to_ai_message({"content": []}) is not None
+    return 6
 
 
 def _tracing_checks() -> int:
