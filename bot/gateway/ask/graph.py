@@ -157,6 +157,24 @@ def make_model(system: str, specs: list, user: str, model_fn=None):
         def _llm_type(self) -> str:
             return "kinx-gateway"
 
+        def _get_ls_params(self, stop=None, **kw):
+            """추적에 실을 모델 정보. **비용은 이 값으로 계산된다.**
+
+            기본 구현은 클래스 이름에서 공급자를 뽑고(`GatewayChat` → `gateway`) 모델
+            이름은 비워 둔다. 그러면 추적 화면에 토큰 수는 떠도 단가를 몰라 비용 칸이
+            빈다(2026-08-19 실측). 우리는 모델 자리를 직접 만들었으므로 이 두 값을
+            아무도 대신 채워 주지 않는다.
+
+            공식 문서 확인: "Setting `ls_model_name` in your metadata is required for
+            LangSmith to identify the model and calculate costs for custom LLM traces."
+            (docs.langchain.com/langsmith/log-llm-trace)
+            """
+            from langchain_core.language_models.chat_models import LangSmithParams
+
+            return LangSmithParams(ls_provider="anthropic", ls_model_type="chat",
+                                   ls_model_name=llm.model_for("investigate"),
+                                   ls_max_tokens=llm.MAX_TOKENS)
+
         def bind_tools(self, tools, **kw):
             # 도구 정의는 우리 것을 쓴다. 프레임워크 변환을 거치지 않는다.
             return self

@@ -1135,7 +1135,25 @@ def _usage_metadata_checks() -> int:
     assert um["input_token_details"]["cache_read"] == 8803, um
     # 사용량이 안 실려 온 응답에서도 터지지 않는다.
     assert graph.to_ai_message({"content": []}) is not None
-    return 6
+
+    # **모델 이름은 run 의 메타데이터로 가야 한다.** 메시지에만 적으면 화면이 못 읽어
+    # 비용이 안 잡힌다. 기본 구현은 클래스 이름에서 공급자를 뽑고(GatewayChat →
+    # gateway) 모델 이름은 비워 둔다(2026-08-19 실측).
+    import os
+
+    saved = os.environ.get("LLM_MODEL_INVESTIGATE")
+    try:
+        os.environ["LLM_MODEL_INVESTIGATE"] = "claude-haiku-4-5-20251001"
+        model = graph.make_model("시스템", [], "tester")
+        ls = model._get_ls_params()
+        assert ls.get("ls_model_name") == "claude-haiku-4-5-20251001", ls
+        assert ls.get("ls_provider") == "anthropic", ls
+    finally:
+        if saved is None:
+            os.environ.pop("LLM_MODEL_INVESTIGATE", None)
+        else:
+            os.environ["LLM_MODEL_INVESTIGATE"] = saved
+    return 8
 
 
 
