@@ -115,6 +115,9 @@ services:
       GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: kinxidc-ask-app,kinxidc-ask-datasource
       # 프로비저닝의 secureJsonData 가 이 값을 가져간다. 파일에 토큰을 안 적기 위해서다.
       GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
+      # 질의 화면 전용 토큰. 데이터소스 프로비저닝이 이 값을 읽는다. 이 토큰으로는
+      # 웹훅과 LLM 중계를 못 부른다(2026-08-19).
+      ASK_TOKEN: ${ASK_TOKEN:-}
       GF_FEATURE_TOGGLES_ENABLE: extensionSidebar
       # 프록시가 로그인 사용자를 게이트웨이까지 넘긴다. 사용량을 사람별로 세는 근거다.
       GF_DATAPROXY_SEND_USER_HEADER: "true"
