@@ -292,7 +292,7 @@ def main():
                     + _model_kind_wiring_checks() + _now_context_checks()
                     + _no_evidence_checks() + _metric_batch_checks()
                     + _tool_timeout_checks() + _table_cache_checks()
-                    + _list_truncation_checks()
+                    + _list_truncation_checks() + _tracing_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -4168,6 +4168,48 @@ def _cap_answer_checks() -> int:
     assert "다시 물어보라" in ask.stall_note("deadline", [])
     assert "host_logs" in ask.stall_note("rounds", [{"tool": "host_logs"}])
     return 14
+
+
+def _tracing_checks() -> int:
+    """추적을 켜고 끄는 스위치가 실제로 동작하는가.
+
+    랭스미스는 **외부로 값이 한 벌 더 나가는 지점**이다. 기본은 꺼져 있어야 하고, 켜는
+    것은 운영자가 파일에 적을 때만이어야 한다. 라이브러리가 없거나 키가 없어도 질의는
+    그대로 돌아야 한다 — 선택 의존이다.
+    """
+    import os
+
+    from . import tracing
+
+    saved = {k: os.environ.get(k) for k in
+             ("LANGSMITH_TRACING", "LANGSMITH_API_KEY", "LANGCHAIN_TRACING_V2")}
+    try:
+        for k in saved:
+            os.environ.pop(k, None)
+        # ① 기본은 꺼짐. 아무것도 안 적으면 아무 데도 안 보낸다.
+        assert tracing.enabled() is False
+        st = tracing.setup()
+        assert st["on"] is False and "미설정" in st["why"], st
+
+        # ② 키 없이 켜기만 하면 켜지지 않는다. 조용히 켜진 척하는 것이 가장 나쁘다.
+        os.environ["LANGSMITH_TRACING"] = "true"
+        st = tracing.setup()
+        assert st["on"] is False and "키" in st["why"], st
+
+        # ③ 둘 다 있으면 켜고, 라이브러리가 읽는 변수까지 맞춰 준다.
+        os.environ["LANGSMITH_API_KEY"] = "ls-test"
+        st = tracing.setup()
+        assert st["on"] is True, st
+        assert os.environ.get("LANGCHAIN_TRACING_V2") == "true", os.environ
+        assert os.environ.get("LANGSMITH_PROJECT"), "프로젝트 이름을 안 정했다"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        os.environ.pop("LANGSMITH_PROJECT", None)
+    return 8
 
 
 def _list_truncation_checks() -> int:

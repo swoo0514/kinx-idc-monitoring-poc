@@ -14,7 +14,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from . import ask, graph
+from . import ask, graph, tracing
 from . import collector
 from . import convo
 from . import heartbeat
@@ -117,6 +117,11 @@ async def _start_heartbeat():
         log.info("대화 이력 저장소 연결됨 (Redis)")
     else:
         log.warning("대화 이력 저장소 없음 — 질의는 되지만 대화가 안 남는다 (REDIS_URL)")
+    # 질의 추적. 외부로 값이 한 벌 더 나가는 지점이라 기본은 꺼져 있고, 운영자가 파일에
+    # 적었을 때만 켜진다. 켜졌는지·왜 안 켜졌는지를 기록에 남긴다(§33).
+    _tr = tracing.setup()
+    log.info("질의 추적 %s%s", "켜짐 (프로젝트 %s)" % _tr["project"] if _tr["on"]
+             else "꺼짐", "" if _tr["on"] else " — %s" % _tr["why"])
     _beat.start()
     # 무거운 모듈을 여기서 불러 둔다. 첫 질의가 임포트 값을 뒤집어쓰면 사람은 화면에서
     # 502 를 본다(2026-08-18 실측: langgraph 첫 임포트 95초). 기동은 사람이 기다리는
@@ -273,6 +278,7 @@ def healthz():
     return {"ok": True, "version": app.version,
             "names": int(_names.get("terms") or 0),
             "names_error": bool(_names.get("error")),
+            "tracing": tracing.enabled(),
             "store": store.status()["open"],
             "annotations": bool(_grafana_state.get("ok")),
             "zabbix": all(_zabbix_state.values()) if _zabbix_state else None,
