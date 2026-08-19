@@ -3217,8 +3217,10 @@ def _ask_tool_checks() -> int:
     # ⑥ Wazuh 질의 본문은 고정 틀에서 만든다. 에이전트명은 정확 일치다.
     body = asktools.build_wazuh_query("vm-a.example", 60, 7, 1786590000)
     assert body["query"]["bool"]["filter"][0]["term"]["agent.name"] == "vm-a.example", body
-    assert set(body) <= {"size", "sort", "query", "_source"}, body
-    return 32
+    assert set(body) <= {"size", "sort", "query", "_source", "track_total_hits"}, body
+    # **총 건수를 함께 받는다.** 50건만 받아 세면 그보다 많을 때 조용히 적게 센다.
+    assert body.get("track_total_hits") is True, body
+    return 33
 
 
 

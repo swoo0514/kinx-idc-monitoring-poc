@@ -294,15 +294,25 @@ async def fetch_security(body: dict, masker: masking.Masker) -> dict:
             r = await c.post(f"{url}/wazuh-alerts-*/_search", json=body, auth=auth,
                              timeout=collector.TIMEOUT_S)
             r.raise_for_status()
-            hits = r.json().get("hits", {}).get("hits", [])
+            body_json = r.json()
+            hits = body_json.get("hits", {}).get("hits", [])
+            total = (body_json.get("hits", {}).get("total") or {}).get("value")
     except Exception as e:
         log.warning("보안 조회 실패: %s", e)
         return {"alerts": [], "status": collector.SOURCE_UNAVAILABLE,
                 "note": "조회하지 못했다. 이 결과를 '없음'으로 읽지 마라"}
-    return {"alerts": [masking._security_item(
-                           collector.flatten_alert(h.get("_source") or {}), masker.mask)
-                       for h in hits],
-            "status": collector.SOURCE_OK}
+    out = {"alerts": [masking._security_item(
+                          collector.flatten_alert(h.get("_source") or {}), masker.mask)
+                      for h in hits],
+           "status": collector.SOURCE_OK}
+    if total is not None:
+        # **구간의 총 건수를 함께 준다.** 실린 것만 세면 50건을 넘을 때 조용히 적게 센다.
+        out["total"] = int(total)
+        if int(total) > len(hits):
+            out["note"] = ("이 구간의 경보는 모두 %d건인데 최근 %d건만 실렸다. 건수는 "
+                           "total 을 쓰고, 종류별로 세는 것은 실린 범위 안에서만 하라."
+                           % (int(total), len(hits)))
+    return out
 
 
 def judgment_body(row: dict, mk: masking.Masker) -> str:

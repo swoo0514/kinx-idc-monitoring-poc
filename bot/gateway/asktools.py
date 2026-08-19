@@ -373,6 +373,9 @@ def build_wazuh_query(agent_name: str, start: int, end: int, min_level: int) -> 
         lvl = 0
     return {
         "size": 50,
+        # **총 건수를 함께 받는다.** 50건만 받아 세면 그보다 많을 때 조용히 적게 센다.
+        # 오늘 하루 반복된 실패가 전부 이 모양이었다(2026-08-19).
+        "track_total_hits": True,
         "sort": [{"@timestamp": {"order": "desc"}}],
         "_source": ["@timestamp", "rule.level", "rule.id", "rule.description",
                     "rule.groups", "agent.name", "syscheck.path", "syscheck.event"],
