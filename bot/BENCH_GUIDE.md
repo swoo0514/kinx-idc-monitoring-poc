@@ -26,13 +26,13 @@
 ```bash
 # Claude 메인 경로 측정 (로컬 PC 실행, ANTHROPIC_API_KEY 환경변수 필요)
 pip install anthropic
-python bot/latency_bench.py --provider claude --runs 3
+python bot/tools/latency_bench.py --provider claude --runs 3
 
 # Ollama 폴백 경로 측정 (랩 VM 환경 실행, 'ollama pull qwen3:8b' 사전 실행 필요)
-python3 bot/latency_bench.py --provider ollama --ollama-model qwen3:8b --runs 3
+python3 bot/tools/latency_bench.py --provider ollama --ollama-model qwen3:8b --runs 3
 
 # 통합 비교 측정 (Ollama가 로컬 환경에 구성된 경우)
-python bot/latency_bench.py --provider both --json-out bench_result.json
+python bot/tools/latency_bench.py --provider both --json-out bench_result.json
 ```
 
 ### 주요 CLI 옵션 명세

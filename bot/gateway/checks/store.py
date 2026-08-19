@@ -15,7 +15,9 @@ import sqlite3
 import tempfile
 
 from .common import _FakeHttpx
-from .. import collector, grafana, keep, llm, masking, nametable, pending, prior, quality, slack, store, triage
+from .. import llm, masking, nametable, store
+from ..alerts import collector, pending, prior, quality, triage
+from ..integrations import grafana, keep, slack
 log = logging.getLogger("gateway.selftest")
 
 
@@ -79,7 +81,7 @@ def _store_checks() -> int:
         import asyncio
         import time as _t
 
-        from .. import incident as inc_mod, triage
+        from ..alerts import incident as inc_mod, triage
 
         store.PATH = os.path.join(d, "wire.db")
         store.close()
@@ -248,7 +250,9 @@ def _judgment_wiring_checks() -> int:
     import tempfile
     import time as _t
 
-    from .. import collector, incident as inc_mod, keep, llm, store, triage
+    from .. import llm, store
+    from ..alerts import collector, incident as inc_mod, triage
+    from ..integrations import keep
 
     d = tempfile.mkdtemp(prefix="wire-")
     saved_path, saved_push, saved_llm = store.PATH, keep.push_alert, llm.triage_reply
@@ -352,7 +356,9 @@ def _feedback_checks() -> int:
 
     from .. import store
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # 도구 스크립트는 bot/tools/ 에 있다. 검사 파일에서 두 단계 위가 bot/ 이다.
+    _bot = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path.insert(0, os.path.join(_bot, "tools"))
     import mark_judgment
 
     d = tempfile.mkdtemp(prefix="mark-")
@@ -411,7 +417,8 @@ def _route_record_checks() -> int:
     import shutil
     import tempfile
 
-    from .. import app as app_mod, pending, store
+    from .. import app as app_mod, store
+    from ..alerts import pending
 
     d = tempfile.mkdtemp(prefix="route-")
     saved_path, saved_pending = store.PATH, pending.PATH
@@ -462,7 +469,7 @@ def _annotation_checks() -> int:
     """판정 주석 — 지표 스파이크와 같은 자리에 찍히는가, 실패가 조용한가 (§25-4)."""
     import os
 
-    from .. import grafana
+    from ..integrations import grafana
 
     saved_env = {k: os.environ.get(k) for k in
                  ("GATEWAY_GRAFANA_URL", "GRAFANA_INTERNAL_URL", "GRAFANA_TOKEN")}
@@ -532,7 +539,7 @@ def _annotation_checks() -> int:
         import asyncio
         import time as _t
 
-        from .. import incident as inc_mod, triage
+        from ..alerts import incident as inc_mod, triage
 
         sent.clear()
         grafana.httpx = _FakeHttpx()
@@ -566,7 +573,8 @@ def _quality_checks() -> int:
     import shutil
     import tempfile
 
-    from .. import quality, store
+    from .. import store
+    from ..alerts import quality
 
     d = tempfile.mkdtemp(prefix="quality-")
     saved = store.PATH
@@ -669,7 +677,8 @@ def _prior_checks() -> int:
     import tempfile
     import time as _t
 
-    from .. import incident as inc_mod, masking, nametable, prior, store
+    from .. import masking, nametable, store
+    from ..alerts import incident as inc_mod, prior
 
     d = tempfile.mkdtemp(prefix="prior-")
     saved_path, saved_terms = store.PATH, dict(nametable._terms)
@@ -807,7 +816,7 @@ def _dashboard_annotation_checks() -> int:
     sys.path.insert(0, os.path.join(root, "tools"))
     import set_judgment_annotation as sja
 
-    from .. import incident as inc_mod
+    from ..alerts import incident as inc_mod
 
     n = 0
     for uid, spec in sja.SPEC.items():
@@ -848,7 +857,7 @@ def _select_invariant_checks() -> int:
     """
     import random
 
-    from .. import collector as c
+    from ..alerts import collector as c
 
     rnd = random.Random(20260813)
     shapes = ["INFO request completed status=200 dur=%dms path=/v1/pay/%d",
@@ -894,7 +903,9 @@ def _evidence_checks() -> int:
     import shutil
     import tempfile
 
-    from .. import masking, prior, slack, store
+    from .. import masking, store
+    from ..alerts import prior
+    from ..integrations import slack
 
     # ① 조회 참조가 컨텍스트에 있어도 전송 형태에는 없다. 모델의 분석 재료가 아니다.
     ctx = {"incident": {"host": "h1", "classes": ["disk_space"], "alert_count": 1},

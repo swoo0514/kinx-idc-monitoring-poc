@@ -16,7 +16,7 @@
 - **대상 모델:** `claude-opus-4-8` (Extended Thinking 비활성화, `max_tokens=2048`, 3회 반복 측정)
 - **테스트 프롬프트:** 데모 C 실전 페이로드 모사 (알림 + 코드 기반 선판정 + 메트릭 + Loki 로그 + Wazuh 컨텍스트 / *실환경 데이터 제외, 랩 시뮬레이션 데이터 약 1.5KB 적용*)
 - **출력 제약 조건:** Slack 단일 메시지 규격 준수 (1,500자 이내 제한)
-- **측정 유틸리티 및 가이드:** [`bot/latency_bench.py`](../../../bot/latency_bench.py), 실행 절차는 [`bot/BENCH_GUIDE.md`](../../../bot/BENCH_GUIDE.md) 참조
+- **측정 유틸리티 및 가이드:** [`bot/tools/latency_bench.py`](../../../bot/tools/latency_bench.py), 실행 절차는 [`bot/BENCH_GUIDE.md`](../../../bot/BENCH_GUIDE.md) 참조
 
 ---
 

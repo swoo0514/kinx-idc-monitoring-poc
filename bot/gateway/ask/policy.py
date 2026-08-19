@@ -26,7 +26,7 @@ def target_allowed(source: str, host: str = "") -> tuple:
     기재하지 않은 감시 서버는 허용 목록에 없는 값이 되어 **자동으로 막힌다.** 설정을
     빠뜨린 사람이 가장 위험해지면 안 된다.
     """
-    from .. import incident     # 순환 참조를 피해 쓰는 자리에서 들여온다
+    from ..alerts import incident
 
     rlm = registry.realm(source, host, incident.REALM_MAP)
     allowed = allowed_realms()

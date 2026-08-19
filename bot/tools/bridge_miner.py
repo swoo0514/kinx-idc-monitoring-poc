@@ -23,7 +23,8 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# `bot/` 을 경로에 넣는다. 이 파일이 bot/tools/ 로 내려갔으므로 부모다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 한국어 Windows 콘솔은 기본 cp949 라 '—' 에서 죽는다. 조회가 끝난 뒤 출력에서 터져 원인이
 # 눈에 안 띈다 — docs/03-pitfalls/build-traps.md.
@@ -33,7 +34,7 @@ for _s in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from gateway import collector, incident  # noqa: E402
+from gateway.alerts import collector, incident
 
 DEFAULT_DAYS = 90
 DEFAULT_WINDOW_S = 600      # 같은 사건으로 볼 시간창. 게이트웨이 디바운스보다 넉넉하게.

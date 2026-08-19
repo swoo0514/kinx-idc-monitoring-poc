@@ -4,8 +4,9 @@ import asyncio
 import logging
 import time
 
-from . import (collector, grafana, holmes, incident as incident_mod, keep, llm,
-               prior, slack, store)
+from . import collector, incident as incident_mod, prior
+from .. import llm, store
+from ..integrations import grafana, holmes, keep, slack
 
 log = logging.getLogger("gateway.triage")
 

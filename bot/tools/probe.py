@@ -9,6 +9,12 @@
 환경변수: ZABBIX_URL·ZABBIX_TOKEN(필수), LOKI_URL(선택).
 """
 
+import os
+import sys
+
+# `bot/` 을 경로에 넣는다. 이 파일이 bot/tools/ 에 있으므로 부모다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
 import json
 import logging
@@ -26,7 +32,7 @@ for _s in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from gateway.collector import ZabbixClient, CORR_WINDOW_S  # noqa: E402
+from gateway.alerts.collector import ZabbixClient, CORR_WINDOW_S  # noqa: E402
 
 
 async def problems():
@@ -66,7 +72,7 @@ async def loki_host_values(lookback_s: int = None):
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url:
         return []
-    from gateway.collector import LOKI_HOST_LABEL, KNOWN_HOST_LOOKBACK_S
+    from gateway.alerts.collector import LOKI_HOST_LABEL, KNOWN_HOST_LOOKBACK_S
     span = KNOWN_HOST_LOOKBACK_S if lookback_s is None else lookback_s
     now = int(time.time())
     async with httpx.AsyncClient() as c:
@@ -151,7 +157,7 @@ async def openlink(host_name: str):
     """
     import httpx
 
-    from gateway import collector, incident
+    from gateway.alerts import collector, incident
 
     if host_name.startswith(("http://", "https://")):
         raise RuntimeError(
@@ -209,7 +215,8 @@ async def context(event_id: str, trigger_id: str):
     """
     import time as _t
 
-    from gateway import collector, incident, masking
+    from gateway import masking
+    from gateway.alerts import collector, incident
 
     zbx = collector.ZabbixClient()
     ev = await zbx_event(zbx, event_id)
@@ -256,7 +263,7 @@ async def names(limit: int = 500):
     뒤에는 어긋난 호스트를 미리 알아야 하므로 여기서 한 번에 본다. 판정 기준은
     수집기와 같다 — Loki 는 라벨 값 일치, Wazuh 는 agent.name 부분 일치.
     """
-    from gateway import collector
+    from gateway.alerts import collector
 
     z = collector.ZabbixClient()
     async with httpx.AsyncClient() as c:
@@ -334,7 +341,7 @@ async def gen_registry(source: str = "zabbix-internal", limit: int = 500):
     사람이 고쳐 쓸 수 있는 형태로 낸다. 그대로 쓰지 말고 **읽고 고친 뒤** 저장한다 —
     이름이 안 맞는 호스트는 여기서도 안 맞은 채로 나온다.
     """
-    from gateway import collector
+    from gateway.alerts import collector
 
     z = collector.ZabbixClient()
     async with httpx.AsyncClient() as c:

@@ -434,9 +434,10 @@ def _push_draft(target: str, draft: str, extra: dict = None) -> None:
     playbook 필드에 report_approve 를 실어 Keep 워크플로가 분기할 수 있게 한다.
     실패해도 전체 흐름을 막지 않는다(집계·숫자 전송은 별개다).
     """
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    # `bot/` 을 경로에 넣는다. 이 파일이 bot/tools/ 로 내려갔으므로 부모다.
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     try:
-        from gateway import keep
+        from gateway.integrations import keep
     except ImportError as e:
         print("[keep] 초안 등록 건너뜀 — %s" % e)
         return
@@ -651,7 +652,8 @@ def main():
 
     insight = ""
     if a.insight:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        # `bot/` 을 경로에 넣는다. 이 파일이 bot/tools/ 로 내려갔으므로 부모다.
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from gateway import llm
         r = llm.monthly_reply({k: v for k, v in res.items() if not k.startswith("_")},
                               res["_incidents"])

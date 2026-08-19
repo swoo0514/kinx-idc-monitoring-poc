@@ -29,6 +29,6 @@ workflow:
           command: >-
             cd /home/rocky/kinx-idc-monitoring-poc/bot &&
             set -a && . .env && set +a &&
-            ~/bot-venv/bin/python analyze_now.py
+            ~/bot-venv/bin/python tools/analyze_now.py
             --host '{{ alert.host }}'
             --ref '{{ alert.analyze_ref }}'

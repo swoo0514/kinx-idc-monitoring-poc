@@ -22,7 +22,7 @@ async def fetch_logs(logql: str, start: int, end: int, limit: int,
                      masker: masking.Masker) -> dict:
     import httpx
 
-    from ... import collector
+    from ...alerts import collector
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url:
         return {"logs": [], "status": collector.SOURCE_DISABLED,

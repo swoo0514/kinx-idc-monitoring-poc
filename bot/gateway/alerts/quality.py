@@ -9,7 +9,7 @@ import math
 import os
 import time
 
-from . import store
+from .. import store
 
 # 이 아래로는 백분율을 만들지 않는다. 표본이 적으면 숫자가 아니라 상태를 낸다.
 MIN_LABELS = int(os.environ.get("QUALITY_MIN_LABELS", "20"))

@@ -83,7 +83,7 @@ async def build_table(masker: masking.Masker = None, client_factory=None) -> dic
     """
     import httpx                                  # 모듈 들여오기를 쓰는 자리에 둔다
 
-    from .. import collector
+    from ..alerts import collector
     mk = masker if masker is not None else proxy.build_masker()
     factory = client_factory or (lambda source="": collector.ZabbixClient(source=source))
     sources = allowed_sources()

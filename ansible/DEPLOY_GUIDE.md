@@ -294,14 +294,14 @@ ansible-playbook -i ansible/inventory.ini ansible/certificates.yml -e @ansible/c
 
 ---
 
-## 13. MSP 월간 리포트 파이프라인 (`msp_report.yml` + `bot/msp_report.py`)
+## 13. MSP 월간 리포트 파이프라인 (`msp_report.yml` + `bot/tools/msp_report.py`)
 
 ### 시스템 아키텍처 및 데이터 흐름
 
 기존 Zabbix Scheduled Report 기능을 수용하면서, Zabbix 단독으로 산출이 불가능한 인시던트 병합 통계, 만성/신규 선판정 비율, 자동 조치 후보 등록 수, LLM 종합 분석 서사 데이터를 외부에서 Trapper 아이템으로 주입하는 파이프라인을 구축합니다.
 
 ```text
-Keep /alerts (인시던트 이력) ──▶ bot/msp_report.py (통계 집계 및 LLM 서사 생성)
+Keep /alerts (인시던트 이력) ──▶ bot/tools/msp_report.py (통계 집계 및 LLM 서사 생성)
                                         │
                                 (Zabbix Sender)
                                         │
@@ -323,10 +323,10 @@ export ZABBIX_API_TOKEN='<ZABBIX_ADMIN_TOKEN>'
 ansible-playbook -i inventory.ini -i inventory.local.ini msp_report.yml
 
 # 2. 통계 집계 및 요약 초안 Keep 승인 큐 전송
-python bot/msp_report.py --host-filter customer-a --target report-Customer-A --draft-to-keep
+python bot/tools/msp_report.py --host-filter customer-a --target report-Customer-A --draft-to-keep
 
 # 3. 승인 완료 후 Zabbix 주입 및 메일 리포트 발송
-python bot/msp_report.py --host-filter customer-a --target report-Customer-A --send --approve
+python bot/tools/msp_report.py --host-filter customer-a --target report-Customer-A --send --approve
 ```
 
 ---

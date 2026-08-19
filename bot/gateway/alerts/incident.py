@@ -13,7 +13,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import registry
+from .. import registry
 from .collector import SOURCE_UNAVAILABLE, SOURCE_UNMATCHED
 
 log = logging.getLogger("gateway.incident")

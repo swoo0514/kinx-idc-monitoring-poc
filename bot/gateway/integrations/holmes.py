@@ -10,7 +10,8 @@ import os
 
 import httpx
 
-from . import egress, severity
+from .. import egress
+from ..alerts import severity
 
 log = logging.getLogger("gateway.holmes")
 

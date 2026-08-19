@@ -459,8 +459,9 @@ def main():
         pdf = png_to_pdf_direct(png)
     pages = pdf.count(b"/Type /Page ")
     # 기본 출력은 private/report/ — 고객 데이터가 작업 디렉토리에 떨어지면 실수로 커밋된다.
-    out_dir = os.environ.get("REPORT_OUT_DIR") or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "private", "report")
+    # bot/tools/report_deliver.py → bot/tools → bot → 리포 뿌리.
+    _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    out_dir = os.environ.get("REPORT_OUT_DIR") or os.path.join(_root, "private", "report")
     if a.out:
         out = a.out
     else:

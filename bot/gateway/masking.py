@@ -3,7 +3,7 @@
 import logging
 import re
 
-from . import collector   # 조회 상태 상수(SOURCE_*) 단일 정의 참조
+from .alerts import collector
 
 log = logging.getLogger("gateway.masking")
 
@@ -179,7 +179,8 @@ def _prior_item(p: dict, m) -> dict:
     싣는다 — 이름 표가 살아 있고, 가린 뒤 아는 이름이 남지 않을 때다. 하나라도
     어긋나면 본문을 버리고 구조화 필드만 보낸다.
     """
-    from . import nametable, prior
+    from . import nametable
+    from .alerts import prior
     body = ""
     raw = (p.get("summary") or "")[:prior.MAX_BODY_CHARS]
     if raw:

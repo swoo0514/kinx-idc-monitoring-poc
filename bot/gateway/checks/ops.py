@@ -17,7 +17,8 @@ import threading
 import time
 import shutil
 
-from .. import egress, heartbeat, incident, llm, pending, registry
+from .. import egress, heartbeat, llm, registry
+from ..alerts import incident, pending
 log = logging.getLogger("gateway.selftest")
 
 
@@ -32,7 +33,7 @@ def _pending_checks() -> int:
     import os
     import tempfile
 
-    from .. import pending
+    from ..alerts import pending
 
     saved_path, saved_max = pending.PATH, pending.MAX_REPLAY
     d = tempfile.mkdtemp(prefix="pending-test-")
@@ -260,7 +261,7 @@ def _flush_checks() -> int:
     import asyncio
     import time
 
-    from .. import incident
+    from ..alerts import incident
 
     def _alert(host, cls, name="n"):
         return incident.Alert(source="zabbix-internal", event_id=name, trigger_id="1",
@@ -594,7 +595,7 @@ def _registry_checks() -> int:
         assert registry.source_conf("zabbix-msp")["url"] == "http://msp:8080"
         assert registry.source_conf("없는서버") == {}
 
-        from .. import collector as _c
+        from ..alerts import collector as _c
         os.environ["TOK_INTERNAL"] = "tok-a"
         os.environ["TOK_MSP"] = "tok-b"
         try:

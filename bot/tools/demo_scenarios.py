@@ -7,10 +7,16 @@
 실행: python demo_scenarios.py   (ANTHROPIC_API_KEY 없으면 열화, SLACK 없으면 콘솔만)
 """
 
+import os
+import sys
+
+# `bot/` 을 경로에 넣는다. 이 파일이 bot/tools/ 에 있으므로 부모다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
 import os
 
-from gateway import collector, triage
+from gateway.alerts import collector, triage
 
 
 def _ctx(name, expr, key, units, recent, prejudge, logs=None, security=None,

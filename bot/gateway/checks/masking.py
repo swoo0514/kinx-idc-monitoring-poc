@@ -13,7 +13,8 @@ import subprocess
 import tempfile
 import time
 
-from .. import collector, egress, heartbeat, llm, masking, nametable, proxy, registry
+from .. import egress, heartbeat, llm, masking, nametable, proxy, registry
+from ..alerts import collector
 log = logging.getLogger("gateway.selftest")
 
 
@@ -104,7 +105,8 @@ def _registry_fill_checks() -> int:
     """
     import logging
 
-    from .. import collector, registry
+    from .. import registry
+    from ..alerts import collector
 
     saved = list(registry._ENTRIES)
     try:
@@ -483,7 +485,7 @@ def _tenant_scope_checks() -> int:
     import json
     import os
 
-    from .. import collector
+    from ..alerts import collector
 
     sent = {}
 

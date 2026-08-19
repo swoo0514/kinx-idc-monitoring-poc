@@ -28,7 +28,7 @@ workflow:
             test -n '{{ alert.judgment_id }}' &&
             cd /home/rocky/kinx-idc-monitoring-poc/bot &&
             set -a && . .env && set +a &&
-            ~/bot-venv/bin/python mark_judgment.py
+            ~/bot-venv/bin/python tools/mark_judgment.py
             --id '{{ alert.judgment_id }}'
             --fingerprint '{{ alert.fingerprint }}'
             --ok yes

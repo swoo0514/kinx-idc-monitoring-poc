@@ -29,7 +29,8 @@ def judgment_body(row: dict, mk: masking.Masker) -> str:
 
 async def fetch_judgments(host: str, days: int, masker: masking.Masker,
                           now: float = None) -> dict:
-    from ... import collector, store
+    from ... import store
+    from ...alerts import collector
     if not store.status()["open"]:
         return {"judgments": [], "status": collector.SOURCE_UNAVAILABLE,
                 "note": "판정 이력 저장소를 열지 못했다"}

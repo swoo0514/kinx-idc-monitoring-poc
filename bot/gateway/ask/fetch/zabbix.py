@@ -49,7 +49,7 @@ def problems_result(rows: list, masker: masking.Masker = None, total: int = 0) -
     **총 건수를 함께 받는다.** 소스당 50건에서 자르는데 그 말이 없으면 모델은 실린 것이
     전부인 줄 안다. 실환경 사내 Zabbix 는 Warning 노이즈로 50건을 쉽게 넘는다.
     """
-    from ... import collector
+    from ...alerts import collector
     mask = masker.mask if masker is not None else (lambda x: x)
     out = {"problems": [{"name": mask(str(p.get("name") or "")),
                          "sev": p.get("severity"),
@@ -73,7 +73,7 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int,
     """
     import httpx
 
-    from ... import collector
+    from ...alerts import collector
     from .. import tools as asktools
     mask = masker.mask if masker is not None else (lambda x: x)
     try:
@@ -155,7 +155,7 @@ async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
     """지금 열려 있는 문제. 호스트를 안 주면 허용된 감시 서버 전체."""
     import httpx
 
-    from ... import collector
+    from ...alerts import collector
     try:
         sources = [entry["source"]] if entry else allowed_sources()
         out, total = [], 0

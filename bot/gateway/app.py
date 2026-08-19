@@ -16,21 +16,21 @@ from pydantic import BaseModel, Field
 
 from . import ask, tracing
 from .ask import graph
-from . import collector
+from .alerts import collector
 from . import convo
 from . import heartbeat
-from . import incident
-from . import keep
+from .alerts import incident
+from .integrations import keep
 from . import nametable
-from . import pending
+from .alerts import pending
 from . import proxy as llm_proxy
 from . import registry
-from . import router as tag_router
+from .alerts import router as tag_router
 from . import store
-from . import grafana
-from . import severity
-from . import slack
-from . import triage
+from .integrations import grafana
+from .alerts import severity
+from .integrations import slack
+from .alerts import triage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("gateway")

@@ -1,6 +1,6 @@
 # 브리지 후보 마이닝 가이드 — 연관 알림 클래스 분석 및 수집 모듈 명세
 
-본 문서는 `bot/bridge_miner.py` 유틸리티의 동작 원리, 실행 방법 및 이력 데이터 기반의 **연관 알림 브리지 후보(BRIDGE_GROUPS) 추출 및 해석 절차**를 명시한 가이드입니다. (본 모듈은 읽기 전용으로 동작합니다.)
+본 문서는 `bot/tools/bridge_miner.py` 유틸리티의 동작 원리, 실행 방법 및 이력 데이터 기반의 **연관 알림 브리지 후보(BRIDGE_GROUPS) 추출 및 해석 절차**를 명시한 가이드입니다. (본 모듈은 읽기 전용으로 동작합니다.)
 
 ---
 
@@ -99,7 +99,7 @@ $$P(B|A) = \frac{P(A \cap B)}{P(A)}$$
 기준점 방식은 알림 하나하나를 기준으로 이후 시차 구간별로 후속 알림을 집계하므로 경계가 존재하지 않고, A→B 와 B→A 를 분리 집계하여 방향이 지표에서 직접 산출됩니다. 동일 데이터에서 통과 조합이 고정 구간 32개 대비 **80개**로 확인되었습니다.
 
 ```bash
-python bot/bridge_miner.py --load <파일> --by tmpl --profile --lag-max 7200 --lag-bins 6 --null 200
+python bot/tools/bridge_miner.py --load <파일> --by tmpl --profile --lag-max 7200 --lag-bins 6 --null 200
 ```
 
 ### 단발 사건 배제 — 일수와 집중도를 함께 봅니다
@@ -116,7 +116,7 @@ python bot/bridge_miner.py --load <파일> --by tmpl --profile --lag-max 7200 --
 ### 규칙 파일 산출 — 측정과 운영의 연결
 
 ```bash
-python bot/bridge_miner.py --load <덤프> --by cls --overlap --min-open 3600 \
+python bot/tools/bridge_miner.py --load <덤프> --by cls --overlap --min-open 3600 \
   --min-days 3 --null 200 --emit-rules private/mining/open_link_rules.json
 ```
 
@@ -127,7 +127,7 @@ python bot/bridge_miner.py --load <덤프> --by cls --overlap --min-open 3600 \
 수집·마이닝·규칙 산출·승인 요청이 각각 다른 명령이므로, 사람이 매번 같은 조건으로 이어 붙여야 합니다. **조건이 한 번이라도 달라지면 이전 규칙과의 비교가 성립하지 않습니다.** 측정 조건을 한 곳에 고정하고 전 과정을 한 번에 실행합니다.
 
 ```bash
-python bot/remeasure.py --active ~/rules/active.json --workdir ~/rules
+python bot/tools/remeasure.py --active ~/rules/active.json --workdir ~/rules
 ```
 
 **주기:** 규칙은 90일 창으로 산출하므로 매일 실행하면 창이 89일 중복되어 값이 거의 변하지 않습니다. **월 1회가 적정**하며, 정기 실행보다 중요한 것은 아래 사건 직후의 수동 실행입니다.
@@ -150,7 +150,7 @@ Description=연계 규칙 재측정
 [Service]
 Type=oneshot
 User=rocky
-ExecStart=/bin/bash -c 'set -a; . /home/rocky/kinx-idc-monitoring-poc/bot/.env; set +a; exec /home/rocky/bot-venv/bin/python /home/rocky/kinx-idc-monitoring-poc/bot/remeasure.py --active /home/rocky/rules/active.json --workdir /home/rocky/rules'
+ExecStart=/bin/bash -c 'set -a; . /home/rocky/kinx-idc-monitoring-poc/bot/.env; set +a; exec /home/rocky/bot-venv/bin/python /home/rocky/kinx-idc-monitoring-poc/bot/tools/remeasure.py --active /home/rocky/rules/active.json --workdir /home/rocky/rules'
 ```
 
 ```

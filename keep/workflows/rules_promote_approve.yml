@@ -28,7 +28,7 @@ workflow:
           command: >-
             cd /home/rocky/kinx-idc-monitoring-poc/bot &&
             set -a && . .env && set +a &&
-            ~/bot-venv/bin/python rules_promote.py apply
+            ~/bot-venv/bin/python tools/rules_promote.py apply
             --staged '{{ alert.staged_path }}'
             --active '{{ alert.active_path }}'
             --expect '{{ alert.staged_hash }}'

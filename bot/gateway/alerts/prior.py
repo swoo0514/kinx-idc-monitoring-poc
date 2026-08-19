@@ -3,7 +3,7 @@
 import logging
 import os
 
-from . import store
+from .. import store
 
 log = logging.getLogger("gateway.prior")
 

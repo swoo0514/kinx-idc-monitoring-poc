@@ -21,7 +21,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# `bot/` 을 경로에 넣는다. 이 파일이 bot/tools/ 로 내려갔으므로 부모다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -29,7 +30,8 @@ for _s in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from gateway import incident, store, triage  # noqa: E402
+from gateway import store  # noqa: E402
+from gateway.alerts import incident, triage
 
 
 def label_previous(fingerprint: str) -> int:

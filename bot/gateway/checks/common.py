@@ -20,7 +20,7 @@ import time
 
 
 
-from .. import prejudge, router, severity
+from ..alerts import prejudge, router, severity
 
 
 

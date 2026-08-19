@@ -5,7 +5,7 @@ import os
 
 import httpx
 
-from . import collector   # 조회 상태 상수(SOURCE_*) 단일 정의 참조
+from ..alerts import collector
 
 log = logging.getLogger("gateway.slack")
 

@@ -14,7 +14,7 @@ log = logging.getLogger("gateway.ask")
 async def fetch_security(body: dict, masker: masking.Masker) -> dict:
     import httpx
 
-    from ... import collector
+    from ...alerts import collector
     url = os.environ.get("WAZUH_INDEXER_URL", "").rstrip("/")
     if not url:
         return {"alerts": [], "status": collector.SOURCE_DISABLED,

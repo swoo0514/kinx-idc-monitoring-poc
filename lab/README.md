@@ -124,7 +124,7 @@ lab/
 
 ### 적용 배경
 
-`bot/probe.py names` 를 통한 전수 대조 결과, Zabbix 등록 호스트 14대 중 Loki 및 Wazuh 양쪽에 로그가 수집되는 호스트는 2대로 확인되었습니다. 해당 2대는 Ansible(`ansible/deploy_agents.yml`)로 에이전트를 배포한 VM 이며, 나머지 호스트 중 6대(`Zabbix server`, `lab-switch1`, `lab-db-agent`, `customer-a` ~ `customer-c`)는 Docker 컨테이너로 구성되어 있어 SSH 기반 에이전트 배포 대상에 해당하지 않습니다.
+`bot/tools/probe.py names` 를 통한 전수 대조 결과, Zabbix 등록 호스트 14대 중 Loki 및 Wazuh 양쪽에 로그가 수집되는 호스트는 2대로 확인되었습니다. 해당 2대는 Ansible(`ansible/deploy_agents.yml`)로 에이전트를 배포한 VM 이며, 나머지 호스트 중 6대(`Zabbix server`, `lab-switch1`, `lab-db-agent`, `customer-a` ~ `customer-c`)는 Docker 컨테이너로 구성되어 있어 SSH 기반 에이전트 배포 대상에 해당하지 않습니다.
 
 컨테이너 단위 개별 배포 대신, Docker 소켓을 통해 컨테이너 로그를 일괄 수집하는 Alloy 컨테이너 1식을 구성하여 대응합니다.
 

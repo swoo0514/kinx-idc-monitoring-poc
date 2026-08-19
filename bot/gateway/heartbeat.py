@@ -210,7 +210,8 @@ class Beat:
         # LLM 혼잡. 상한에 밀려 열화로 내려간 건수가 늘면 분석 품질이 조용히 떨어진
         # 것이므로 밖에서 보여야 한다. 값을 못 읽어도 생존 신호는 계속 보낸다.
         try:
-            from . import egress, incident
+            from . import egress
+            from .alerts import incident
             st = egress.stats()
             out["gateway.llm_peak_inflight"] = egress.peak_last_hour(now)
             out["gateway.llm_queue_timeouts"] = st["queue_timeouts"]

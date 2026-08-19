@@ -63,7 +63,7 @@ docs/
 ```
 tools/zabbix_serverstats.py       tools/zabbix_alert_crosscheck.py
 tools/zabbix_replication_check.py tools/zabbix_mediatype_check.py
-bot/bridge_miner.py               bot/report_deliver.py
+bot/tools/bridge_miner.py               bot/tools/report_deliver.py
 ```
 
 증적 스크린샷(`bot/GATEWAY_GUIDE.md`의 검증 이력) 역시 마찬가지입니다. 마스킹 처리 비용 문제로 이관하지 않기로 결정한 **의도적 관리 경계**이며 누락 사항이 아닙니다.

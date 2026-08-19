@@ -13,7 +13,9 @@ import tempfile
 import time
 
 from .common import _read_source
-from .. import ask, collector, convo, egress, grafana, llm, masking, nametable, prompts, proxy, registry, store, tracing
+from .. import ask, convo, egress, llm, masking, nametable, prompts, proxy, registry, store, tracing
+from ..alerts import collector
+from ..integrations import grafana
 from ..ask import tools as asktools
 log = logging.getLogger("gateway.selftest")
 
@@ -146,7 +148,8 @@ def _ask_scope_checks() -> int:
     """
     import os
 
-    from .. import ask, incident as inc_mod, registry
+    from .. import ask, registry
+    from ..alerts import incident as inc_mod
 
     saved_env = os.environ.get("ASK_ALLOWED_REALMS")
     saved_src = list(registry._SOURCES)
@@ -305,7 +308,8 @@ def _ask_result_checks() -> int:
     보안 경보 50건이 왔고 그 50건이 전부 공백으로 채워져 있었다. 조회 실패가 아니라
     **성공한 조회를 없음으로 바꾸는** 경로였다. 그런 경로만 모은다.
     """
-    from .. import collector, masking, ask
+    from .. import masking, ask
+    from ..alerts import collector
     from ..ask import tools as asktools
 
     # (1) **Wazuh 응답은 중첩이고 화이트리스트는 평탄하다.** 옮기는 단계를 건너뛰면
@@ -760,7 +764,8 @@ def _panel_route_checks() -> int:
     """
     import asyncio
 
-    from .. import ask, grafana, nametable
+    from .. import ask, nametable
+    from ..integrations import grafana
     from ..ask import tools as asktools
 
     saved_terms = dict(nametable._terms)
@@ -981,7 +986,7 @@ def _panel_window_checks() -> int:
                                        default_span=default)
     assert not cut and (a, b) == default, (a, b, cut)
     # 줄 수 상한을 채웠으면 앞부분이 안 실렸다고 말한다.
-    from .. import collector as _col
+    from ..alerts import collector as _col
     capped = asktools.note_if_capped({"logs": [], "fetched": _col.LOKI_FETCH_LIMIT})
     assert "앞부분은 안 들어왔다" in capped["note"], capped
     assert not (asktools.note_if_capped({"logs": [], "fetched": 3}).get("note"))
@@ -1213,7 +1218,7 @@ def _list_truncation_checks() -> int:
 
     spy = _Spy()
     saved_cli = ask.collector.ZabbixClient if hasattr(ask, "collector") else None
-    from .. import collector
+    from ..alerts import collector
     saved_cli = collector.ZabbixClient
     try:
         collector.ZabbixClient = lambda source="": spy
@@ -1248,7 +1253,8 @@ def _table_cache_checks() -> int:
     import asyncio
     import os
 
-    from .. import ask, collector, incident as inc_mod, registry
+    from .. import ask, registry
+    from ..alerts import collector, incident as inc_mod
 
     calls = {"n": 0}
 
@@ -1318,7 +1324,7 @@ def _tool_timeout_checks() -> int:
     import asyncio
     import os
 
-    from .. import collector
+    from ..alerts import collector
     from ..ask import tools as asktools
 
     saved = os.environ.get("ASK_TOOL_TIMEOUT_S")
@@ -1359,7 +1365,8 @@ def _metric_batch_checks() -> int:
     """
     import asyncio
 
-    from .. import ask, collector
+    from .. import ask
+    from ..alerts import collector
 
     calls = []
 
@@ -1550,7 +1557,9 @@ def _panel_status_checks() -> int:
     """
     import asyncio
 
-    from .. import ask, collector, grafana
+    from .. import ask
+    from ..alerts import collector
+    from ..integrations import grafana
     from ..ask import tools as asktools
 
     saved = grafana.list_panels
@@ -1982,7 +1991,8 @@ def _ask_table_checks() -> int:
     import json
     import os
 
-    from .. import ask, collector, incident as inc_mod, registry
+    from .. import ask, registry
+    from ..alerts import collector, incident as inc_mod
 
     saved_src = list(registry._SOURCES)
     saved_map = dict(inc_mod.REALM_MAP)

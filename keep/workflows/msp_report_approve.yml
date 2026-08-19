@@ -26,9 +26,9 @@ workflow:
             cd /home/rocky/kinx-idc-monitoring-poc/bot &&
             set -a && . .env && . ../lab/.env && set +a &&
             export SMTP_HOST=127.0.0.1 SMTP_PORT=1025 REPORT_FROM=noreply@kinx.local &&
-            ~/bot-venv/bin/python msp_report.py --days 30
+            ~/bot-venv/bin/python tools/msp_report.py --days 30
             --host-filter '{{ alert.host_filter }}'
             --from-draft --send --target '{{ alert.host }}' &&
-            ~/bot-venv/bin/python report_deliver.py
+            ~/bot-venv/bin/python tools/report_deliver.py
             --customer '{{ alert.customer }}'
             --send --to '{{ alert.recipient }}'

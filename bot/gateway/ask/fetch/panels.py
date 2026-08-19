@@ -29,7 +29,7 @@ async def fetch_panel(entry: dict, target, start: int, end: int,
     `target` 이 있으면 그 패널을(list_panels 가 준 손잡이를 서버가 푼 값), 없으면
     사람이 보고 있는 패널을 그린다. **제목으로 찾는 길은 없다.**
     """
-    from ... import grafana
+    from ...integrations import grafana
     from .. import tools as asktools
     if target:
         uid, panel_id, title = target
@@ -64,8 +64,8 @@ async def fetch_panel_list(dash: str, masker: masking.Masker) -> tuple:
     """
     import asyncio
 
-    from ... import grafana
-    from ... import collector
+    from ...integrations import grafana
+    from ...alerts import collector
     # **조회 실패와 "없음" 을 구분한다.** 다른 네 축은 이미 상태를 싣는데(§12) 이 축만
     # 빠져 있어, 주소가 없거나 Grafana 가 죽어도 "그 조건에 맞는 패널이 없다" 로 나갔다.
     # 사람은 화면에서 그 패널을 보고 있는데 봇이 없다고 답한다(2026-08-19 감사).

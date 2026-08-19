@@ -357,7 +357,7 @@ sources:
 | 진입점 | Keep 알림 카드의 Run Workflow (`keep/workflows/analyze_now.yml`) |
 | 안전 게이트 | `alert.playbook == 'analyze'` — 해당 속성이 없는 카드에서는 미동작 |
 | 대상 카드 | 발동 조건 미충족으로 생략된 사건, `digest`·`dashboard_only` 경로 알림 |
-| 실행 모듈 | `bot/analyze_now.py` (SSH 경유 실행) |
+| 실행 모듈 | `bot/tools/analyze_now.py` (SSH 경유 실행) |
 | 발동 조건 | `run_incident(force=True)` — 조건 재평가를 수행하지 않음 |
 | 결과 출력 | 기존 트리아지와 동일한 Slack 카드 |
 
@@ -1390,7 +1390,7 @@ gateway/ask/
 
 - **셀프테스트** — 같은 가짜 모델을 주면 두 엔진의 답·추적·멈춘 이유가 같아야 합니다.
   프레임워크가 없는 곳에서는 건너뜁니다.
-- **마스킹 누수 검사** — `bot/leak_check_langgraph.py` 를 **실제로 올리는 조합**으로
+- **마스킹 누수 검사** — `bot/tools/leak_check_langgraph.py` 를 **실제로 올리는 조합**으로
   돌립니다. 모델이 받는 모든 문자열을 기록해 실명이 한 번이라도 나타나는지 봅니다.
 - **랩 실측(2026-08-18)** — 같은 질문을 두 엔진에 던져 같은 도구를 부르고 같은 결론을
   내는 것을 확인했습니다.

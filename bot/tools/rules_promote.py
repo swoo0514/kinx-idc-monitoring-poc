@@ -25,7 +25,8 @@ import shutil
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# `bot/` 을 경로에 넣는다. 이 파일이 bot/tools/ 로 내려갔으므로 부모다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -182,7 +183,7 @@ def main():
         print("변경이 없어 승인 요청을 만들지 않는다.")
         return
 
-    from gateway import keep
+    from gateway.integrations import keep
     h = digest(a.staged)
     r = keep.push_alert(
         name="연계 규칙 교체 승인 (%d건 → %d건)" % (d["active_count"], d["staged_count"]),

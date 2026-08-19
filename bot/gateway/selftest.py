@@ -12,7 +12,8 @@ import os
 import sys
 import time
 
-from . import collector, llm, masking, prejudge, router, severity
+from . import llm, masking
+from .alerts import collector, prejudge, router, severity
 from .checks.common import (CASES_CLASSIFY, CASES_ROUTER, CASES_SEVERITY, _assert_count,
                             _read_source)
 from .checks.ask import (_ask_dispatch_checks,
@@ -145,7 +146,7 @@ def main():
     # 발생 횟수는 목록 길이가 아니라 따로 센 개수를 쓴다. 목록은 상한에 걸리므로
     # 상한을 넘는 것들이 전부 같은 수로 보이면 무엇이 더 자주 나는지 가릴 수 없다
     # (실환경 90일: 상한 초과 12계열이 이벤트의 95%, 실제 값은 547~21,585회).
-    from . import collector as _col
+    from .alerts import collector as _col
     lim = _col.PAST_EVENT_LIMIT
     packed = [now - (i % 80) * day for i in range(lim)]      # 창 안에 상한만큼
     j = prejudge.judge(packed, now=now, **fix)
@@ -171,7 +172,7 @@ def main():
     # 수집기 읽기 전용 가드 — .get 이외 메서드는 코드 레벨에서 거부
     import asyncio
 
-    from . import collector
+    from .alerts import collector
     zbx = collector.ZabbixClient(url="http://invalid", token="x")
 
     async def _guard():

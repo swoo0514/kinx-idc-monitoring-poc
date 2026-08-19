@@ -15,7 +15,9 @@ import threading
 import time
 
 from .common import CASES_CLASSIFY, _FakeHttpx, _LiveZbx
-from .. import collector, egress, holmes, incident, keep, llm, masking, pending, prejudge, registry, router, slack, triage
+from .. import egress, llm, masking, registry
+from ..alerts import collector, incident, pending, prejudge, router, triage
+from ..integrations import holmes, keep, slack
 log = logging.getLogger("gateway.selftest")
 
 
@@ -32,7 +34,9 @@ def _source_status_checks() -> int:
     import asyncio
     import os
 
-    from .. import collector, incident, llm, masking, slack
+    from .. import llm, masking
+    from ..alerts import collector, incident
+    from ..integrations import slack
 
     # 축 면제·명부도 같이 지운다. 우선순위가 명부 → 축별 변수 → 옛 변수 순이라
     # 위쪽이 살아 있으면 아래 검사가 통째로 무너진다.
@@ -230,7 +234,7 @@ def _class_map_checks() -> int:
     import os
     import tempfile
 
-    from .. import incident as inc_mod
+    from ..alerts import incident as inc_mod
 
     doc = {"zabbix": {"Cert expires in # days": "config_change",
                       "Bogus name": "no_such_class"},
@@ -262,7 +266,8 @@ def _class_map_checks() -> int:
         import shutil
         import tempfile
 
-        from .. import app as app_mod, pending
+        from .. import app as app_mod
+        from ..alerts import pending
 
         importlib.reload(app_mod)
         # 이 검사는 실제 triage 경로를 태우므로 대기 파일에 쓴다. 배포된 서버에서
@@ -309,7 +314,7 @@ def _class_tag_checks() -> int:
     나온다. 우리가 같은 이름을 쓰면 한 트리거에 의미가 다른 두 값이 공존하고, 어느 쪽이
     읽힐지가 태그 순서에 좌우된다.
     """
-    from .. import incident
+    from ..alerts import incident
 
     assert incident.CLASS_TAG != "class", "벤더 표준 태그 이름과 충돌한다"
     vendor = [{"tag": "class", "value": "os"}, {"tag": "class", "value": "database"}]
@@ -335,7 +340,7 @@ def _site_keyword_checks() -> int:
     import importlib
     import os
 
-    from .. import incident as inc_mod
+    from ..alerts import incident as inc_mod
 
     saved = os.environ.get("SITE_CLASS_KEYWORDS")
     # 배포 서버에는 이 값이 들어 있다. 지우지 않으면 그 서버에서만 실패하고, 설정
@@ -376,7 +381,8 @@ def _open_link_checks() -> int:
     import importlib
     import os
 
-    from .. import incident, masking
+    from .. import masking
+    from ..alerts import incident
 
     n = 0
     # 측정 파일이 없으면 연계 자체가 꺼져야 한다. 예전에는 예시값(비율 0.90)이 실렸는데,
@@ -433,7 +439,8 @@ def _open_link_rule_checks(incident) -> int:
 
 
 def _open_link_masking_checks() -> int:
-    from .. import incident, masking
+    from .. import masking
+    from ..alerts import incident
 
     n = 0
     # 마스킹 — 열린 문제 이름의 실 호스트명이 새면 안 된다
@@ -465,7 +472,7 @@ def _open_link_masking_checks() -> int:
     # 실측(2026-08-10 실환경): 3년 넘게 열린 문제가 있었고 90일 창 미해소는 전부 7일 이상이었다.
     import asyncio
 
-    from .. import collector
+    from ..alerts import collector
     now = 1_800_000_000
 
     class _FakeZbx:
@@ -517,7 +524,8 @@ def _remediation_checks() -> int:
     import os
 
     from .. import app as gw_app
-    from .. import keep, router
+    from ..integrations import keep
+    from ..alerts import router
 
     saved = os.environ.pop("KEEP_URL", None)
     try:
@@ -536,7 +544,7 @@ def _remediation_checks() -> int:
         # 채널 계층화 — SEV3(digest)·SEV4(dashboard_only)가 조용히 버려지지 않는다
         saved_digest = os.environ.pop("SLACK_CHANNEL_ID_DIGEST", None)
         try:
-            from .. import slack
+            from ..integrations import slack
             # 채널 미설정이면 메인 채널로 흘려보내지 않고 게시를 건너뛴다
             assert slack.post_digest("n", "SEV3", "h1") == {"ok": False, "skipped": True}
             gw_app._queue_low_severity("h1", "디스크 사용률 82%", "SEV3", "disk_space", True)
@@ -546,7 +554,7 @@ def _remediation_checks() -> int:
                 os.environ["SLACK_CHANNEL_ID_DIGEST"] = saved_digest
 
         # G5 — 게이트에서 걸러진 사건도 Keep 에 남긴다(분석 없이 판정·유형만)
-        from .. import incident, triage
+        from ..alerts import incident, triage
         inc = incident.Incident(
             key=("h1", "disk_space"), host="h1", opened_at=0.0, last_at=0.0,
             alerts=[incident.Alert(source="zabbix-internal", event_id="e", trigger_id="1",
@@ -575,7 +583,7 @@ def _fastpath_checks() -> int:
     """P1-A — 원시 신호가 인시던트당 부모 1개, 후속은 그 스레드 답글."""
     import asyncio
 
-    from .. import incident
+    from ..alerts import incident
 
     calls = []
 
@@ -618,7 +626,8 @@ def _holmes_gate_checks() -> int:
     """G9 — 심층조사 발동을 지식 공백 기준으로. 만성은 억제, 신규는 발동."""
     import os
 
-    from .. import holmes, incident
+    from ..integrations import holmes
+    from ..alerts import incident
 
     # 인시던트 전체 판정 접기 — 모르는 게 하나라도 있으면 신규
     assert incident.dominant_verdict({"alerts": [{"prejudge": {"verdict": "만성"}},
@@ -716,7 +725,8 @@ def _incident_checks() -> int:
     import json
     import os
 
-    from .. import incident, llm, masking
+    from .. import llm, masking
+    from ..alerts import incident
 
     # 분류 사례는 배포 서버의 선언 파일·사이트 관용구에 영향을 받는다. 그 서버에서만
     # 결과가 갈리면 설정 문제인지 코드 문제인지 구분할 수 없다. 지우고 돌린다.
@@ -976,7 +986,7 @@ def _open_limit_checks() -> int:
     """
     import asyncio
 
-    from .. import collector
+    from ..alerts import collector
 
     asked = {}
 
@@ -1014,7 +1024,7 @@ def _event_time_checks() -> int:
     import os
     import time as _t
 
-    from .. import collector, incident as inc_mod
+    from ..alerts import collector, incident as inc_mod
 
     def _alert(clock):
         return inc_mod.Alert(source="zabbix-internal", event_id="e1", trigger_id="t1",
@@ -1060,7 +1070,8 @@ def _event_time_checks() -> int:
     import shutil
     import tempfile
 
-    from .. import app as app_mod, pending
+    from .. import app as app_mod
+    from ..alerts import pending
 
     importlib.reload(app_mod)
     d = tempfile.mkdtemp(prefix="clock-test-")
@@ -1100,7 +1111,8 @@ def _wrong_server_checks() -> int:
     import importlib
     import os
 
-    from .. import collector, registry
+    from .. import registry
+    from ..alerts import collector
 
     saved = {k: os.environ.get(k) for k in ("HOST_REGISTRY_FILE", "ZABBIX_URL",
                                             "ZABBIX_TOKEN")}
@@ -1145,7 +1157,7 @@ def _collect_failure_checks() -> int:
     import asyncio
     import time as _t
 
-    from .. import collector, incident as inc_mod
+    from ..alerts import collector, incident as inc_mod
 
     class _DeadZbx:
         source = "zabbix-internal"
@@ -1172,7 +1184,8 @@ def _collect_failure_checks() -> int:
     assert "실패" in why or "미상" in why, why
 
     # 사람 눈에도 보여야 한다. 카드에 표시가 없으면 알아채는 경로가 로그뿐이다.
-    from .. import masking, slack
+    from .. import masking
+    from ..integrations import slack
     note = slack._source_note(ctx["sources"])
     assert "지표" in note, f"카드에 Zabbix 축 실패가 안 보인다: {note!r}"
     # 전송 화이트리스트에도 있어야 LLM 이 그 상태를 읽는다
@@ -1229,7 +1242,8 @@ def _contract_checks() -> int:
     import json
     import time as _t
 
-    from .. import app as gw_app, incident as inc_mod, llm, masking
+    from .. import app as gw_app, llm, masking
+    from ..alerts import incident as inc_mod
 
     def _alert(scope="", automate=""):
         return inc_mod.Alert(source="zabbix-msp", event_id="e1", trigger_id="t1",
@@ -1260,7 +1274,7 @@ def _contract_checks() -> int:
     import shutil
     import tempfile
 
-    from .. import pending
+    from ..alerts import pending
     d = tempfile.mkdtemp(prefix="scope-")
     saved_pending = pending.PATH
     captured = []
@@ -1348,7 +1362,8 @@ def _truncation_checks() -> int:
     import json
     import os
 
-    from .. import collector, llm, masking
+    from .. import llm, masking
+    from ..alerts import collector
 
     class _Resp:
         def __init__(self, lines):
@@ -1504,7 +1519,7 @@ def _log_select_checks() -> int:
     """무엇을 실을지 — 랩에서 오류 3줄이 정상 260줄에 묻혀 사라졌다 (§1-1-8)."""
     import json
 
-    from .. import collector as c
+    from ..alerts import collector as c
 
     def _r(t, line):
         return {"t": float(t), "line": line}
@@ -1693,7 +1708,8 @@ def _holmes_egress_checks() -> int:
     import os
     import threading
 
-    from .. import egress, holmes
+    from .. import egress
+    from ..integrations import holmes
 
     sent = {}
 
@@ -1749,7 +1765,7 @@ def _timer_close_checks() -> int:
     import asyncio
     import time as _t
 
-    from .. import incident as inc_mod
+    from ..alerts import incident as inc_mod
 
     done = []
 
@@ -1788,7 +1804,7 @@ def _overflow_checks() -> int:
     import tempfile
     import time as _t
 
-    from .. import incident, pending
+    from ..alerts import incident, pending
 
     d = tempfile.mkdtemp(prefix="overflow-test-")
     saved_path = pending.PATH
@@ -1844,7 +1860,7 @@ def _analyze_ref_checks() -> int:
     import sys
     import time
 
-    from .. import incident, triage
+    from ..alerts import incident, triage
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from analyze_now import parse_ref

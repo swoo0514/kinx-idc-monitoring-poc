@@ -13,7 +13,8 @@ import time
 
 import httpx
 
-from . import prejudge, registry
+from . import prejudge
+from .. import registry
 
 log = logging.getLogger("gateway.collector")
 

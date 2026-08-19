@@ -4,7 +4,7 @@
 #
 # 왜 Zabbix 인가: 팀이 Zabbix Scheduled report 를 이미 운용 중이다.
 # 새 리포트 도구를 만들지 않고 그 파이프에 내용을 채운다 — 학습비용 0, 발송 인프라 0.
-# 값 주입은 bot/msp_report.py (Keep 집계 → sender 프로토콜)가 한다.
+# 값 주입은 bot/tools/msp_report.py (Keep 집계 → sender 프로토콜)가 한다.
 - name: 사전 확인 — Zabbix API 대상이 인벤토리에 있는가
   hosts: localhost
   gather_facts: false
@@ -100,5 +100,5 @@
       ansible.builtin.debug:
         msg:
           - "리포트 호스트 {{ customers | length }}개 × 지표 {{ report_items | length }}종"
-          - "값 주입: python bot/msp_report.py --customer <이름> --send"
+          - "값 주입: python bot/tools/msp_report.py --customer <이름> --send"
           - "다음: Zabbix UI 에서 대시보드 구성 후 Reports > Scheduled reports 등록"
