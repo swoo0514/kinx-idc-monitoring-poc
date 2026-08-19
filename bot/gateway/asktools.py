@@ -155,8 +155,7 @@ def window_bounds(args: dict, now: int, max_m: int = 0, default_span=None) -> tu
     # 값이 있는데 모델이 인자로 안 옮기면 조용히 최근 창으로 떨어진다. 2026-08-18 실측:
     # 8월 11~13일 패널을 보고 물었는데 최근 1시간만 조회하고 "과거 구간 조회가
     # 불가능합니다" 라고 답했다. 모델이 구간을 직접 주면 그쪽이 이긴다.
-    if (a is None and b is None and default_span
-            and not (args or {}).get("window_m") and not (args or {}).get("at")):
+    if a is None and b is None and default_span and not (args or {}).get("window_m"):
         a, b = int(default_span[0]), int(default_span[1])
     if a is not None and b is not None:
         if a > b:
@@ -164,15 +163,11 @@ def window_bounds(args: dict, now: int, max_m: int = 0, default_span=None) -> tu
         # 자를 때는 **최신 쪽을 남긴다.** 조회가 최신순 정렬이라 앞쪽을 남기면 사람이
         # 보고 있는 화면의 오른쪽 끝이 통째로 빠지고, 방금 난 일을 못 본다.
         return max(a, b - cap), b, (b - a) > cap
-    at = parse_when((args or {}).get("at"))
     asked = raw_window_s((args or {}).get("window_m"))
     win = min(clamp_window((args or {}).get("window_m"), cap // 60) * 60, cap)
     # **상대 구간도 잘렸으면 잘렸다고 말한다.** 절대 구간에만 통지를 붙였더니 90일을
     # 물은 요청이 조용히 하루가 됐고, 모델은 하루치를 90일치로 알고 답했다(실측).
-    cut = asked > win
-    if at is not None:                     # 그 시각을 가운데 두고 앞뒤로
-        return at - win // 2, at + win // 2, cut
-    return now - win, now, cut
+    return now - win, now, asked > win
 
 
 def raw_window_s(minutes) -> int:
@@ -287,7 +282,7 @@ def bad_when(args: dict) -> list:
     때문이다.
     """
     out = []
-    for key in ("at", "from", "to"):
+    for key in ("from", "to"):
         v = (args or {}).get(key)
         if v not in (None, "") and parse_when(v) is None:
             out.append(key)

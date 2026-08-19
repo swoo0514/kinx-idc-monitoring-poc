@@ -289,6 +289,7 @@ def main():
                     + _repo_secret_checks() + _session_isolation_checks()
                     + _panel_status_checks() + _token_scope_checks()
                     + _event_loop_checks() + _nametable_freshness_checks()
+                    + _model_kind_wiring_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -3376,14 +3377,13 @@ def _ask_result_checks() -> int:
         assert "at" not in t["input_schema"]["properties"], t["name"]
 
     # (3)-e **못 읽은 시각을 말해 준다.** 조용히 기본 창으로 떨어지면 모델은 잘못 물은
-    #       줄 모르고 같은 실수를 반복한다. 2026-08-18 랩 실측: `at: 90` → `at: 7776000`
-    #       으로 네 번 되풀이하며 라운드를 다 썼다.
-    a, b, cut = asktools.window_bounds({"at": 90}, now=T0)
-    assert asktools.bad_when({"at": 90}), "못 읽은 시각을 알리지 않았다"
-    assert not asktools.bad_when({"at": T0})
+    #       줄 모르고 같은 실수를 반복한다. 2026-08-18 랩 실측: 시각 인자에 90 을 넣고
+    #       네 번 되풀이하며 라운드를 다 썼다. 지금 시각 인자는 `range` 하나다.
+    assert asktools.bad_when({"range": "90"}), "못 읽은 시각을 알리지 않았다"
+    assert not asktools.bad_when({"range": "%d ~ %d" % (T0, T0 + 600)})
     assert not asktools.bad_when({"window_m": 129600})
-    assert "at" in asktools.when_note({"at": 90}), asktools.when_note({"at": 90})
-    assert asktools.when_note({"at": T0}) == ""
+    assert "range" in asktools.when_note({"range": "어제쯤"})
+    assert asktools.when_note({"range": "%d ~ %d" % (T0, T0 + 600)}) == ""
 
     # (3)-f **구간에 값이 없으면 그 자리에서 말한다.** 조회는 성공했고 아이템도 있는데
     #       점이 0개면 구간을 잘못 고른 것이다. 안 알리면 모델은 현재 값만 보고 답한다
@@ -4165,6 +4165,41 @@ def _cap_answer_checks() -> int:
     assert "다시 물어보라" in ask.stall_note("deadline", [])
     assert "host_logs" in ask.stall_note("rounds", [{"tool": "host_logs"}])
     return 14
+
+
+def _model_kind_wiring_checks() -> int:
+    """용도별 모델 등급이 **호출부까지** 배선돼 있는가.
+
+    매핑에는 `"triage": "LLM_MODEL_INVESTIGATE"` 가 있는데 호출부가 용도를 안 넘겨
+    기본 모델로 떨어졌다(2026-08-19 감사 F-5). 함수 단위 단언만 있으면 이런 누락이
+    통과한다 — 매핑은 맞고 호출부만 틀렸기 때문이다. 그래서 호출부를 지나며 본다.
+    """
+    import os
+
+    from . import egress, llm
+
+    saved_env = os.environ.get("LLM_MODEL_INVESTIGATE")
+    saved_call = egress.call
+    seen = {}
+    try:
+        os.environ["LLM_MODEL_INVESTIGATE"] = "모델-조사용"
+
+        def spy(adapters, system, user, exempt=False, kind=""):
+            seen["model"] = getattr(adapters[0], "model", "")
+            seen["kind"] = kind
+            return {"degraded": True, "text": "", "reason": "test"}
+
+        egress.call = spy
+        llm.triage_reply({"host": {"name": "h"}}, "SEV2")
+        assert seen.get("kind") == "triage", seen
+        assert seen.get("model") == "모델-조사용", seen
+    finally:
+        egress.call = saved_call
+        if saved_env is None:
+            os.environ.pop("LLM_MODEL_INVESTIGATE", None)
+        else:
+            os.environ["LLM_MODEL_INVESTIGATE"] = saved_env
+    return 2
 
 
 def _nametable_freshness_checks() -> int:

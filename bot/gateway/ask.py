@@ -991,8 +991,8 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int,
                         masker: masking.Masker = None) -> dict:
     """호스트의 지표 추이. 아이템 이름·키에 든 문자열로 고른다.
 
-    `at` 을 주면 그 시각 앞뒤를 본다. 사람은 "어제 2시에 튀었다" 로 묻지 "지금부터
-    몇 분" 으로 묻지 않는다.
+    특정 시각을 물으면 `range` 로 절대 구간이 온다. 사람은 "어제 2시에 튀었다" 로 묻지
+    "지금부터 몇 분" 으로 묻지 않는다.
     """
     import httpx
 

@@ -1,4 +1,4 @@
-"""프롬프트를 파일에서 읽는다. 근거와 문구 목록은 bot/GATEWAY_GUIDE.md §28.
+"""프롬프트를 파일에서 읽는다. 근거와 문구 목록은 bot/GATEWAY_GUIDE.md §29.
 
 코드를 안 건드리고 문구만 고칠 수 있게 한다. 동기분 코드(aiops-rca-orchestrator)는
 노드마다 프롬프트를 `.md` 한 장으로 둔다.

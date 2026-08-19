@@ -345,7 +345,10 @@ def triage_reply(context: dict, sev: str) -> dict:
     masked = build_llm_context(context, sev, masker)
     user = build_user_prompt(masked)
 
-    res = egress.call(_adapters(), _prompt("triage", TRIAGE_SYSTEM), user,
+    # **용도를 어댑터에도 넘긴다.** `kind` 는 계수용으로만 넘기고 있어서, 매핑에
+    # `"triage": "LLM_MODEL_INVESTIGATE"` 가 있어도 모델은 기본값으로 떨어졌다
+    # (2026-08-19 감사 F-5). 질의 경로는 제대로 넘기고 있었다.
+    res = egress.call(_adapters("triage"), _prompt("triage", TRIAGE_SYSTEM), user,
                       exempt=(sev == "SEV1"), kind="triage")
     if not res["degraded"]:
         text = masker.unmask(res["text"])
@@ -411,8 +414,9 @@ def cached_system(system: str):
     두 번째 라운드부터 이득이다.
 
     **최소 길이가 모델마다 다르다.** 접두사가 그 아래면 오류 없이 조용히 안 걸리고
-    쓰기 값만 더 낸다. 2026-08-18 랩 실측으로 haiku 4.5 는 4,096 토큰이 최소이고 우리
-    접두사는 7,119 토큰이다. 프롬프트를 줄일 때 이 여유를 확인할 것.
+    쓰기 값만 더 낸다. haiku 4.5 는 4,096 토큰이 최소이고 우리 접두사는 **8,803 토큰**
+    이다(2026-08-19 랩 재실측 — 도구가 늘어 7,119 에서 올랐다). 프롬프트를 줄일 때 이
+    여유를 확인할 것. 수치는 가이드 §29 와 같아야 한다.
     """
     if os.environ.get("LLM_CACHE", "1").strip().lower() in ("0", "false", "no"):
         return system
