@@ -4234,12 +4234,41 @@ def _list_truncation_checks() -> int:
     out2 = ask.problems_result(rows[:3], None, total=3)
     assert not (out2.get("note") or ""), out2
 
+    # ①-b **총계를 세는 호출에 빈 값을 넣지 않는다.** Zabbix 는 `output: None` 을 거부해
+    #      조회 전체가 실패한다(2026-08-19 랩 실측: Invalid parameter "/output").
+    #      가짜 클라이언트는 아무거나 받으므로 인자 자체를 본다.
+    class _Spy:
+        def __init__(self, source=""):
+            self.calls = []
+
+        async def call(self, client, method, params):
+            self.calls.append((method, dict(params)))
+            if method == "host.get":
+                return [{"hostid": "1"}]
+            if params.get("countOutput"):
+                return "137"
+            return rows[:50]
+
+    spy = _Spy()
+    saved_cli = ask.collector.ZabbixClient if hasattr(ask, "collector") else None
+    from . import collector
+    saved_cli = collector.ZabbixClient
+    try:
+        collector.ZabbixClient = lambda source="": spy
+        got = asyncio.run(ask.fetch_problems({"host": "web-01", "source": "s"}, None))
+    finally:
+        collector.ZabbixClient = saved_cli
+    for method, params in spy.calls:
+        assert not any(v is None for v in params.values()), (method, params)
+    assert got.get("total") == 137, got
+    assert got.get("status") == "ok", got
+
     # ② 호스트 목록 — 100개에서 자르면 몇 개 중 몇 개인지 말한다.
     table = {"[h-%d]" % i: {"host": "web-%d" % i, "source": "s"} for i in range(150)}
     got = asyncio.run(asktools.run_tool("list_hosts", {"query": ""}, {"table": table}))
     assert got["n"] == 150 and len(got["hosts"]) == 100, (got["n"], len(got["hosts"]))
     assert "150" in (got.get("note") or ""), got
-    return 6
+    return 10
 
 
 def _table_cache_checks() -> int:

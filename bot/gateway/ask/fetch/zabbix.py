@@ -171,10 +171,12 @@ async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
                     params["hostids"] = hosts[0]["hostid"]
                 got = await zbx.call(c, "problem.get", params)
                 # 총계는 따로 센다. Zabbix 는 countOutput 으로 개수만 돌려준다.
-                cnt = await zbx.call(c, "problem.get",
-                                     dict(params, countOutput=True,
-                                          output=None, limit=None,
-                                          sortfield=None, sortorder=None))
+                # **빼는 것이지 비우는 것이 아니다.** `output: None` 을 보내면 Zabbix 가
+                # 거부해 조회 전체가 실패한다(2026-08-19 랩 실측).
+                cnt_params = {k: v for k, v in params.items()
+                              if k not in ("output", "limit", "sortfield", "sortorder")}
+                cnt_params["countOutput"] = True
+                cnt = await zbx.call(c, "problem.get", cnt_params)
                 try:
                     total += int(cnt if isinstance(cnt, (int, str)) else 0)
                 except (TypeError, ValueError):
