@@ -361,7 +361,8 @@ def zbx_method_ok(method: str) -> bool:
     return str(method or "") in ZBX_METHODS
 
 
-def build_wazuh_query(agent_name: str, start: int, end: int, min_level: int) -> dict:
+def build_wazuh_query(agent_name: str, start: int, end: int, min_level: int,
+                      rule_group: str = "") -> dict:
     """Wazuh 질의 본문. 틀을 코드가 만들고 값만 끼운다.
 
     에이전트명은 정확 일치(`term`)를 유지한다. 부분 일치로 바꾸면 이름이 비슷한 다른
@@ -379,7 +380,8 @@ def build_wazuh_query(agent_name: str, start: int, end: int, min_level: int) -> 
         "sort": [{"@timestamp": {"order": "desc"}}],
         "_source": ["@timestamp", "rule.level", "rule.id", "rule.description",
                     "rule.groups", "agent.name", "syscheck.path", "syscheck.event"],
-        "query": {"bool": {"filter": [
+        "query": {"bool": {"filter": ([{"term": {"rule.groups": str(rule_group)}}]
+                                     if rule_group else []) + [
             {"term": {"agent.name": str(agent_name)}},
             {"range": {"rule.level": {"gte": lvl}}},
             {"range": {"@timestamp": {"gte": int(start) * 1000,
@@ -471,7 +473,9 @@ def build_tool_specs(table: dict = None) -> list:
     toks = list(table or {})
     return [
         _spec("list_hosts", "질의할 수 있는 호스트 목록. 대상 토큰을 모를 때 먼저 부른다.",
-              {"query": {"type": "string", "description": "이름에 포함된 문자열로 좁힌다"}}),
+              {"query": {"type": "string",
+                         "description": "이름에 포함된 문자열로 좁힌다. 전체면 빈 문자열"}},
+              ["query"]),
         _spec("host_logs",
               "그 호스트의 로그. 기간과 문자열 필터로 좁힌다. 정규식은 못 쓴다.",
               dict(_WINDOW_PROPS,
@@ -483,6 +487,10 @@ def build_tool_specs(table: dict = None) -> list:
         _spec("security_alerts", "그 호스트의 보안 경보. 레벨 하한으로 좁힌다.",
               dict(_WINDOW_PROPS,
                    host=_host_prop("조회할 호스트 토큰", toks),
+                   rule_group={"type": "string",
+                               "description": ("규칙 그룹으로 좁힌다(예 "
+                                               "authentication_failed). 대시보드 패널의 "
+                                               "질의문에 적힌 값을 그대로 쓴다")},
                    min_level={"type": "integer", "description": "0~15"}),
               ["host"]),
         _spec("host_metrics",
@@ -494,8 +502,8 @@ def build_tool_specs(table: dict = None) -> list:
                           "description": "아이템 이름·키에 든 문자열 "
                                          "(예: replication, cpu, memory)"}),
               ["host"]),
-        _spec("open_problems", "그 호스트에 지금 열려 있는 문제(Zabbix). 비우면 전체.",
-              {"host": _host_prop("비우면 전체", toks)}),
+        _spec("open_problems", "그 호스트에 지금 열려 있는 문제(Zabbix).",
+              {"host": _host_prop("전체면 빈 문자열", toks)}, ["host"]),
         _spec("panel_image",
               "그 호스트의 관측 화면(패널)을 그림으로 붙인다. 사람이 보고 있는 그래프를 "
               "답과 함께 보여 줄 때 쓴다. 반환된 id 를 answer 의 image_ids 에 적는다.",
@@ -510,7 +518,8 @@ def build_tool_specs(table: dict = None) -> list:
               "볼 수 있는 관측 화면(패널) 목록. 다른 대시보드의 패널을 가리킬 때 먼저 "
               "부른다. 여기서 받은 ref 를 panel_image 에 넣으면 그 패널이 그려진다.",
               {"dashboard": {"type": "string",
-                             "description": "대시보드 제목의 일부. 비우면 전체"}}),
+                             "description": "대시보드 제목의 일부. 전체면 빈 문자열"}},
+              ["dashboard"]),
         _spec("past_judgments", "봇이 전에 내린 판정 기록. 같은 일이 반복되는지 볼 때 쓴다.",
               {"host": _host_prop("비우면 전체", toks),
                "days": {"type": "integer", "description": "며칠 전까지. 최대 90"}}),
@@ -762,7 +771,10 @@ async def _tool_security_alerts(args: dict, ctx: dict) -> dict:
                 "note": "이 호스트에는 보안 에이전트가 없다. 없다는 뜻이 아니다"}
     a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
                               default_span=ctx.get("panel_span"))
-    body = build_wazuh_query(agent, a, b, args.get("min_level") or 0)
+    grp = str(args.get("rule_group") or "").strip()
+    if grp and not _LABEL_OK.match(grp):
+        return _err("규칙 그룹 이름에 쓸 수 없는 글자가 있다: %r" % grp)
+    body = build_wazuh_query(agent, a, b, args.get("min_level") or 0, grp)
     return _add_cut(await ctx["fetch_security"](body), cut, WINDOW_MAX_WIDE_M,
                     a, b, args, ctx.get("panel_span"))
 

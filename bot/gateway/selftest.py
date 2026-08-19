@@ -3214,13 +3214,29 @@ def _ask_tool_checks() -> int:
     assert not asktools.zbx_method_ok("user.get"), "목록 밖 조회를 허용했다"
     assert not asktools.zbx_method_ok("host.update")
 
+    # ⑥-a **규칙 그룹 조건은 조회에 건다.** 받아 온 50건 안에서 세면 그보다 많을 때
+    #      조용히 적게 센다. 대시보드 패널이 그룹으로 거르므로 같은 조건으로 세야 한다.
+    g = asktools.build_wazuh_query("vm-a.example", 60, 70, 0, "authentication_failed")
+    assert {"term": {"rule.groups": "authentication_failed"}} in g["query"]["bool"]["filter"], g
+    # 그룹을 안 주면 조건을 안 건다.
+    plain = asktools.build_wazuh_query("vm-a.example", 60, 70, 0)
+    assert all("rule.groups" not in str(f) for f in plain["query"]["bool"]["filter"]), plain
+
+    # ⑥-b **선택 인자 한도는 선택만 센다.** 지울 필요 없이 필수로 옮기면 자리가 난다.
+    #      항목을 지우면 기능이 없어지지만, 필수로 옮기면 모델이 매번 적을 뿐이다.
+    names = {t["name"]: t for t in asktools.build_tool_specs({"[h]": {}})}
+    for name, key in (("list_hosts", "query"), ("open_problems", "host"),
+                      ("list_panels", "dashboard")):
+        sch = names[name]["input_schema"]
+        assert key in (sch.get("required") or []), (name, sch.get("required"))
+
     # ⑥ Wazuh 질의 본문은 고정 틀에서 만든다. 에이전트명은 정확 일치다.
     body = asktools.build_wazuh_query("vm-a.example", 60, 7, 1786590000)
     assert body["query"]["bool"]["filter"][0]["term"]["agent.name"] == "vm-a.example", body
     assert set(body) <= {"size", "sort", "query", "_source", "track_total_hits"}, body
     # **총 건수를 함께 받는다.** 50건만 받아 세면 그보다 많을 때 조용히 적게 센다.
     assert body.get("track_total_hits") is True, body
-    return 33
+    return 38
 
 
 
