@@ -1,26 +1,4 @@
-"""대화형 질의 — 사람이 관측 화면에서 자연어로 묻는 창구. 설계는 bot/GATEWAY_GUIDE.md §27.
-
-알림 경로는 컨텍스트를 `masking.build_llm_context` 화이트리스트가 지킨다. 질의 경로에는
-그 보호가 없다. 사람은 호스트명이든 IP든 계정명이든 아무거나 친다.
-
-**이 파일은 이름을 모아 두는 자리다.** 원래 한 파일(1,289줄)이었고 2026-08-19 에 옮기기만
-했다. 밖에서는 예전처럼 `ask.run_ask`·`ask.build_table` 로 쓰면 된다.
-
-    policy    질의가 닿을 수 있는 감시 영역
-    table     조회 대상 표 — 표에 없으면 대상을 지정할 방법이 없다
-    session   세션 역치환 표와 멈춤
-    hygiene   질문 위생과 이력 자르기
-    answer    답 조립·시스템 문구·손잡이 정리
-    budget    사용자별 사용량
-    loop      질의 반복문
-    engine    엔진 선택과 LangGraph 경로
-    fetch/    축별 조회기 (loki · wazuh · zabbix · judgments · panels)
-    config    설정값과 고정 문구
-
-**밖에서 갈아 끼우는 이름은 여기가 기준이다.** `build_table`·`fetch_problems`·
-`FACTS_FILE`·`MAX_PER_USER_HOUR` 은 안쪽에서도 이 패키지를 통해 읽는다. 그래서 검사가
-`ask.build_table = ...` 로 바꾸면 반복문 안에서도 그 값이 보인다.
-"""
+"""대화형 질의 — 사람이 관측 화면에서 자연어로 묻는 창구. 설계는 bot/GATEWAY_GUIDE.md §27."""
 
 import logging
 

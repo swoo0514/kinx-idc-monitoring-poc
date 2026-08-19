@@ -1,8 +1,4 @@
-"""컨텍스트 수집기 — Zabbix(읽기전용 `.get`) + Loki 로그 + Wazuh 경보. 상세는 GATEWAY_GUIDE §9.
-
-환경변수: ZABBIX_URL·ZABBIX_TOKEN(필수) / LOKI_URL·WAZUH_INDEXER_URL·WAZUH_INDEXER_USER·
-WAZUH_INDEXER_PASSWORD(선택 — 없으면 해당 소스 생략, 열화 진행).
-"""
+"""컨텍스트 수집기 — Zabbix(읽기전용 `.get`) + Loki 로그 + Wazuh 경보. 상세는 GATEWAY_GUIDE §9."""
 
 import asyncio
 import fnmatch
@@ -24,26 +20,12 @@ TIMEOUT_S = 5   # 콜당 — 수집이 30초 예산을 안 갉게
 
 # 인시던트 시간창 — 로그·보안은 이 창에서만 (병합 대상 신호 정렬용)
 CORR_WINDOW_S = 900   # 15분
-# 조회 상한과 전송 상한을 나눈다. 랩 실측(2026-08-13): 평상시에도 15분에 120줄인
-# 호스트가 있어 40줄 상한이 매번 3분의 2를 버렸다. 더 읽고 골라 보낸다.
-# 300 은 랩 최대(120줄)의 2.5배다. 실환경은 호스트당 로그량이 미지라 도입 전 재측정한다.
+# 조회 상한과 전송 상한을 나눈다 — 40줄 상한이 평상시에도 3분의 2를 버렸다 (§26)
 LOKI_FETCH_LIMIT = 300
-# 전송 예산. **줄 수가 아니라 글자 수가 진짜 예산이다** — 모델이 먹는 단위가 글자
-# 수이고, 줄 수는 줄 길이에 따라 같은 값이 열 배 차이가 난다.
-#
-# 40줄이라는 옛 값은 응답 시간 때문이라고 적혀 있었으나 근거가 없었다. 실측
-# (2026-08-13, claude-opus-4-8, 3회 중앙값): 입력을 3,746토큰에서 278,286토큰으로
-# 75배 늘려도 응답 시간은 9.70초에서 11.86초로 2.2초 늘었다. 40줄 제한이 지킨 것은
-# 2초였고, 그 대가는 원인 줄을 버릴 위험이었다.
-#
-# 그래서 상한을 조회 상한과 같은 300줄로 올리고, 실제 제동은 글자 수로 건다.
-# 64KB 는 300줄이 평균 213자 이하일 때 통째로 나가는 크기다. 랩 실측 줄 길이는
-# 중앙값 108자·최대 233자이므로 평상시에는 걸리지 않고, 스택 트레이스처럼 줄이
-# 유난히 긴 구간에서만 선별이 개입한다.
+# 전송 예산은 줄 수가 아니라 글자 수다 — 실측 근거는 GATEWAY_GUIDE §26
 LOKI_SEND_LIMIT = 300
 LOKI_SEND_BYTES = 64 * 1024
-# 줄 수만으로는 부족하다. 300자 절단은 응답을 받은 뒤 우리가 하므로 와이어에는 전장이
-# 온다. 4KB 줄이면 300줄이 1.2MB 이고 그 파싱이 이벤트 루프를 막는다.
+# 300자 절단은 응답을 받은 뒤라 와이어에는 전장이 온다
 LOKI_FETCH_BYTES = 2 * 1024 * 1024
 LOKI_LINE_MAX = 300   # 라인당 최대 문자 (토큰 억제). 랩 실측 최대 233자로 현재는 안 걸린다
 WAZUH_LIMIT = 20
@@ -65,22 +47,11 @@ SOURCE_UNMATCHED = "unmatched"      # 조회는 됐으나 그 호스트 이름�
 
 
 class ZabbixClient:
-    """감시 서버 하나에 붙는 조회 전용 클라이언트.
-
-    감시 서버가 둘 이상이면 **알림이 온 곳에 되물어야 한다.** 사내 알림의 이력을 MSP
-    서버에 물으면 없는 호스트라 빈 결과가 오거나, 더 나쁘게는 이름이 같은 남의 호스트
-    자료가 온다. 어느 서버에 물을지는 명부의 감시 서버 절에서 고른다.
-    """
+    """감시 서버 하나에 붙는 조회 전용 클라이언트."""
 
     def __init__(self, url: str = None, token: str = None, source: str = ""):
         conf = registry.source_conf(source) if source else {}
-        # 명부를 못 읽었으면 소스를 지정한 조회를 막는다. 조용히 기본 서버로 떨어지면
-        # MSP 알림의 이벤트 ID 를 사내 서버에 묻게 되는데, ID 는 서버마다 따로 늘어나므로
-        # 없으면 "90일 내 이력 없음 = 신규"로 확정되고 겹치면 남의 호스트 자료가 그
-        # 고객 사건에 실린다. 둘 다 예외가 안 나서 상태는 ok 로 남는다.
-        #
-        # 명부가 아예 설정 안 된 환경(감시 서버 하나)은 여기 안 걸린다 — 그때는
-        # registry.status()["error"] 가 비어 있다.
+        # 명부를 못 읽었으면 소스를 지정한 조회를 막는다 — 조용히 기본 서버로 떨어지면 안 된다
         if url is None and source and not conf.get("url"):
             st = registry.status()
             if st.get("error"):
@@ -131,9 +102,7 @@ class ZabbixClient:
 async def _zabbix_alert_context(zbx: ZabbixClient, client: httpx.AsyncClient,
                                 event_id: str, trigger_id: str, now: int) -> dict:
     """트리거 1건의 Zabbix 컨텍스트(이벤트·트리거·호스트·메트릭·선판정). 로그·보안 제외."""
-    # 과거 이력은 **개수와 최근 목록을 따로** 받는다. 한 번에 받으면 상한에 걸려
-    # 만성끼리 순위가 안 나온다(실환경 90일: 상한 초과 12계열이 이벤트의 95%이고,
-    # 21,585회와 547회가 똑같이 상한값으로 보였다). 근거는 GATEWAY_GUIDE §7-3.
+    # 과거 이력은 개수와 최근 목록을 따로 받는다 — 근거는 GATEWAY_GUIDE §7-3
     past_window = {"objectids": trigger_id, "source": 0, "object": 0, "value": 1,
                    "time_from": now - prejudge.WINDOW_S, "time_till": now}
     cur_event, trigger, metrics, past, past_count = await asyncio.gather(
@@ -153,9 +122,7 @@ async def _zabbix_alert_context(zbx: ZabbixClient, client: httpx.AsyncClient,
     host = {}
     hosts = (trigger[0].get("hosts") if trigger else None) or []
     if len(hosts) > 1:
-        # 랩에서는 트리거 3,000개 중 0건이었다(2026-08-18). 실환경(사내 321대)에 있으면
-        # 이 줄로 드러난다. 조용히 첫 번째를 쓰면 튄 것이 vm-b 인데 vm-a 의 로그를 보고
-        # 판정 행에도 vm-a 가 남는다.
+        # 이름이 겹치면 드러낸다 — 조용히 첫 번째를 쓰면 남의 호스트 로그를 본다
         log.warning("트리거 %s 가 호스트 %d개를 참조한다 — 첫 번째(%s)로 조사한다: %s",
                     trigger_id, len(hosts), hosts[0].get("host", "?"),
                     ", ".join(h.get("host", "?") for h in hosts[:5]))
@@ -166,8 +133,7 @@ async def _zabbix_alert_context(zbx: ZabbixClient, client: httpx.AsyncClient,
         host = got[0] if got else {}
     if not host.get("host") and hosts:
         host = {**host, "host": hosts[0].get("host", "")}
-    # 상한에 걸렸는지는 **거른 뒤 개수가 아니라 받은 개수**로 판정해야 한다. 현재
-    # 이벤트를 빼면 199 가 되어, 받는 쪽이 200 과 비교하면 영원히 안 걸린다.
+    # 상한 판정은 거른 뒤가 아니라 받은 개수로 한다
     past_truncated = len(past) >= PAST_EVENT_LIMIT
     past_clocks = [int(e["clock"]) for e in past if e.get("eventid") != str(event_id)]
     # countOutput 은 숫자를 문자열로 돌려준다. 현재 이벤트가 창 안에 있으므로 1 을 뺀다.
@@ -217,11 +183,9 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
         "security": security,    # Wazuh Indexer — 침해·변경 경보
         # 빈 목록의 의미를 확정하는 상태. ok 일 때만 "없음 = 사실"이다.
         "sources": {"logs": logs_status, "security": sec_status},
-        # 조회 상태와 별개다. 창에서 몇 줄을 읽었고 그중 몇 줄을 보냈는지,
-        # 조회 자체가 상한에 닿았는지를 각각 낸다.
+        # 조회 상태와 별개 — 읽은 줄·보낸 줄·상한 도달을 각각 낸다
         "logs_fetched": len(logs),
-        # 생략 표시는 줄이 아니다. 세면 41줄 조회에서 fetched 와 selected 가 같아져
-        # "일부만 실렸다"는 경고가 붙지 않는다(2026-08-13 감사).
+        # 생략 표시는 줄이 아니다 — 세면 "일부만 실렸다" 경고가 안 붙는다
         "logs_selected": sum(1 for r in picked_logs if "line" in r),
         "logs_fetch_capped": logs_capped,
         # 이 경로는 알림이 실시간으로 도착한 것이라 지금이 곧 사건 시각이다.
@@ -235,17 +199,8 @@ async def collect_context(zbx: ZabbixClient, event_id: str, trigger_id: str) -> 
 
 
 def reference_time(incident, now: int, extra_clocks=()) -> int:
-    """로그·보안 조회 창의 기준 시각.
-
-    사건이 난 시각을 알면 그 시각을 쓴다. 재기동 후 대기 알림을 다시 넣으면 받은
-    시각은 새로 찍히지만 사건이 난 시각은 그대로이므로, 이 값이 있어야 실제 로그
-    구간을 본다.
-
-    모르면(0) 지금을 쓴다 — 없는 값을 지어내지 않는다. 미래 시각도 안 믿는다.
-    발행 측 시계가 앞서 있으면 창이 통째로 빗나가는데, 그게 조용히 일어난다.
-    """
-    # 감시 서버가 돌려준 이벤트 시각이 가장 정확하다. 발송 설정이 시각을 안 실어
-    # 보내도 이 값은 온다. 발송 측 매크로에 의존하지 않으려고 이 순서로 둔다.
+    """로그·보안 조회 창의 기준 시각."""
+    # 감시 서버가 돌려준 이벤트 시각을 먼저 쓴다 — 발송 매크로에 의존하지 않는다
     known = _known_clocks(incident, now, extra_clocks)
     if not known:
         return now
@@ -259,25 +214,12 @@ def _known_clocks(incident, now: int, extra_clocks=()) -> list:
 
 
 def reference_guessed(incident, now: int, extra_clocks=()) -> bool:
-    """조회 창의 기준을 사건 시각이 아니라 '지금'으로 떨어뜨렸는가.
-
-    떨어뜨리는 것 자체는 설계다(없는 값을 지어내지 않는다). 문제는 그 사실이 조용하다는
-    점이다. 2026-08-13 랩에서 사건 두 시간 뒤에 재분석을 돌렸더니 시각을 아무도 주지
-    못해 창이 조용히 지금이 됐고, 그 한산한 창에서 잡힌 6줄을 보고 모델이 "로그 축에는
-    이번 사건을 설명할 신호가 없다"고 썼다. 신호가 없던 것이 아니라 사건이 없던 시간대를
-    본 것이다.
-    """
+    """조회 창의 기준을 사건 시각이 아니라 '지금'으로 떨어뜨렸는가."""
     return not _known_clocks(incident, now, extra_clocks)
 
 
 async def zabbix_probe(source: str = "", client=None) -> dict:
-    """조회 토큰이 지금 유효한지 본다.
-
-    토큰 만료는 사건이 나기 전에는 아무 데도 안 나타난다. JSON-RPC 는 오류도 HTTP 200
-    으로 돌려주므로 웹 접근 로그에도 성공만 찍힌다. 실제로 2026-08-13 랩에서 만료된
-    토큰으로 며칠을 돌았고, 그 사이 사건은 전부 "지표 미상"으로 기록됐다. 그래서
-    기동 때 한 번 물어본다.
-    """
+    """조회 토큰이 지금 유효한지 본다."""
     try:
         zbx = client if client is not None else ZabbixClient(source=source)
     except RuntimeError as e:
@@ -291,12 +233,7 @@ async def zabbix_probe(source: str = "", client=None) -> dict:
 
 
 async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
-    """병합 인시던트 컨텍스트 — 알림별 Zabbix 조각 + 호스트 단위 로그·보안 1회.
-
-    incident.alerts 는 같은 호스트(키에 host 포함). Zabbix 알림은 트리거별로 병렬 수집하고,
-    Loki 로그·Wazuh 경보는 호스트 1회만 조회해 중복 호출을 막는다. trigger_id 없는 알림
-    (Wazuh 등)은 이름·심각도만 실어 보낸다.
-    """
+    """병합 인시던트 컨텍스트 — 알림별 Zabbix 조각 + 호스트 단위 로그·보안 1회."""
     now = int(time.time())
     zbx_alerts = [a for a in incident.alerts if a.trigger_id]
     per = []
@@ -317,8 +254,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
     loki_label = _resolve_label(zbx_host, host_obj, source, "logs") if host_obj else zbx_host
     wz_label = _resolve_label(zbx_host, host_obj, source, "security") if host_obj else zbx_host
 
-    # 열린 문제 조회는 창 마감 시점에 1회만. 알림 도착 시점에 부르면 디바운스 창이
-    # 외부 API 응답 시간만큼 흔들린다.
+    # 열린 문제 조회는 창 마감 시점에 1회만 — 아니면 디바운스 창이 흔들린다
     async def _open_probe():
         hid = host_obj.get("hostid")
         if not hid:
@@ -328,8 +264,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         async with httpx.AsyncClient() as c2:
             return await _open_problems(zbx, c2, hid, incident.classes(), exclude, now)
 
-    # 로그·보안은 **사건이 난 시각** 기준으로 본다. 지금 기준으로 잡으면 재기동 후
-    # 다시 넣은 알림에서 실제 장애 구간이 창 밖으로 밀린다.
+    # 로그·보안은 사건이 난 시각 기준 — 지금 기준이면 장애 구간이 창 밖으로 밀린다
     event_clocks = []
     for r in per:
         if isinstance(r, dict):
@@ -351,17 +286,13 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         _open_probe(),
     )
 
-    # 하나라도 성공했으면 ok. 전부 실패했으면 미상이다. 알림이 애초에 Zabbix 축을
-    # 안 가지면(Wazuh 단독) 판단할 대상이 없으므로 미배선으로 둔다.
+    # 하나라도 성공했으면 ok, 전부 실패면 미상, Zabbix 축이 없으면 미배선
     if not zbx_alerts:
         metrics_status = SOURCE_DISABLED
     elif any(isinstance(r, dict) for r in per):
         metrics_status = SOURCE_OK
     else:
-        # **사유를 반드시 남긴다.** JSON-RPC 는 오류도 HTTP 200 으로 돌려주므로 접근
-        # 로그에는 성공만 찍힌다. 실제로 2026-08-13 랩에서 `API token expired.` 로
-        # 전건 실패했는데 원인이 어디에도 안 남아 있었다. 예외는 gather 가 담아 둔
-        # 채 버려진다.
+        # 사유를 반드시 남긴다 — JSON-RPC 는 오류도 200 이라 접근 로그엔 안 남는다
         reasons = []
         for r in per:
             if isinstance(r, BaseException):
@@ -404,9 +335,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
             "automate": incident.automate(),
         },
         "host": host_obj,
-        # 축마다 부르는 이름이 다를 수 있고, 로그 라인 본문에는 그 이름이 들어 있다.
-        # 마스킹이 등록하려면 컨텍스트에 실려야 한다(전송 화이트리스트에는 안 넣는다 —
-        # 등록용이지 보낼 값이 아니다).
+        # 로그 본문의 이름을 마스킹이 등록하려면 컨텍스트에 실려야 한다 (전송 목록엔 안 넣는다)
         "loki_label": loki_label,
         "wazuh_label": wz_label,
         "alerts": alerts_ctx,
@@ -414,17 +343,12 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
         "security": security,
         # 이번 알림보다 먼저 열려 있던, 연계 관계에 있는 문제. 병합 대상이 아니라 참고 정보다.
         "open_problems": opens,
-        # Zabbix 축도 상태를 낸다. 수집은 예외를 위로 안 던지므로(gather 가 예외를
-        # 값으로 돌려준다) 전건 실패해도 여기까지 조용히 온다. 로그·보안만 상태를
-        # 내면 게이트와 카드가 "조회는 정상"으로 읽어, Zabbix 가 죽어 있던 시간대의
-        # 사건이 전부 "봐줬는데 볼 게 없었다"로 남는다.
+        # Zabbix 축도 상태를 낸다 — 안 내면 죽어 있던 시간대가 "볼 게 없었다"로 남는다
         "sources": {"logs": logs_status, "security": sec_status,
                     "open_problems": opens_status, "metrics": metrics_status},
-        # 조회 상태와 별개다. 창에서 몇 줄을 읽었고 그중 몇 줄을 보냈는지,
-        # 조회 자체가 상한에 닿았는지를 각각 낸다.
+        # 조회 상태와 별개 — 읽은 줄·보낸 줄·상한 도달을 각각 낸다
         "logs_fetched": len(logs),
-        # 생략 표시는 줄이 아니다. 세면 41줄 조회에서 fetched 와 selected 가 같아져
-        # "일부만 실렸다"는 경고가 붙지 않는다(2026-08-13 감사).
+        # 생략 표시는 줄이 아니다 — 세면 "일부만 실렸다" 경고가 안 붙는다
         "logs_selected": sum(1 for r in picked_logs if "line" in r),
         "logs_fetch_capped": logs_capped,
         "logs_window_guessed": win_guessed,
@@ -437,16 +361,7 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
 
 
 def _resolve_label(zbx_host: str, host_obj: dict, source: str = "", axis: str = "logs") -> str:
-    """Zabbix 호스트명 → Loki/Wazuh 라벨. 세 시스템이 이름을 달리 쓰고 공유 키가 없어 필요.
-
-    우선순위: HOST_LABEL_MAP(명시) → 인터페이스 dns(FQDN 일 때만) → Zabbix 호스트명.
-    이 맵은 손 설치 호스트용 스톱갭이고, 정답은 배포 시 FQDN 정규화다 —
-    docs/01-build/hosts.md.
-
-    dns 에 점이 없으면 쓰지 않는다. 랩 실측에서 그 칸에 컨테이너 이름이 들어 있었고
-    (`zabbix-agent2`·`snmpsim`), 그 이름은 여러 호스트가 공유할 수 있어 남의 로그를
-    이 호스트 것으로 읽을 위험이 있다.
-    """
+    """Zabbix 호스트명 → Loki/Wazuh 라벨. 세 시스템이 이름을 달리 쓰고 공유 키가 없어 필요."""
     # 명부가 먼저다. 호스트에 관한 사실은 한 곳에 모으고, 환경변수는 명부가 없을 때만 쓴다.
     named = registry.label(source, zbx_host, axis)
     if named:
@@ -461,8 +376,7 @@ def _resolve_label(zbx_host: str, host_obj: dict, source: str = "", axis: str = 
     fqdns = [(i.get("dns") or "").strip() for i in (host_obj.get("interfaces") or [])
              if "." in (i.get("dns") or "")]
     if len(fqdns) > 1:
-        # 어느 쪽이 그 축의 이름인지 고를 근거가 없다. 관리망 FQDN 이 먼저 오면 로그가
-        # 0줄로 나오고 사람은 "로그 없음" 으로 읽는다. 명부에 적으면 이 경로를 안 탄다.
+        # 어느 쪽이 그 축의 이름인지 고를 근거가 없다 — 명부에 적으면 이 경로를 안 탄다
         log.warning("%s 에 FQDN 인터페이스가 %d개다 — 첫 번째(%s)를 쓴다. 명부에 %s 를 "
                     "적으면 추측하지 않는다: %s",
                     zbx_host, len(fqdns), fqdns[0],
@@ -478,15 +392,7 @@ def _resolve_label(zbx_host: str, host_obj: dict, source: str = "", axis: str = 
 
 
 def axis_exempt(zbx_host: str, axis: str, source: str = "") -> bool:
-    """그 축이 없는 것이 정상인 호스트인가. axis 는 "logs" 또는 "security".
-
-    두 축은 커버리지가 다르다. 로그는 라벨로 컨테이너 여럿을 논리 호스트 하나에 붙일 수
-    있지만, Wazuh 는 에이전트가 OS 인스턴스마다 붙어서 컨테이너를 그 호스트로 귀속시킬
-    수단이 없다. 실환경도 Wazuh 에이전트가 일부 서버에만 있다. 그래서 축마다 따로 적는다.
-
-    안 적으면 그 호스트의 알림마다 이름 불일치로 분석이 돌고, 진짜 불일치에 쓸 상한을
-    먼저 소진한다. 패턴은 Zabbix 호스트명에 맞추며 `*` 만 쓴다. 근거는 GATEWAY_GUIDE §12.
-    """
+    """그 축이 없는 것이 정상인 호스트인가. axis 는 "logs" 또는 "security"."""
     on = registry.axis_on(source, zbx_host, axis)
     if on is not None:
         return not on          # 명부가 "이 축 없음"이라고 하면 조회하지 않는다
@@ -501,15 +407,8 @@ def axis_exempt(zbx_host: str, axis: str, source: str = "") -> bool:
 
 async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
                          now: int) -> tuple:
-    """이 호스트에 지금 열려 있는 문제 중 현재 인시던트와 연계 관계인 것.
-
-    병합하지 않고 컨텍스트로만 붙인다. 상태를 자체 유지하지 않고 매번 조회한다.
-    설계 판단은 private/docs/open_problem_linkage_design.md.
-
-    반환 (목록, 상태). 조회 실패를 "선행 문제 없음"으로 읽으면 없는 사실을 단언하게 된다.
-    """
-    # incident 가 이 모듈의 SOURCE_UNAVAILABLE 을 import 하므로 모듈 최상단에서 맞import
-    # 하면 순환이 된다. 호출 시점 import 로 끊는다.
+    """이 호스트에 지금 열려 있는 문제 중 현재 인시던트와 연계 관계인 것."""
+    # incident 가 이 모듈을 import 하므로 최상단 맞import 는 순환이 된다
     from . import incident
 
     if not hostid:
@@ -521,9 +420,7 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
             "selectTags": "extend",
             "recent": False,          # 미해소만. 기본값이지만 의도를 코드에 남긴다
             "sortfield": "eventid",
-            # 선행 문제는 **오래된** 쪽이다. 최근 순으로 받으면 폭주 중에 받은 100건이
-            # 전부 5분 미만이라 경과 필터에서 전멸하고, 세 시간째 열려 있는 진짜 선행
-            # 문제는 상한 밖으로 밀린다.
+            # 선행 문제는 오래된 쪽 — 최근 순으로 받으면 진짜 선행이 상한 밖으로 밀린다
             "sortorder": "ASC",
             "limit": OPEN_PROBLEM_LIMIT,
         }) or []
@@ -540,46 +437,36 @@ async def _open_problems(zbx, client, hostid: str, current_classes, exclude_ids,
         if age < incident.OPEN_LINK_MIN_AGE_S:
             continue                          # 방금 난 것은 시간창 병합이 맡는다
         cls = incident.classify(p.get("name") or "", tags=p.get("tags"))
-        # 같은 유형이 이미 인시던트에 있으면 선행이 아니라 같은 문제의 다른 임계
-        # 트리거다. 같은 호스트만 조회하므로 유형이 같으면 같은 조건으로 본다.
+        # 같은 유형이 이미 있으면 선행이 아니라 같은 문제의 다른 임계 트리거다
         if cls in (current_classes or ()):
             continue
         link = incident.open_link(cls, current_classes)
         if not link:
             continue
         out.append({"name": p.get("name") or "", "class": cls, "open_for_s": age,
-                    # 오래 열린 것은 선행 원인이 아니라 방치 항목이다. 지우지 않고 표시한다 —
-                    # 지우면 "그런 문제가 없다"로 읽히고, 그대로 두면 인과로 읽힌다.
+                    # 오래 열린 것은 방치 항목 — 지우면 "없다"로, 두면 인과로 읽히므로 표시한다
                     "stale": age >= incident.OPEN_LINK_STALE_AGE_S,
                     "link": link})
     # 최근 것을 먼저 — 상한에 걸려 잘릴 때 오래된 방치 항목이 아니라 선행 후보가 남게.
     out.sort(key=lambda x: x["open_for_s"])
     if not out and len(rows) >= OPEN_PROBLEM_LIMIT:
-        # 상한만큼 받았는데 하나도 안 걸렸다. 상한 밖에 더 있을 수 있으므로 "없음"
-        # 이라고 말하면 안 된다. 없는 사실을 단언하는 것과 같다.
+        # 상한만큼 받았는데 안 걸렸으면 "없음"이라고 말하면 안 된다
         log.warning("열린 문제가 상한(%d)을 채웠는데 연계 후보가 없다 hostid=%s — "
                     "없음이 아니라 미상으로 보고한다", OPEN_PROBLEM_LIMIT, hostid)
         return [], SOURCE_UNAVAILABLE
     return out[:incident.OPEN_LINK_MAX], SOURCE_OK
 
 
-# 등급은 앵커를 요구한다. 부분 문자열로 잡으면 `0 errors`·`error_rate=0`·
-# `ErrorDocument 404` 가 전부 오류가 된다. 줄머리·대괄호·JSON 키·구분자 뒤만 본다.
+# 등급은 앵커를 요구한다 — 부분 문자열이면 0 errors·ErrorDocument 404 가 다 잡힌다
 _LEVELS = "EMERG|ALERT|CRIT|CRITICAL|FATAL|ERR|ERROR|WARN|WARNING"
-# 등급 필드에 담겨 온 경우. 이때는 대소문자를 가리지 않는다.
-# 열쇠 이름은 실제 형식에서 확인한 것만 넣는다 — JSON 은 level·lvl·levelname·
-# severity·log.level 을 쓰고 logfmt 은 level 을 쓴다. Apache 2.4 는 [모듈:등급] 이라
-# 앞자리에 콜론이 온다.
+# 등급 필드에 담겨 온 경우 — 열쇠 이름은 실제 형식에서 확인한 것만 넣는다
 _LEVEL_FIELD_RE = re.compile(
     r'(?:^|[\s\[\(\|<{,:\'"])'
     r'(?:"?(?:level|lvl|levelname|severity|priority|log\.level)"?\s*[:=]\s*"?)'
     r'(%s)(?=$|[\s\]\)\|>:,\'"])' % _LEVELS, re.IGNORECASE)
 # 괄호·대괄호 안에 등급만 들어 있는 경우. nginx `[error]`, Apache `[core:error]`.
 _LEVEL_BRACKET_RE = re.compile(r'[\[\(](?:[a-z_]+:)?(%s)[\]\)]' % _LEVELS, re.IGNORECASE)
-# 문장 안에 낱말로 서 있는 경우. **대문자일 때만** 인정한다. `Error Rate: 0%`,
-# `warning: none`, `cpu critical threshold` 같은 평범한 문장이 오류로 잡히기 때문이다.
-# alert·crit·emerg 는 이 경로에서 뺀다 — 게이트웨이·Keep·Zabbix 가 평상시에 쓰는
-# 낱말이라 자기 로그가 오류 자리를 먹는다(2026-08-13 감사).
+# 문장 안의 낱말은 대문자일 때만 인정 — alert·crit·emerg 는 일상 어휘라 뺀다
 _LEVEL_BARE_RE = re.compile(
     r'(?:^|(?<=[\s\[\(\|<{,]))(FATAL|ERROR|ERR|WARNING|WARN)'
     r'(?=$|[\s\]\)\|>:,"])')
@@ -587,18 +474,13 @@ _LEVEL_MAP = {"emerg": "error", "alert": "error", "crit": "error",
               "critical": "error", "fatal": "error", "err": "error",
               "error": "error", "warn": "warn", "warning": "warn"}
 
-# 등급 낱말이 없어도 중요한 줄이 있다. 커널과 systemd 가 그렇다.
-# 문구는 공식 소스로 대조했다 — `Out of memory: Kill` 은 linux v5.14 mm/oom_kill.c,
-# `Failed to start`·`Failed with result`·`Dependency failed for` 는 systemd v252
-# src/core/job.c·unit.c 다. `entered failed state` 는 v219 까지만 notice 였고 지금은
-# debug 라 Rocky 8·9 저널에 안 남는다 — 빼고 현행 문구로 바꾼다.
+# 등급 낱말이 없어도 중요한 줄 — 문구는 linux mm/oom_kill.c·systemd v252 로 대조했다
 _CRITICAL_RE = re.compile(
     r"Out of memory: Kill|oom-kill|segfault|"
     r"Failed to start |Failed with result '|Dependency failed for |"
     r"Timed out starting |I/O error|EXT4-fs error")
 
-# 정규화 — 같은 형태를 세기 위한 비교 키다. 절대 전송하지 않는다.
-# 순서가 중요하다. IP → UUID → 긴 hex → 숫자 순으로 걸러야 안쪽이 먼저 먹지 않는다.
+# 정규화 — 같은 형태를 세기 위한 비교 키다. 절대 전송하지 않는다
 _NORM = (
     # 시각 형식이 ISO 만이 아니다. 슬래시 날짜 하나를 빠뜨렸더니 랩의 한 서버에서
     # 469줄이 408가지 모양으로 세어져 반복 접기가 통째로 죽었다(2026-08-13 실측).
@@ -623,32 +505,23 @@ _NORM = (
     # 와 `/tmp/junk` 가 합쳐지면 보안 축과의 교차 판단이 무너진다.
     (re.compile(r"(?<=/)\d+\b"), "<N>"),
 )
-# `key=값` 의 숫자는 변수다(`retry=0`·`pid=5`). 다만 아래로 끝나는 열쇠는 남긴다 —
-# 상태 코드·오류 번호·사용자 번호·신호 번호가 접히면 서로 다른 사건이 한 형태로
-# 합쳐진다. MySQL 오류 번호가 4자리라 자리수 규칙에 먼저 먹히고 있었다.
+# `key=값` 의 숫자는 변수다 — 다만 아래 열쇠로 끝나면 남긴다(상태·오류·신호 번호)
 _KEEP_NUM_SUFFIX = ("status", "code", "rc", "exit", "errno", "level", "signal",
                     "sig", "uid", "gid", "res", "retcode")
 _KV_NUM_RE = re.compile(r"\b([A-Za-z_][\w.]*)=(\d+)\b")
 _KEPT_RE = re.compile(r"\x00(\d+)\x00")
-# `key=값` 이 아니라 낱말 뒤에 맨 숫자로 오는 오류 번호도 남긴다. MySQL 은
-# `Error 1045 (28000)` 형식이라 네 자리 규칙에 먹힌다.
+# `key=값` 이 아니라 낱말 뒤에 맨 숫자로 오는 오류 번호도 남긴다
 _BARE_CODE_RE = re.compile(
     r"\b(error|errno|code|status|sqlstate)\s+(\d+)", re.IGNORECASE)
 SAME_SHAPE_MAX = 3          # 같은 형태를 몇 줄까지 실을지
 # 선별을 끄는 스위치. 끄면 예전 동작(최신 N줄)으로 돌아간다.
 SELECT_ENABLED = os.environ.get("LOG_SELECT_ENABLED", "1") != "0"
-# 몫. **접어도 예산을 넘을 때만 쓰는 비상 배분이다.** 랩 실측(2026-08-13)에서는 접기만으로
-# 15분 120줄이 12줄이 되어 이 배분이 한 번도 개입하지 않았다. 값 자체는 임의값이므로,
-# 이 경로가 실제로 도는 환경을 만나면 그때 실측으로 정한다.
+# 몫 — 접어도 예산을 넘을 때만 쓰는 비상 배분. 값은 임의값이라 도는 환경을 만나면 실측한다
 SELECT_QUOTA = (("error", 14), ("novel", 8), ("pre", 12), ("recent", 6))
 
 
 def log_level(line: str) -> str:
-    """줄이 말하는 등급. 못 뽑으면 빈 문자열 — 미상을 오류로 올리지 않는다.
-
-    등급 필드 → 괄호 → 대문자 낱말 순으로 본다. 앞의 둘은 형식이 분명해 대소문자를
-    안 가리고, 마지막은 평범한 문장과 구분이 안 되므로 대문자만 인정한다.
-    """
+    """줄이 말하는 등급. 못 뽑으면 빈 문자열 — 미상을 오류로 올리지 않는다."""
     line = line or ""
     if _CRITICAL_RE.search(line):
         return "error"
@@ -684,12 +557,7 @@ def log_shape(line: str) -> str:
 
 
 def _with_gaps(recs: list, chosen: set, why_of: dict, line_of) -> list:
-    """안 실린 구간을 표시한다.
-
-    고른 줄만 이어 붙이면 모델은 그것이 연속된 기록인 줄 알고 인접성에서 인과를
-    만든다. 몇 줄이 어느 구간에서 빠졌는지 함께 낸다 — 줄 수만으로는 그 사이에
-    몇 초가 비었는지 안 보인다.
-    """
+    """안 실린 구간을 표시한다."""
     out, gap, gap_from, gap_to = [], 0, None, None
     for i, r in enumerate(recs):
         if i in chosen:
@@ -708,19 +576,7 @@ def _with_gaps(recs: list, chosen: set, why_of: dict, line_of) -> list:
 
 
 def select_logs(records: list, limit: int = None, budget: int = None) -> list:
-    """조회한 것 중 보낼 것을 고른다. 접기가 먼저고 선별은 그다음이다.
-
-    순서가 중요하다. 접기(같은 모양 최대 3줄 + 개수 표기)만으로 랩 15분 120줄이
-    12줄로 줄었고, 그 뒤에 몫 선별은 할 일이 없었다(2026-08-13 실측). 드물게 한 번
-    나타난 줄은 그 자체가 하나의 모양이라 접기 단계에서 반드시 살아남는다. 우리가
-    고치려던 고장(정상 260줄에 섞인 오류 3줄이 잘림)은 접기만으로 해결된다.
-
-    그래서 몫 선별은 평상시에 개입하지 않는다. **접은 결과가 예산을 넘을 때만**
-    무엇을 버릴지 정한다. 예산은 줄 수가 아니라 글자 수로 잡는다. 모델이 실제로
-    먹는 단위가 글자 수이고, 줄 수는 줄 길이에 따라 같은 값이 열 배 차이가 난다.
-
-    고른 뒤에는 반드시 시각순으로 돌려준다. 모델이 인접성에서 인과를 만들기 때문이다.
-    """
+    """조회한 것 중 보낼 것을 고른다. 접기가 먼저고 선별은 그다음이다."""
     limit = LOKI_SEND_LIMIT if limit is None else limit
     budget = LOKI_SEND_BYTES if budget is None else budget
     recs = sorted(records, key=lambda r: r["t"])
@@ -728,10 +584,7 @@ def select_logs(records: list, limit: int = None, budget: int = None) -> list:
         # 되돌리기용. 선별을 끄면 예전 동작(최신 N줄)으로 돌아간다. 커밋을 되돌리지
         # 않고도 원래 상태를 확인할 수 있어야 한다.
         return [dict(r, why="recent", n=1) for r in recs[-limit:]]
-    # **자리 번호로 고른다.** 값(시각+본문)으로 같은지 보면, 같은 줄이 같은 초에 여러 번
-    # 기록됐을 때 되찾는 과정에서 같은 항목이 여러 번 붙어 상한이 무너진다. 실제로 같은
-    # 줄 300개를 넣었더니 300줄이 그대로 나갔다(2026-08-13 감사). 나노초를 초로 바꾸면서
-    # 해상도가 사라져 서로 다른 줄이 같은 시각이 되는 경로도 있다.
+    # 자리 번호로 고른다 — 값으로 보면 같은 줄이 여러 번 붙어 상한이 무너진다
     shapes_of = [log_shape(r["line"]) for r in recs]
     levels_of = [log_level(r["line"]) for r in recs]
     counts = {}
@@ -776,9 +629,7 @@ def select_logs(records: list, limit: int = None, budget: int = None) -> list:
                 break
             if i in chosen or used.get(shapes_of[i], 0) >= SAME_SHAPE_MAX:
                 continue
-            # 넘고 나서가 아니라 넘기 전에 멈춘다. 뒤에서 재면 마지막 한 줄만큼
-            # 항상 초과한다. 첫 줄은 아무리 길어도 싣는다 — 빈 채로 보내면
-            # 모델이 "로그에 흔적이 없다"를 쓴다.
+            # 넘고 나서가 아니라 넘기 전에 멈춘다. 첫 줄은 아무리 길어도 싣는다
             if chosen and spent[0] + len(recs[i]["line"]) > budget:
                 break
             chosen.add(i)
@@ -793,9 +644,7 @@ def select_logs(records: list, limit: int = None, budget: int = None) -> list:
     for name, quota in SELECT_QUOTA:
         want = quota + carry
         carry = want - _take(pools[name], want, name)
-    # 몫 합계보다 상한이 크면 남은 자리를 최신 쪽으로 채운다. 형태 상한으로 자리가
-    # 남는 경우에는 아무것도 안 늘어나는데, 그건 의도한 동작이다 — 거의 같은 줄로
-    # 40칸을 채우는 것보다 대표 몇 줄과 개수를 보내는 편이 낫다.
+    # 몫 합계보다 상한이 크면 남은 자리를 최신 쪽으로 채운다
     if len(chosen) < limit:
         _take(pools["recent"], limit - len(chosen), "recent")
 
@@ -812,19 +661,7 @@ def _loki_ts(ts) -> float:
 
 
 async def _loki_logs(host_label: str, now: int, zbx_host: str = "", source: str = "") -> tuple:
-    """Loki 최근 로그. 반환 (레코드 목록, 조회 상태, 창 절단 여부, 줄 잘린 수).
-
-    레코드는 `{"t": unix초, "line": 줄}` 이다. 시각을 버리면 정렬도 증거 범위도
-    "첫 오류 직전"도 만들 수 없다.
-
-    **합친 뒤 시각으로 정렬한다.** `{host="…"}` 는 스트림이 여럿이라 Loki 응답을 이어
-    붙인 순서는 시각순이 아니다. 지금은 조회 상한과 전송 상한이 같아 결과 집합은 맞지만,
-    둘을 나누는 순간 "최신 순"이 스트림 나열 순서에 좌우된다.
-
-    절단은 조회 상태와 별개다. 40줄에서 자른 것도 조회는 성공이므로 상태는 ok 이지만,
-    그것만 보내면 모델이 그 40줄에 없는 것을 없는 것으로 읽는다. 사건이 클수록 잘리는
-    비율이 높으니 하필 분석이 가장 필요할 때 가장 크게 틀린다.
-    """
+    """Loki 최근 로그. 반환 (레코드 목록, 조회 상태, 창 절단 여부, 줄 잘린 수)."""
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url:
         return [], SOURCE_DISABLED, False, 0
@@ -868,12 +705,7 @@ async def _loki_logs(host_label: str, now: int, zbx_host: str = "", source: str 
 
 
 async def _loki_name_status(client, url: str, host_label: str, now: int) -> str:
-    """15분 창에 로그가 없을 때, Loki 가 이 호스트 이름을 아는지 확인한다.
-
-    이름이 안 맞아 0건인 경우와 정말 로그가 없는 경우를 구분하지 않으면 봇이
-    "로그에 기록 없음"이라고 단언한다. 세 소스가 같은 호스트를 다른 이름으로
-    부르는 것은 이 랩에서 실제로 겪은 문제다. 근거는 GATEWAY_GUIDE §12.
-    """
+    """15분 창에 로그가 없을 때, Loki 가 이 호스트 이름을 아는지 확인한다."""
     try:
         r = await client.get(f"{url}/loki/api/v1/label/{LOKI_HOST_LABEL}/values", params={
             "start": str((now - KNOWN_HOST_LOOKBACK_S) * 1_000_000_000),
@@ -892,13 +724,7 @@ async def _loki_name_status(client, url: str, host_label: str, now: int) -> str:
 
 
 def flatten_alert(src: dict) -> dict:
-    """Wazuh 경보 1건을 전송 화이트리스트가 읽는 평탄한 형태로 옮긴다.
-
-    인덱서는 `rule.level` 처럼 중첩해서 주고 `masking._security_item` 은 평탄한 열쇠를
-    읽는다. 이 단계를 건너뛰면 **모든 값이 공백이 되고 모델은 그것을 "경보 없음" 으로
-    읽는다** — 조회는 성공했는데 답은 없음이 된다(2026-08-18 랩 실측, 50건이 전부 공백).
-    질의 경로와 알림 경로가 같은 함수를 쓰게 해 한쪽만 빠지는 일을 막는다.
-    """
+    """Wazuh 경보 1건을 전송 화이트리스트가 읽는 평탄한 형태로 옮긴다."""
     rule = src.get("rule") or {}
     sc = src.get("syscheck") or {}
     groups = rule.get("groups") or []
@@ -930,14 +756,7 @@ async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "", source: s
         "size": WAZUH_LIMIT,
         "sort": [{"@timestamp": {"order": "desc"}}],
         "query": {"bool": {"must": [
-            # 이름이 정확히 같은 것만. 양쪽 와일드카드로 두면 db01 조회가
-            # customer-b-db01 의 경보까지 가져오는데, 그 항목은 이번 사건 호스트만
-            # 등록된 마스커를 거치므로 다른 고객의 파일 경로·규칙 설명이 원문 그대로
-            # 나가고 카드에는 이 호스트의 침해 신호처럼 보인다.
-            #
-            # 이름이 안 맞으면 결과가 비고, 그때는 아래 _wazuh_name_status 가
-            # "이름 불일치"인지 "정말 경보가 없음"인지 갈라 준다. 그 계약이 이미
-            # 있으므로 여기서 느슨하게 맞출 이유가 없다.
+            # 이름이 정확히 같은 것만 — 느슨하면 다른 고객의 경보가 이 사건 카드에 원문으로 나간다
             {"term": {"agent.name": agent_name}},
             {"range": {"@timestamp": {"gte": f"now-{CORR_WINDOW_S // 60}m"}}},
         ]}},
@@ -966,9 +785,7 @@ async def _wazuh_name_status(client, url: str, user: str, pw: str, agent_name: s
     비어 있음을 "침해 배제"로 읽어도 되는 것은 이름이 맞을 때뿐이다.
     """
     body = {"size": 0, "query": {"bool": {"must": [
-        # 여기도 정확히 일치하는 것만 센다. 느슨하게 세면 이름이 비슷한 다른 호스트가
-        # 있다는 이유로 "이 이름은 알려져 있다"가 되어, 실제로는 이름이 안 맞는 상태를
-        # "정말 경보가 없음"으로 보고하게 된다.
+        # 여기도 정확히 일치하는 것만 센다 — 느슨하면 이름 불일치를 "경보 없음"으로 보고한다
         {"term": {"agent.name": agent_name}},
         {"range": {"@timestamp": {"gte": "now-%dd" % (KNOWN_HOST_LOOKBACK_S // 86400)}}},
     ]}}}

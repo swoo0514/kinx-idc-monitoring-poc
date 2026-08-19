@@ -1,8 +1,4 @@
-"""인시던트 병합 — 알림 N건을 (host, class) 기준으로 1개 사건으로 묶는다.
-
-설계·근거는 bot/GATEWAY_GUIDE.md §8. 순수 로직(classify/bridge/Incident)과 비동기 버퍼
-(IncidentManager)를 분리했다.
-"""
+"""인시던트 병합 — 알림 N건을 (host, class) 기준으로 1개 사건으로 묶는다."""
 
 import asyncio
 import hashlib
@@ -33,8 +29,7 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-# 위에서부터 먼저 걸리는 것. 순서와 키워드 폭이 곧 분류 정확도다 — GATEWAY_GUIDE §8.
-# 손대면 selftest 의 CASES_CLASSIFY 를 함께 늘린다.
+# 위에서부터 먼저 걸린다 — 순서와 키워드 폭이 곧 분류 정확도다. 고치면 CASES_CLASSIFY 도 (§8)
 CLASS_RULES = [
     ("replication", ["복제", "replication", "repl", "slave", "seconds_behind",
                      "리플리케이션", "슬레이브"]),
@@ -54,8 +49,6 @@ CLASS_RULES = [
                     "디스크 여유", "여유 공간", "용량 부족", "파일시스템", "파티션"]),
     ("network", ["interface", "packet", "drop", "crc", "link down", "ifoperstatus",
                  # BGP 피어 단절은 회선 사건인데 service_down 의 "down" 이 먼저 잡았다
-                 # (실환경 90일 기준 98%). 이름을 소문자로 맞춰 보므로 한글 알림명의
-                 # "BGP 피어 다운"도 이 한 낱말로 걸린다.
                  "bgp",
                  # network 만 한글 키워드가 없어 한글 트리거명이 미분류로 떨어졌다.
                  "인터페이스", "패킷", "링크 다운", "인바운드 에러", "아웃바운드 에러",
@@ -64,21 +57,18 @@ CLASS_RULES = [
                       "down", "unreachable",
                       # 표준 템플릿·일반 용어만 둔다. 사이트 관용구는 SITE_CLASS_KEYWORDS.
                       "restarted", "health check", "not response", "no snmp data",
-                      # "응답 없음"·"무응답"은 느린 것이 아니라 죽은 것이다. service_latency
-                      # 의 "응답"이 가로채지 않도록 이 클래스(앞 순서)에 둔다.
+                      # "응답 없음"은 느린 것이 아니라 죽은 것 — service_latency 의 "응답"보다 앞에 둔다
                       "무응답", "응답 없음", "다운", "중지", "정지", "죽음", "미개방",
                       "프로세스"]),
     ("service_latency", ["지연", "latency", "response time", "응답", "qps", "queue",
                          "적체", "처리 지연"]),
-    # 마지막에 둔다 — "바뀌었다"는 generic 이라 앞에 두면 다른 판정을 가로챈다.
-    # 나머지 클래스가 "무엇이 잘못됐나"라면 이 축은 "무엇이 바뀌었나"다.
+    # 마지막에 둔다 — "바뀌었다"는 폭이 넓어 앞에 두면 다른 판정을 가로챈다
     ("config_change", ["has changed", "was changed", "changed on", "구성 변경",
                        "listened ports", "installed packages", "설정 변경",
                        "설정 파일", "패키지", "변경 감지", "변경됨"]),
 ]
 
-# 사이트 고유 트리거명 키워드. 조직마다 다르므로 환경변수로 받는다.
-# 형식: "class=키워드|키워드,class=키워드"  예) service_down=not connect|check is fail
+# 사이트 고유 키워드. 형식: "class=키워드|키워드,class=키워드"
 def _site_keywords():
     out = {}
     for part in os.environ.get("SITE_CLASS_KEYWORDS", "").split(","):
@@ -112,8 +102,7 @@ _WORD_BOUNDARY_MAX = 5
 
 
 def _matcher(keyword: str):
-    # 경계를 \w 가 아니라 영숫자로 잡는다 — \w 는 밑줄을 단어 문자로 보므로 "sshd" 가
-    # "sshd_config" 에 안 걸린다. 근거는 GATEWAY_GUIDE §8.
+    # 경계를 영숫자로 잡는다 — \w 는 밑줄을 포함해 sshd 가 sshd_config 에 안 걸린다 (§8)
     if keyword.isascii() and " " not in keyword and len(keyword) <= _WORD_BOUNDARY_MAX:
         return re.compile(rf"(?<![A-Za-z0-9]){re.escape(keyword)}(?![A-Za-z0-9])")
     return None
@@ -121,20 +110,15 @@ def _matcher(keyword: str):
 
 _COMPILED_RULES = [(cls, [(kw, _matcher(kw)) for kw in kws]) for cls, kws in CLASS_RULES]
 
-# 서로 겹치면 안 된다 — _bridge_id 가 첫 매칭을 반환하므로 겹치면 뒤 그룹이 死코드가 된다.
-# 아래 _validate_bridges 가 import 시점에 강제한다. 조합 근거는 GATEWAY_GUIDE §8.
+# 서로 겹치면 안 된다 — 첫 매칭을 반환하므로 겹치면 뒤 그룹이 죽는다 (§8)
 BRIDGE_GROUPS = [
     frozenset({"replication", "cpu_io_pressure"}),
     frozenset({"disk_space", "service_down"}),
 ]
 
 
-# 열린 문제 연계 규칙 — (열린 쪽, 뒤따르는 쪽). BRIDGE_GROUPS 와 달리 방향이 있고
-# 병합 키를 만들지 않으므로 겹쳐도 된다. 설계는 open_problem_linkage_design.md.
-#
-# 아래는 형식을 보이기 위한 자리표시자이며 어떤 환경의 측정값도 아니다. 실제로는 그
-# 환경에서 측정한 파일을 OPEN_LINK_RULES_FILE 로 지정해 쓴다 — 코드에 박으면 환경이
-# 바뀌어도 아무도 모른다. 생성은 bridge_miner --emit-rules.
+# 열린 문제 연계 규칙 — 방향이 있고 병합 키를 안 만들므로 겹쳐도 된다
+# 아래 값은 형식 예시이며 어떤 환경의 측정값도 아니다. 실제 규칙은 OPEN_LINK_RULES_FILE 로 준다
 _EXAMPLE_OPEN_LINK_RULES = {
     ("disk_space", "cpu_io_pressure"): {"rate": 0.90, "days": 10, "overlaps": 20},
     ("disk_space", "service_down"): {"rate": 0.70, "days": 10, "overlaps": 15},
@@ -143,19 +127,10 @@ _EXAMPLE_MEASURED = "자리표시자 — 측정값 아님. OPEN_LINK_RULES_FILE 
 
 
 def _load_open_link_rules():
-    """측정 파일이 있으면 그것을, 없으면 예시값을 쓴다. 어느 쪽인지 로그로 드러낸다.
-
-    파일 형식(마이닝 도구 --emit-rules 산출):
-      {"measured": "<측정 조건>", "rules": [{"open": "...", "followed": "...",
-                                             "rate": 0.96, "days": 13, "overlaps": 22}]}
-    """
+    """측정 파일이 있으면 그것을, 없으면 예시값을 쓴다. 어느 쪽인지 로그로 드러낸다."""
     path = os.environ.get("OPEN_LINK_RULES_FILE", "")
     if not path:
-        # 예전에는 여기서 예시값을 돌려줬다. 그런데 시스템 프롬프트는 이 수치를
-        # "과거 이력에서 실제로 측정된 값"이라고 모델에게 알려 준다. 그래서 봇이
-        # 근거 없는 90% 를 근거처럼 인용해 고객 대응 채널에 냈다. 측정 파일이 없으면
-        # 연계 자체를 끈다 — 없는 근거보다 없는 문장이 낫다.
-        # 예시값은 파일 형식을 보여 주는 용도로만 남긴다(OPEN_LINK_RULES_FILE 참고).
+        # 측정 파일이 없으면 연계를 끈다 — 예시값이 "측정된 값"으로 모델에 갔다
         log.warning("열린 문제 연계: 측정 파일 없음(OPEN_LINK_RULES_FILE) — 연계를 끈다. "
                     "근거 없는 비율을 실측값처럼 회신하지 않기 위해서다")
         return {}, ""
@@ -178,8 +153,7 @@ OPEN_LINK_RULES, OPEN_LINK_MEASURED = _load_open_link_rules()
 # 방금 난 것은 이미 시간창 병합 대상이다. 그보다 오래 열린 것만 "선행 문제"로 본다.
 OPEN_LINK_MIN_AGE_S = _env_int("OPEN_LINK_MIN_AGE_S", 300)
 OPEN_LINK_MAX = _env_int("OPEN_LINK_MAX", 3)
-# 오래 열린 것은 선행 원인이 아니라 방치 항목이다 — 버리지 않고 표시만 한다.
-# 통계가 아니라 운영 판단이므로 환경변수로 조정한다.
+# 오래 열린 것은 선행 원인이 아니라 방치 항목 — 버리지 않고 표시만 한다
 OPEN_LINK_STALE_AGE_S = _env_int("OPEN_LINK_STALE_AGE_S", 7 * 86400)
 
 
@@ -208,8 +182,7 @@ _validate_bridges()
 
 _SEV_ORDER = {"SEV1": 1, "SEV2": 2, "SEV3": 3, "SEV4": 4, "NONE": 5}
 
-# 우리 분류를 선언하는 트리거 태그 이름. "class" 를 쓰면 안 된다 — Zabbix 표준 템플릿이
-# 이미 그 이름을 쓴다(class=os / class=database). 근거는 next-steps §1-1-12.
+# "class" 를 쓰면 안 된다 — Zabbix 표준 템플릿이 이미 그 이름을 쓴다
 CLASS_TAG = os.environ.get("CLASS_TAG", "incident_class")
 WAZUH_GROUP_CLASS = {
     "syscheck": "auth_security",
@@ -309,16 +282,8 @@ def _bridge_id(cls: str) -> str:
     return cls
 
 
-# 호스트 이름은 감시 서버 안에서만 유일하다. 감시 서버가 둘이면(사내·MSP) 서로 다른
-# 기계가 같은 이름을 가질 수 있고, 이름만으로 묶으면 남의 고객 알림이 한 사건이 된다.
-# 그래서 "어느 감시 영역의 무슨 이름"으로 식별한다.
-#
-# 소스를 그대로 쓰지 않는 이유가 있다. 같은 기계를 Zabbix 와 Wazuh 가 각각 보고하는데,
-# 소스를 키에 넣으면 그 둘이 갈라져 교차 소스 병합이 아예 불가능해진다. 영역은 소스보다
-# 위의 개념이다 — 사내 Zabbix 와 사내 Wazuh 는 같은 영역이고, MSP Zabbix 는 다른 영역이다.
-#
-# 형식: "소스=영역,소스=영역"  예) zabbix-internal=internal,zabbix-msp=msp,wazuh=internal
-# 안 적으면 전부 한 영역으로 본다 — 감시 서버가 하나인 환경의 현행 동작 그대로다.
+# "어느 감시 영역의 무슨 이름"으로 식별한다 — 이름은 감시 서버 안에서만 유일하다
+# 영역은 소스보다 위다. 형식: "소스=영역,소스=영역". 안 적으면 전부 한 영역으로 본다
 def _realm_map():
     out = {}
     for pair in os.environ.get("INCIDENT_REALM_MAP", "").split(","):
@@ -356,13 +321,9 @@ class Alert:
     sev: str
     incident_class: str
     recv: float  # time.monotonic() — 버퍼 타이밍용(수집 시간창은 wall clock 별도)
-    # 발행 측이 알려 준 사건 발생 시각(unix 초). 0 이면 모른다는 뜻이다.
-    # recv 는 단조 시계라 재기동하면 기준이 바뀐다. 그걸로 로그 창을 잡으면 두 시간 전
-    # 사건인데 지금 기준 15분을 보게 되고, 빈 결과가 "기록 없음"으로 단언된다.
+    # 발행 측이 알려 준 사건 발생 시각(unix 초). 0 이면 모른다는 뜻이다
     clock: float = 0.0
-    # 위탁 계약 제약(notify_only)과 자동 조치 태그. 라우팅에서만 쓰고 버리면, 조치가
-    # 금지된 고객사 사건에도 모델이 시스템 변경을 권고하는 문장을 쓴다. 실행은 라우터가
-    # 막지만 담당자가 읽는 문장은 계약과 무관하게 만들어진다.
+    # 계약 제약을 버리면 조치가 금지된 고객사 사건에도 변경 권고 문장이 만들어진다
     scope: str = ""
     automate: str = ""
 
@@ -397,10 +358,7 @@ class Incident:
         return len(self.alerts) > 1
 
     def fingerprint(self) -> str:
-        # 영역을 넣어야 서로 다른 고객의 같은 이름 호스트가 관제 화면에서 한 행으로
-        # 합쳐지지 않는다. 키의 앞 두 칸이 (영역, 호스트)다.
-        # 키를 통째로 넣는다. 키에 영역이 들어 있으므로 서로 다른 고객의 같은 이름
-        # 호스트가 관제 화면에서 한 행으로 합쳐지지 않는다. 키 모양이 바뀌어도 따라간다.
+        # 키를 통째로 넣는다 — 키에 영역이 들어 있어 서로 다른 고객의 같은 이름이 안 합쳐진다
         raw = "|".join([str(x) for x in self.key]
                        + [self.host, ",".join(sorted(self.classes()))])
         return hashlib.sha1(raw.encode()).hexdigest()[:12]
@@ -429,11 +387,7 @@ class Incident:
 
 
 def dominant_verdict(context: dict) -> str:
-    """인시던트 전체의 만성/신규 판정 — 알림별 선판정을 하나로 접는다.
-
-    모르는 것이 하나라도 있으면 "신규", 전부 아는 문제면 "만성", 그 사이는 "재발".
-    근거는 docs/02-design/rules-inventory.md §1-7.
-    """
+    """인시던트 전체의 만성/신규 판정 — 알림별 선판정을 하나로 접는다."""
     verdicts = [(a.get("prejudge") or {}).get("verdict")
                 for a in (context.get("alerts") or [])]
     verdicts = [v for v in verdicts if v]
@@ -452,19 +406,7 @@ def dominant_verdict(context: dict) -> str:
 GATE_MIN_CROSS = _env_int("INCIDENT_GATE_MIN_CROSS", 1)
 GATE_FIRE_ON_NEW = os.environ.get("INCIDENT_GATE_FIRE_ON_NEW", "1") not in ("0", "false", "no")
 
-# 사유별 발동 횟수 (최근 1시간). **통제가 아니라 관측이다.**
-#
-# 예전에는 이 수치가 사유별 한도로 쓰였다. 그 구조에는 세 가지 문제가 있었다.
-# 첫째, 한도가 규칙 가지마다 붙어 있어 보호 범위가 규칙 목록에 묶였다. 규칙을 늘릴
-# 때마다 한도를 또 걸어야 했고, 빠뜨려도 아무 신호가 없었다(실제로 5개 중 3개가
-# 빠져 있었고 폭주 때 실제로 터지는 경로가 그 안에 있었다). 둘째, 한도에 걸린
-# 사건은 다시 시도되지 않고 그대로 버려졌다. 늦게 왔다는 이유로 분석에서 빠졌다.
-# 셋째, 20·30 이라는 값에 산정 근거가 없었다.
-#
-# 그래서 부하 보호는 호출이 실제로 나가는 한 지점(llm.triage_reply)으로 옮겼다.
-# 게이트는 "볼 만한 사건인가"만 판단한다. 여기 남은 수치는 무엇 때문에 분석이
-# 돌았는지를 밖에서 보기 위한 것이다 — 조회 실패 수가 치솟으면 관측 소스를
-# 고치라는 신호다. 근거는 GATEWAY_GUIDE §8-3.
+# 사유별 발동 횟수(최근 1시간) — 통제가 아니라 관측이다. 부하 보호는 출구가 진다 (§8-3)
 _fires = {"new": [], "degraded": []}
 
 
@@ -499,9 +441,7 @@ def should_triage(incident, context: dict, min_cross: int = None, now: float = N
         return True, f"{len(incident.alerts)}건 병합 — 교차 축 존재"
 
     sources = context.get("sources") or {}
-    # 축 목록을 여기서 손으로 적으면 축이 늘 때마다 빠뜨린다. 실제로 open_problems 와
-    # metrics 가 그렇게 빠져 있었고, 그동안 그 축이 통째로 실패해도 "조회는 정상"으로
-    # 스킵됐다. 수집기가 내는 축을 그대로 순회한다.
+    # 축 목록을 손으로 적으면 축이 늘 때마다 빠뜨린다 — 수집기가 내는 축을 그대로 순회한다
     axes = [k for k in sources if k != "open_problems"] or ["logs", "security"]
     failed = [k for k in axes if sources.get(k) == SOURCE_UNAVAILABLE]
     unmatched = [k for k in axes if sources.get(k) == SOURCE_UNMATCHED]
@@ -523,12 +463,7 @@ def should_triage(incident, context: dict, min_cross: int = None, now: float = N
 
 
 class IncidentManager:
-    """알림을 (host, class) 버퍼에 모아, 디바운스 창이 닫히면 on_close(incident) 1회 호출.
-
-    on_signal(alert, thread_ts) -> ts : 알림 도착 즉시 원시 신호를 게시하는 선택적 콜백.
-    신규 인시던트면 thread_ts=None(최상위, 반환 ts 가 앵커), 후속이면 앵커 ts(답글).
-    창 마감 조건과 fast-path 설계는 GATEWAY_GUIDE §8·§9.
-    """
+    """알림을 (host, class) 버퍼에 모아, 디바운스 창이 닫히면 on_close(incident) 1회 호출."""
 
     def __init__(self, on_close, debounce_s: float = None, max_window_s: float = None,
                  priority_debounce_s: float = None, max_alerts: int = None,
@@ -552,21 +487,11 @@ class IncidentManager:
         if new:
             inc = Incident(key=key, host=a.host, alerts=[a],
                            opened_at=a.recv, last_at=a.recv)
-            # ★ 등록을 아래 await 보다 먼저 한다. 게시하는 동안 같은 키의 알림이 도착하면
-            #   그것도 신규로 보여 부모 카드가 두 번 뜨고 스레드가 갈라진다.
+            # 등록을 아래 await 보다 먼저 한다 — 게시 중 같은 키가 오면 카드가 두 번 뜬다
             self._open[key] = inc
         else:
             if not inc.add(a, self.max_alerts):
-                # 넘친 알림을 버리면 안 된다. 그 알림은 어떤 사건에도 안 들어가므로
-                # 사건이 끝날 때 대기 파일에서 지워지지 않는다(지우는 목록이
-                # inc.alerts 다). 그러면 재기동마다 되살아나 이미 끝난 사건의 알림으로
-                # 새 사건이 열리고, 세 번 반복하면 버려진다. 웹훅은 200 을 줬고 파일에도
-                # 적혔는데 아무도 안 본 알림이 된다.
-                #
-                # 그래서 지금 사건을 즉시 마감하고 이 알림으로 다음 사건을 연다.
-                # 상한은 한 사건이 지나치게 커지는 것을 막자는 것이지 알림을 버리자는
-                # 것이 아니다. 창이 이어지는 폭주에서는 사건이 여러 개로 쪼개진다 —
-                # 그게 알림을 잃는 것보다 낫고, 카드에도 그렇게 보인다.
+                # 넘친 알림을 버리지 않고, 지금 사건을 마감한 뒤 그 알림으로 다음 사건을 연다
                 log.info("incident %s at max_alerts(%d) — 마감하고 새 사건으로 이어간다: %s",
                          key, self.max_alerts, a.alert_name)
                 await self._close(key)
@@ -613,11 +538,7 @@ class IncidentManager:
         inc = self._open.pop(key, None)
         timer = self._timers.pop(key, None)
         self._locks.pop(key, None)
-        # 타이머를 취소하되 **자기 자신은 건드리지 않는다.** 마감은 그 타이머 태스크
-        # 안에서 도는데, 거기서 자기를 취소하면 아래 on_close 가 처음 기다리는 지점에서
-        # 취소되어 조용히 죽는다. 알림은 대기 파일에 남고 카드도 안 올라가는데 오류가
-        # 한 줄도 안 남는다. 취소가 필요한 경우는 마감을 밖에서 앞당길 때뿐이다
-        # (종료 마감, 상한 초과로 사건을 미리 닫을 때).
+        # 타이머를 취소하되 자기 자신은 건드리지 않는다 — 마감이 그 태스크 안에서 돈다
         if timer and timer is not asyncio.current_task() and not timer.done():
             timer.cancel()
         if inc is None:
@@ -626,22 +547,12 @@ class IncidentManager:
             await self._on_close(inc)
         except Exception as e:
             log.warning("on_close failed for incident %s: %s", key, e)
-        # 여기까지 왔으면 처리가 끝난 것이다. 중간에 취소되면 이 줄에 도달하지 않으므로
-        # 마감 건수에 안 잡히고, 알림은 대기 파일에 남아 재기동 후 다시 처리된다.
+        # 여기까지 와야 처리가 끝난 것 — 중간 취소는 마감 건수에 안 잡히고 파일에 남는다
         if done is not None:
             done.append(key)
 
     async def flush(self, timeout_s: float = None):
-        """열려 있는 사건을 창 마감을 기다리지 않고 지금 닫는다.
-
-        정상 종료 때 부른다. 안 부르면 대기 중이던 사건이 버려지고 재기동 후 파일에서
-        다시 집어 처리하는데, 그러면 디바운스 창을 처음부터 다시 세고 재시도 횟수도
-        재기동한 만큼 올라간다. 배포로 몇 번 재기동하면 아직 처리도 안 한 알림이
-        한도에 걸려 버려진다.
-
-        timeout_s 를 넘기면 남은 것은 파일에 남겨 둔 채 나간다 — 종료가 무한정
-        늦어지면 관리자가 강제로 죽이고, 그건 정상 종료가 아니게 된다.
-        """
+        """열려 있는 사건을 창 마감을 기다리지 않고 지금 닫는다."""
         keys = list(self._open)
         if not keys:
             return 0

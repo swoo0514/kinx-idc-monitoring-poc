@@ -1,15 +1,4 @@
-"""LangGraph 로 도는 질의 반복문. 설계와 이관 근거는 bot/GATEWAY_GUIDE.md §28.
-
-**프레임워크가 대신하는 것은 흐름뿐이다.** 모델을 부르는 자리, 도구를 실행하는 자리,
-이름을 가리는 자리는 그대로 우리 것이다. 그래야 전송 예산·읽기 전용 강제·마스킹이
-프레임워크 판이 바뀌어도 같은 자리에 남는다.
-
-`ChatAnthropic` 을 그대로 쓰면 프레임워크가 Anthropic 을 직접 부르므로 `egress.guard`
-의 동시 수·시간당 상한·사용자별 예산과 토큰 계수를 통째로 건너뛴다. 그래서 모델 자리에
-우리 출구를 부르는 껍데기를 두고, 도구는 `asktools.run_tool` 을 그대로 감싼다.
-
-langgraph 는 선택 의존이다. 안 깔려 있으면 `available()` 이 거짓이고 기존 반복문이 돈다.
-"""
+"""LangGraph 로 도는 질의 반복문. 설계와 이관 근거는 bot/GATEWAY_GUIDE.md §28."""
 
 import asyncio
 import json as _json
@@ -29,13 +18,7 @@ def available() -> bool:
 
 
 def warmup() -> bool:
-    """무거운 모듈을 미리 불러 둔다. 반환은 쓸 수 있는가.
-
-    **첫 질의가 임포트 값을 뒤집어쓰면 사람은 화면에서 502 를 본다.** 2026-08-18 랩
-    실측으로 `langgraph` 첫 임포트가 95초 걸렸고, 게이트웨이가 멀쩡히 답하는 중에
-    Grafana 프록시가 30초에 먼저 끊었다. 기동은 사람이 기다리는 시간이 아니므로 여기서
-    치른다.
-    """
+    """무거운 모듈을 미리 불러 둔다. 반환은 쓸 수 있는가."""
     try:
         from langchain_core.language_models.chat_models import BaseChatModel  # noqa: F401
         from langchain_core.messages import AIMessage  # noqa: F401
@@ -58,12 +41,7 @@ def versions() -> dict:
     return out
 
 
-# ---------------------------------------------------------------------------
-# 메시지 변환
-#
-# 프레임워크는 자기 메시지 형태를 쓰고 Anthropic 은 자기 형태를 쓴다. 변환을 한 곳에
-# 모아 둔다 — 흩으면 도구 결과가 한쪽에서만 빠져 모델이 "조회 결과 없음" 으로 읽는다.
-# ---------------------------------------------------------------------------
+# 메시지 변환 — 한 곳에 모아 둔다. 흩으면 도구 결과가 한쪽에서만 빠진다
 
 def to_anthropic(messages: list) -> list:
     """프레임워크 메시지 목록을 Anthropic `messages` 로. 시스템 문구는 빼서 따로 준다."""
@@ -115,10 +93,7 @@ def to_ai_message(reply: dict):
     calls = [{"name": b.get("name", ""), "args": b.get("input") or {},
               "id": b.get("id"), "type": "tool_call"}
              for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
-    # **토큰 수를 규약대로 싣는다.** `response_metadata` 에만 넣으면 추적 화면이 못 읽어
-    # 토큰과 비용 칸이 빈다(2026-08-19 확인). 비용을 보려고 켜는 것이므로 그러면 켠 뜻이
-    # 없다. 입력에는 캐시 읽기·쓰기를 포함하고 내역을 따로 적는다 — 랭체인이 다른
-    # 공급자에도 그렇게 적어 나란히 볼 수 있다.
+    # 토큰 수를 규약대로 싣는다 — response_metadata 에만 넣으면 추적 화면이 못 읽는다
     u = reply.get("usage") or {}
     usage = None
     if u:
@@ -129,9 +104,7 @@ def to_ai_message(reply: dict):
         usage = {"input_tokens": inp, "output_tokens": out, "total_tokens": inp + out,
                  "input_token_details": {"cache_read": cache_read,
                                          "cache_creation": cache_write}}
-    # **모델 이름도 규약대로 적는다.** 토큰만 실으면 추적 화면이 개수는 보여 주지만
-    # 단가를 모른다 — 어느 모델인지 알아야 비용이 계산된다. 우리는 모델 자리를 직접
-    # 만들었으므로 이 두 값을 아무도 대신 채워 주지 않는다.
+    # 모델 이름도 규약대로 적는다 — 없으면 개수는 떠도 단가를 몰라 비용이 안 잡힌다
     return AIMessage(content=text, tool_calls=calls, usage_metadata=usage,
                      response_metadata={"usage": u,
                                         "ls_provider": "anthropic",
@@ -139,12 +112,7 @@ def to_ai_message(reply: dict):
 
 
 def make_model(system: str, specs: list, user: str, model_fn=None):
-    """모델 자리. **우리 출구를 지나야만 발신된다.**
-
-    프레임워크가 도구 정의를 자기 형태로 바꾸는 것을 쓰지 않고 우리 `TOOL_SPECS` 를
-    그대로 보낸다. 도구 설명은 사람이 읽고 고치는 문서이기도 해서, 변환을 한 겹 더 두면
-    화면에 보이는 것과 모델이 받는 것이 갈린다.
-    """
+    """모델 자리. **우리 출구를 지나야만 발신된다.**"""
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.outputs import ChatGeneration, ChatResult
 
@@ -158,17 +126,7 @@ def make_model(system: str, specs: list, user: str, model_fn=None):
             return "kinx-gateway"
 
         def _get_ls_params(self, stop=None, **kw):
-            """추적에 실을 모델 정보. **비용은 이 값으로 계산된다.**
-
-            기본 구현은 클래스 이름에서 공급자를 뽑고(`GatewayChat` → `gateway`) 모델
-            이름은 비워 둔다. 그러면 추적 화면에 토큰 수는 떠도 단가를 몰라 비용 칸이
-            빈다(2026-08-19 실측). 우리는 모델 자리를 직접 만들었으므로 이 두 값을
-            아무도 대신 채워 주지 않는다.
-
-            공식 문서 확인: "Setting `ls_model_name` in your metadata is required for
-            LangSmith to identify the model and calculate costs for custom LLM traces."
-            (docs.langchain.com/langsmith/log-llm-trace)
-            """
+            """추적에 실을 모델 정보. **비용은 이 값으로 계산된다.**"""
             from langchain_core.language_models.chat_models import LangSmithParams
 
             return LangSmithParams(ls_provider="anthropic", ls_model_type="chat",
@@ -209,9 +167,7 @@ class ModelBlocked(Exception):
     """출구가 막았거나 모델이 실패했다. 그래프 밖에서 사람이 읽을 문장으로 바꾼다."""
 
 
-# ---------------------------------------------------------------------------
 # 그래프
-# ---------------------------------------------------------------------------
 
 # 멈출 수 있는 이유. 모르는 값이 화면에 나가면 사람이 해석할 수 없다.
 STOP_REASONS = frozenset(("", "budget", "llm_failed", "rounds", "deadline",
@@ -219,12 +175,7 @@ STOP_REASONS = frozenset(("", "budget", "llm_failed", "rounds", "deadline",
 
 
 def check_state(state: dict) -> str:
-    """상태가 앞뒤가 맞는가. 어긋나면 사람이 읽을 사유, 맞으면 빈 문자열.
-
-    동기분 코드(`InvestigationState.validate_graph_invariants`)와 같은 자리다. 단계마다
-    검증해야 어긋난 상태가 그 자리에서 드러난다. 그냥 두면 사람은 틀린 답을 정상으로
-    읽는다.
-    """
+    """상태가 앞뒤가 맞는가. 어긋나면 사람이 읽을 사유, 맞으면 빈 문자열."""
     trace = state.get("trace") or []
     called = state.get("called") or {}
     if len(called) > len(trace):
@@ -241,11 +192,7 @@ def check_state(state: dict) -> str:
 
 
 def should_continue(state: dict, max_calls: int, stop_now, answered) -> bool:
-    """도구를 더 부를까. **그래프 밖 순수 함수로 둔다.**
-
-    클로저 안에 있으면 그래프를 세우지 않고는 단위 검사를 못 한다. 동기분 코드가
-    `routing.py` 를 따로 둔 이유와 같다.
-    """
+    """도구를 더 부를까. **그래프 밖 순수 함수로 둔다.**"""
     last = (state.get("messages") or [None])[-1]
     if not getattr(last, "tool_calls", None):
         return False
@@ -261,15 +208,7 @@ def should_continue(state: dict, max_calls: int, stop_now, answered) -> bool:
 def build(system: str, specs: list, user: str, run_tool, model_fn=None,
           guard=None, result_bytes: int = 60000, max_calls: int = 6,
           answered=None):
-    """`(state) -> state` 로 도는 그래프를 만든다.
-
-    노드는 둘이다. 모델에게 묻는 자리와 도구를 실행하는 자리.
-
-    **상한과 멈춤 판단은 상태가 아니라 클로저로 받는다.** 상태에 함수를 넣으면 나중에
-    체크포인트를 켰을 때 직렬화할 수 없고, 상태 열쇠는 노드가 돌려준 것만 남으므로
-    한 노드가 빠뜨리면 조용히 사라진다(2026-08-18 랩 실측: `guard` 가 사라져 그래프가
-    통째로 실패했다).
-    """
+    """`(state) -> state` 로 도는 그래프를 만든다."""
     from typing import Any, Dict, List
 
     try:                       # 3.9 는 typing 에 있고 상위 판은 typing_extensions 를 쓴다
@@ -298,10 +237,7 @@ def build(system: str, specs: list, user: str, run_tool, model_fn=None,
         error: str
 
     async def ask_model(state: State, config=None) -> dict:
-        # **설정을 그대로 넘긴다.** 모델 호출을 다른 스레드에서 돌리므로, 넘기지 않으면
-        # 프레임워크가 이 호출을 그래프와 이어진 것으로 못 보고 별개 기록으로 남긴다.
-        # 추적 화면에서 질문 하나가 LangGraph 한 줄과 GatewayChat 여러 줄로 흩어져
-        # 보이던 이유다(2026-08-19 확인).
+        # 설정을 그대로 넘긴다 — 안 넘기면 추적에서 질문 하나가 여러 기록으로 흩어진다
         try:
             reply = await asyncio.to_thread(
                 lambda: model.invoke(state["messages"], config=config))
@@ -350,12 +286,7 @@ def build(system: str, specs: list, user: str, run_tool, model_fn=None,
                                           got_answer) else END
 
     def after_tools(state: State) -> str:
-        """도구를 돌린 뒤 모델로 돌아갈 것인가.
-
-        **답을 받았으면 돌아가지 않는다.** 예전에는 무조건 돌아갔고, 모델은 할 일이
-        없으니 짧은 글을 하나 내고 끝났다. 질의마다 유료 호출 하나와 5~15초가 그냥 더
-        들었다(2026-08-19 감사). 직접 구현한 반복문은 `if final: break` 로 이미 안 불렀다.
-        """
+        """도구를 돌린 뒤 모델로 돌아갈 것인가."""
         if state.get("stopped") or got_answer():
             return END
         return "model"

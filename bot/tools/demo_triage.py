@@ -1,14 +1,4 @@
-"""데모 C 오프라인 리허설 — 랩 Zabbix 없이 트리아지 전 구간을 실제로 관통.
-
-수집기만 가짜 컨텍스트로 대체하고, 마스킹→LLM(실 Claude)→Slack(실 게시)은 진짜로 탄다.
-랩 통합 전에 "봇이 실제로 분석하고 Slack에 올리는가 + 30초 안에 되는가"를 확인하는 용도.
-
-실행 (PowerShell, 환경변수 설정 후):
-  $env:ANTHROPIC_API_KEY = "..."      # 없으면 열화 모드로 동작
-  $env:SLACK_BOT_TOKEN = "xoxb-..."   # 없으면 게시 건너뛰고 콘솔 출력
-  $env:SLACK_CHANNEL_ID = "C..."
-  python demo_triage.py
-"""
+"""데모 C 오프라인 리허설 — 랩 Zabbix 없이 트리아지 전 구간을 실제로 관통."""
 
 import os
 import sys

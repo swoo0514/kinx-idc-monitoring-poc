@@ -24,11 +24,7 @@ def _rows(sql: str, args: tuple) -> list:
 
 
 def _candidates(inc, now: float) -> list:
-    """지문 → 유형 → 호스트 순으로 찾는다.
-
-    같은 만성 문제라도 회차마다 병합 구성이 달라지면 지문이 갈린다. 지문만 보면
-    재발일수록 과거를 못 찾는다. 대신 얼마나 느슨하게 찾았는지를 등급으로 함께 낸다.
-    """
+    """지문 → 유형 → 호스트 순으로 찾는다."""
     since = now - LOOKBACK_DAYS * 86400
     ikey = "|".join(str(x) for x in (inc.key or ()))
     base = ("SELECT * FROM judgment WHERE gate_fired=1 AND ts>=? AND ts<=? AND %s"
@@ -64,8 +60,7 @@ def select(inc, current_id=None, now: float = None) -> list:
     out = []
     for r in rows:
         v = _verdict(r["id"])
-        # 오답 표시된 결론은 본문을 안 싣는다. 모델은 "틀렸다"고 적어 줘도 그 문장에
-        # 기대어 새 가설을 쓴다. 그런 결론이 몇 건인지만 알려 준다.
+        # 오답 표시된 결론은 본문을 안 싣는다 — 모델이 그 문장에 기대어 새 가설을 쓴다
         body = ""
         if MODE == "full" and v is True:
             body = (r.get("summary") or "")[:MAX_BODY_CHARS]
@@ -78,7 +73,6 @@ def select(inc, current_id=None, now: float = None) -> list:
             "prior_used": bool(r.get("prior_used")),
             "summary": body,
         })
-    # 오염 안 된 원본을 먼저 쓴다. 주입받아 나온 결론을 다시 넣으면 세 번째 회차에는
-    # 모델이 자기 문장을 읽고 "이전과 동일"이라고 답한다.
+    # 오염 안 된 원본을 먼저 쓴다 — 주입받아 나온 결론을 다시 넣으면 자기 문장을 읽는다
     out.sort(key=lambda p: (p["prior_used"], -1 if p["confirmed"] else 0))
     return out[:MAX_ITEMS]

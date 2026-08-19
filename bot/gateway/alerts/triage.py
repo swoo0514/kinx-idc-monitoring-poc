@@ -95,12 +95,7 @@ def _push_gated(inc, context: dict, reason: str, jid=None) -> dict:
 
 
 def analyze_ref(inc) -> str:
-    """사람이 분석을 다시 요청할 때 사건을 되살릴 재료.
-
-    Keep 은 알림 속성을 문자열로 넘기므로 한 줄로 눌러 담는다. 사건을 통째로 저장해 두지
-    않고 이 문자열로 되살리는 이유는, 요청 시점에 Zabbix 를 다시 읽어야 그동안 달라진
-    상태가 분석에 들어오기 때문이다.
-    """
+    """사람이 분석을 다시 요청할 때 사건을 되살릴 재료."""
     return "|".join("%s,%s,%s,%s" % (a.source, a.event_id, a.trigger_id or "",
                                      a.incident_class)
                     for a in inc.alerts)
@@ -108,18 +103,11 @@ def analyze_ref(inc) -> str:
 
 async def _annotate(jid, inc, sev, headline: str, note: str, text: str,
                     event_ts: float) -> None:
-    """판정을 관측 타임라인에 남긴다 (§25-4). 30초 예산 밖이라 배경으로 돈다.
-
-    사건 시각은 판정 행에 남긴 값을 그대로 받는다. 여기서 다시 계산하면, 발행 측이
-    시각을 안 실어 보낸 알림에서 분석에 걸린 만큼 뒤로 밀린다(랩 실측 21초). 그러면
-    주석이 지표가 튄 자리 옆에 있지 않아 이 기능의 쓸모가 없어진다.
-    """
+    """판정을 관측 타임라인에 남긴다 (§25-4). 30초 예산 밖이라 배경으로 돈다."""
     body = "[%s] %s · %s\n%s" % (sev, headline, note, (text or "").strip()[:400])
     if jid:
         body += "\n(판정 #%s)" % jid
-    # 사건 유형을 태그로 단다. 패널이 자기가 다루는 유형만 가져갈 수 있게 하는 유일한
-    # 통로다 — 어느 패널에 보일지는 대시보드가 읽힐 때 정해지므로, 봇이 사건마다 바꿀 수
-    # 있는 것은 태그뿐이다.
+    # 사건 유형을 태그로 단다 — 패널이 자기 유형만 가져갈 수 있는 유일한 통로다
     tags = ["kinx-bot", sev, inc.host] + sorted(inc.classes())
     aid = await asyncio.to_thread(grafana.annotate, body, event_ts, tags)
     if aid and jid:
@@ -147,12 +135,7 @@ def _record(inc, context, sev, fired, reason, origin, event_ts):
 
 
 def _evidence(context: dict, reply: dict) -> str:
-    """사람이 원문으로 되짚을 재료 (§25-7). 모델에는 안 간다.
-
-    조회문만으로는 재현이 안 된다. 다시 돌리면 300줄이 나오고 모델이 본 40줄은 못
-    되살린다. 그래서 상한과 정책 판번호를 함께 남긴다 — 그때 왜 저 줄이 실렸는지를
-    사후에 답하려면 필요하다.
-    """
+    """사람이 원문으로 되짚을 재료 (§25-7). 모델에는 안 간다."""
     import hashlib
     import json
     try:
@@ -186,14 +169,7 @@ def _finish(jid, fields: dict) -> None:
 
 
 async def run_incident(inc, force: bool = False) -> dict:
-    """병합 인시던트 트리아지 — 창 마감 후 IncidentManager.on_close 가 호출. 30초 예산 기준점.
-
-    LLM·Slack 은 블로킹이라 to_thread 로 감싼다 — 동시 인시던트 타이머를 막지 않게.
-    예외를 위로 던지지 않는다.
-
-    force 는 사람이 직접 요청한 경우다. 발동 조건을 건너뛰고 분석한다 — 봇이 안 하기로
-    판단한 것을 사람이 뒤집는 경로이므로 조건을 다시 걸면 요청이 무시된다.
-    """
+    """병합 인시던트 트리아지 — 창 마감 후 IncidentManager.on_close 가 호출. 30초 예산 기준점."""
     t0 = time.monotonic()
     timings = {}
     sev = inc.dominant_sev()
@@ -218,9 +194,7 @@ async def run_incident(inc, force: bool = False) -> dict:
     timings["collect_s"] = round(time.monotonic() - t0, 2)
 
     fire, reason = (True, "사람 요청") if force else incident_mod.should_triage(inc, context)
-    # 카드보다 먼저 남긴다 — 카드에 실을 식별자가 여기서 나오고, 분석 중 프로세스가
-    # 죽어도 판정은 남는다. 저장은 블로킹이라 다른 사건 타이머를 막지 않게 감싼다.
-    # 사건 시각은 여기서 한 번만 정한다. 판정 행과 주석이 같은 값을 써야 한다.
+    # 카드보다 먼저 남긴다 — 카드에 실을 식별자가 여기서 나오고 죽어도 판정은 남는다
     event_ts = collector.reference_time(inc, int(time.time()))
     jid = await asyncio.to_thread(_record, inc, context, sev, fire, reason,
                                   "forced" if force else "auto", event_ts)
@@ -232,8 +206,7 @@ async def run_incident(inc, force: bool = False) -> dict:
                  inc.fingerprint(), len(inc.alerts), reason, timings)
         return {"fingerprint": inc.fingerprint(), "alert_count": len(inc.alerts),
                 "gated_out": True, "reason": reason, "timings": timings}
-    # 사유와 조회 상태를 함께 남긴다 — 조회 실패로 인한 보수적 발동을 사후에 구분하려면 필요
-    # 연계 건수도 남긴다 — sources 만으로는 몇 건 붙었는지 알 수 없다.
+    # 사유·조회 상태·연계 건수를 함께 남긴다 — 보수적 발동을 사후에 구분하려면 필요하다
     log.info("gate fire fp=%s alerts=%d reason=%s sources=%s open_links=%d",
              inc.fingerprint(), len(inc.alerts), reason, context.get("sources"),
              len(context.get("open_problems") or []))
@@ -288,8 +261,7 @@ async def run_incident(inc, force: bool = False) -> dict:
         "change": reply.get("change", ""),
         "prior_used": 1 if context.get("prior") else 0,
         "evidence": _evidence(context, reply)})
-    # 게이트에서 걸러진 사건은 안 찍는다 — 그쪽이 다수라 타임라인이 우리가 진단한
-    # 노이즈와 같은 모양이 된다.
+    # 게이트에서 걸러진 사건은 안 찍는다 — 다수라 타임라인이 노이즈와 같은 모양이 된다
     _spawn_bg(_annotate(jid, inc, sev, headline, f"{merge_note} · {chronic}",
                         reply.get("text", ""), event_ts))
     log.info("incident triage done fp=%s alerts=%d provider=%s degraded=%s timings=%s",

@@ -25,10 +25,7 @@ PROTOCOL_KEYS = frozenset((
 TOKEN_RE = re.compile(r"\[(?:host|ip|group)-[0-9a-z]+\]")
 
 
-# 토큰의 해시 자릿수. 6자리(16진)는 약 1,678만 가지뿐이라 이름 3,708개에서 실제 충돌이
-# 나왔다(2026-08-13 탐색: host-1422.kinx.net 과 host-3707.kinx.net 이 둘 다 2f64e3).
-# 충돌하면 `_rev` 가 덮여 **역치환이 다른 호스트 이름을 돌려주고 사람은 그것을 사실로
-# 읽는다.** 12자리면 약 2.8×10^14 가지라 이름 1,000개에서 확률이 10억분의 2 아래다.
+# 토큰 해시 자릿수 — 6자리는 이름 3,708개에서 실제로 충돌했다. 12자리로 둔다
 TOKEN_HEX = int(os.environ.get("LLM_TOKEN_HEX", "12"))
 
 
@@ -54,9 +51,7 @@ def token_collisions(terms) -> list:
 
 
 def build_masker() -> masking.Masker:
-    # IP 도 결정적으로 만든다. 기본 `register()` 는 등록 순서 일련번호라, 1턴에 IP 가
-    # 둘이면 [ip-1]·[ip-2] 인데 3턴에 두 번째만 나오면 그게 [ip-1] 이 된다.
-    # 여러 턴에 걸친 대화에서 같은 토큰이 다른 기계를 가리킨다.
+    # IP 도 결정적으로 만든다 — 등록 순서면 턴이 바뀔 때 같은 토큰이 다른 기계를 가리킨다
     mk = masking.Masker(token_fn=token_for)
     for name, kind in nametable.terms():
         if name not in mk._fwd:
@@ -115,15 +110,7 @@ async def forward(body: dict, headers: dict) -> tuple:
 
 
 def blocked_when_empty() -> bool:
-    """이름 표가 비었을 때 막을 것인가.
-
-    **호출자가 신고한 값으로 정하지 않는다.** 예전에는 요청 본문의 `metadata.user_id` 가
-    "msp" 로 시작하면 막고 아니면 통과시켰다. 고객사 도구가 `customer-msp-01` 로 적으면
-    통과하고, 사내 사용자 `mspark` 는 막혔다. 같은 앱의 질의 경로는 명부와 환경변수로만
-    영역을 정하는데 여기만 호출자 말을 믿었다.
-
-    기본은 차단이다. 못 가리면 안 내보낸다. 통과가 필요한 배포는 운영자가 파일에 적는다.
-    """
+    """이름 표가 비었을 때 막을 것인가."""
     v = os.environ.get("PROXY_ALLOW_UNMASKED", "").strip().lower()
     return v not in ("1", "true", "yes")
 

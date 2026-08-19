@@ -1,11 +1,4 @@
-"""셀프테스트 실행기. 검사는 `gateway/checks/` 에 영역별로 있다.
-
-    python -m gateway.selftest
-
-**한 파일이 6,801줄이었다.** 검사를 하나 더할 때마다 어디에 넣을지 매번 찾았고, 실패한
-검사를 읽으려면 그 파일 안을 헤맸다. 2026-08-19 에 영역별로 나눴고 검사 내용은 그대로다.
-총 assert 수가 유지되는지는 아래 `_assert_count` 가 센다 — 나누다 빠뜨리면 그 숫자가 준다.
-"""
+"""셀프테스트 실행기. 검사는 `gateway/checks/` 에 영역별로 있다."""
 
 import logging
 import os
@@ -122,8 +115,7 @@ def main():
     # 만성/신규 선판정 — 결정적 판정 검증
     now = time.time()
     day = 86400
-    # 창과 만성 하한을 인자로 준다. 배포된 서버에서 그대로 돌리면 그 서버의 값을 읽어
-    # 실패하고(랩은 PREJUDGE_CHRONIC_MIN=20), 설정이 맞는지 코드가 틀렸는지 알 수 없다.
+    # 창과 만성 하한을 인자로 준다 — 배포 서버 값을 읽으면 설정 탓인지 코드 탓인지 모른다
     fix = {"window_s": 90 * day, "chronic_min": 5}
     j = prejudge.judge([], now=now, **fix)
     assert j["verdict"] == "신규" and j["count_window"] == 0, j
@@ -134,8 +126,7 @@ def main():
     j = prejudge.judge([now - 120 * day], now=now, **fix)   # 창 밖 이력은 무시 → 신규
     assert j["verdict"] == "신규", j
 
-    # 만성 하한은 횟수가 아니라 재발 간격에서 나온다. 창을 늘리면 하한도 같이 올라가야
-    # 한다 — 안 그러면 같은 값이 조용히 두 배로 느슨해진다.
+    # 만성 하한은 재발 간격에서 나온다 — 창을 늘리면 하한도 같이 올라가야 한다
     assert prejudge.chronic_min_for(90, 30) == 3, "월 1회 = 90일에 3회"
     assert prejudge.chronic_min_for(180, 30) == 6, "창이 두 배면 하한도 두 배"
     assert prejudge.chronic_min_for(90, 10) == 9, "ITIL 관행(30일 3건) 환산"
@@ -143,9 +134,7 @@ def main():
     assert prejudge.chronic_min_for(90, 0) == 2, "간격 0 이어도 죽지 않아야"
     assert prejudge.chronic_min_for(90, 100) == 2, "창보다 긴 간격도 하한 2"
 
-    # 발생 횟수는 목록 길이가 아니라 따로 센 개수를 쓴다. 목록은 상한에 걸리므로
-    # 상한을 넘는 것들이 전부 같은 수로 보이면 무엇이 더 자주 나는지 가릴 수 없다
-    # (실환경 90일: 상한 초과 12계열이 이벤트의 95%, 실제 값은 547~21,585회).
+    # 발생 횟수는 목록 길이가 아니라 따로 센 개수를 쓴다 — 목록은 상한에 걸린다
     from .alerts import collector as _col
     lim = _col.PAST_EVENT_LIMIT
     packed = [now - (i % 80) * day for i in range(lim)]      # 창 안에 상한만큼
@@ -157,8 +146,7 @@ def main():
     assert j["count_window"] == 3000 and j["count_truncated"] is False, j
     assert "상한" not in j["statement"], j["statement"]
 
-    # 개수가 목록보다 작게 오면(창 경계에서 어긋날 수 있다) 목록 길이를 쓴다 —
-    # 실제로 본 것보다 적게 세지 않는다.
+    # 개수가 목록보다 작게 오면 목록 길이를 쓴다 — 실제로 본 것보다 적게 세지 않는다
     j = prejudge.judge(packed, now=now, total_count=3, **fix)
     assert j["count_window"] == lim, j
 
@@ -302,9 +290,7 @@ def main():
                 + concurrency_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
-    # 선언 숫자는 사람이 적는다. 실제보다 작으면 어딘가 검사가 세어지지 않은 것이고,
-    # 지나치게 크면 지운 검사의 숫자가 남은 것이다. 반복문 안의 assert 때문에 정확히
-    # 같을 수는 없으므로, 눈에 띄게 벌어질 때만 알린다.
+    # 선언 숫자는 사람이 적는다 — 반복문 때문에 정확히 같을 수 없어 크게 벌어질 때만 알린다
     if not (counted * 0.7 <= declared <= counted * 2.0):
         print(f"[!] 선언 {declared} 과 실제 {counted} 가 많이 어긋난다 — 검사 개수를 확인할 것")
 

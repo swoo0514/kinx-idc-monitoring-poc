@@ -1,16 +1,4 @@
-"""검사에 공통으로 쓰는 것 — 사례 표, 가짜 클라이언트, 소스 읽기, assert 세기.
-
-검사는 영역별 파일로 나뉘어 있다(`gateway/checks/`). 이 파일에는 여러 영역이 함께 쓰는
-것만 둔다.
-"""
-
-"""게이트웨이 순수 로직 셀프테스트 (fastapi 불필요 — severity/router만 검증).
-
-실행: python -m gateway.selftest   (bot/ 디렉토리에서)
-전부 통과하면 'ALL OK'를 출력한다. docs/02-design/severity-normalization.md 표와의
-일치가 검증 대상이다 — 표를 고치면 이 케이스부터 고친다.
-"""
-
+"""검사에 공통으로 쓰는 것 — 사례 표, 가짜 클라이언트, 소스 읽기, assert 세기."""
 
 
 import shutil
@@ -19,9 +7,7 @@ import shutil
 import time
 
 
-
 from ..alerts import prejudge, router, severity
-
 
 
 CASES_SEVERITY = [
@@ -48,7 +34,6 @@ CASES_SEVERITY = [
 ]
 
 
-
 CASES_ROUTER = [
     # (sev, tags, event_value, expected_route)
     ("SEV1", [], 1, "triage"),
@@ -63,10 +48,7 @@ CASES_ROUTER = [
 ]
 
 
-
-
-# 분류 — Zabbix 7.0 표준 템플릿 트리거명·랩 실측 알림명·Wazuh 룰 설명 기준 (G2a).
-# 오분류는 인시던트 키를 갈라 병합·브리지를 조용히 실패시키므로 케이스를 넓게 잠근다.
+# 분류 사례 — 오분류는 병합·브리지를 조용히 실패시키므로 케이스를 넓게 잠근다 (§8)
 CASES_CLASSIFY = [
     ("MySQL: Replication lag is too high (over 60 for 5m)", "replication"),
     ("MySQL 복제 지연 512초", "replication"),
@@ -88,9 +70,7 @@ CASES_CLASSIFY = [
     ("Nginx process is not running", "service_down"),
     ("Interface eth0(): Link down", "network"),              # 예전엔 service_down("down")
     ("Interface eth0(): High error rate", "network"),
-    # 한글 알림명 — 클래스마다 한글 키워드가 고르지 않아 21/41 이 틀렸다(전수 감사).
-    # 특히 "응답 없음"은 느린 것이 아니라 죽은 것인데 service_latency 의 "응답"이 가로챘고,
-    # service_down 에는 한글이 "재기동" 하나뿐이었다.
+    # 한글 알림명 — 클래스마다 한글 키워드가 고르지 않아 21/41 이 틀렸다
     ("Ethernet1/1: 인바운드 에러 급증", "network"),
     ("인터페이스 링크 다운", "network"),
     ("패킷 유실 급증", "network"),
@@ -118,8 +98,7 @@ CASES_CLASSIFY = [
     ("설정 파일 변경됨", "config_change"),      # auth_security 의 "파일 무결성"과 갈라진다
     ("패키지 목록 변경", "config_change"),
     ("Website response time is too high", "service_latency"),
-    # 아래는 2026-08-10 실환경 90일 실측에서 미분류(other)로 확인돼 키워드를 보강한 것들.
-    # 상위 유형이 미분류의 97%를 차지했고, 보강 후 기존 분류를 뺏은 건은 0건이었다.
+    # 실환경 90일 실측에서 미분류로 확인돼 보강한 것들 — 기존 분류를 뺏은 건은 0건이다
     ("vdb: Disk read/write request responses are too high (read > 20 ms for 15m)",
      "cpu_io_pressure"),                                     # 미분류의 92%를 차지하던 단일 유형
     ("HAProxy acc-api-backend acc01: Health check error", "service_down"),
@@ -144,22 +123,8 @@ CASES_CLASSIFY = [
 ]
 
 
-
-
 def _assert_count() -> int:
-    """검사 파일들에 적힌 assert 문 수. 소스에서 세므로 손으로 못 어긋난다.
-
-    **파일을 나눠도 총수는 그대로여야 한다.** 2026-08-19 에 한 파일을 여섯으로 나눌 때
-    이 값이 979 로 유지되는 것이 옮기기가 온전했다는 증거였다.
-
-    각 검사 함수가 돌려주는 숫자는 사람이 적은 값이라 실제와 어긋날 수 있다. 실제로
-    2026-08-11 에 숫자를 고치다가 같은 값이 먼저 나오는 다른 함수를 바꿨고, 합계가
-    우연히 맞아 드러나지 않았다. 그러면 검사를 지워도 총계가 안 변해 티가 안 난다.
-
-    반복문 안의 assert 는 여러 번 도니까 이 수가 실행 횟수는 아니다. 목적은 그게
-    아니라 **검사를 지우면 숫자가 줄어드는 것**이다. 두 값을 같이 찍어서 어긋나면
-    사람이 보게 한다.
-    """
+    """검사 파일들에 적힌 assert 문 수. 소스에서 세므로 손으로 못 어긋난다."""
     import ast
     import glob
     import io as _io
@@ -175,8 +140,6 @@ def _assert_count() -> int:
             tree = ast.parse(f.read())
         total += sum(1 for n in ast.walk(tree) if isinstance(n, ast.Assert))
     return total
-
-
 
 
 class _FakeHttpx:
@@ -222,15 +185,11 @@ class _FakeHttpx:
         return _Client()
 
 
-
-
 class _LiveZbx:
     source = "zabbix-internal"
 
     async def call(self, *a, **kw):
         return [{"hostid": "1"}]
-
-
 
 
 def _read_source(rel: str) -> str:
@@ -242,8 +201,6 @@ def _read_source(rel: str) -> str:
     import os
     here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return io.open(os.path.join(here, rel), encoding="utf-8").read()
-
-
 
 
 if __name__ == "__main__":

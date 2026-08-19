@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""판정 확인·정정 — 관제 담당자가 봇의 판단에 라벨을 남긴다.
-
-Keep 카드의 Run Workflow 가 이 명령을 부른다. 이 라벨이 정확도 산출의 분자·분모가 되고,
-확인된 결론만 다음 회차의 과거 결론으로 쓰인다.
-
-사용:
-  python3 mark_judgment.py --id 42 --fingerprint 5eebe413de50 --ok yes
-  python3 mark_judgment.py --id 42 --fingerprint 5eebe413de50 --ok no --note "봤어야 했다"
-
-운영 기준은 bot/GATEWAY_GUIDE.md §25, 워크플로는 keep/KEEP_GUIDE.md.
-"""
+"""판정 확인·정정 — 관제 담당자가 봇의 판단에 라벨을 남긴다."""
 
 import argparse
 import os
@@ -43,8 +33,7 @@ def run(jid, fingerprint: str = "", ok: bool = True, axis: str = "overall",
     if not row:
         print("그런 판정이 없다: id=%s" % jid, file=sys.stderr)
         return 2
-    # Keep 은 지문으로 카드를 접으므로, 카드가 최신 판정으로 덮인 뒤에도 옛 식별자가
-    # 화면에 남아 있을 수 있다. 둘이 어긋나면 다른 판정에 라벨이 붙는다.
+    # Keep 은 지문으로 카드를 접는다 — 식별자가 어긋나면 다른 판정에 라벨이 붙는다
     if fingerprint and row.get("fingerprint") != fingerprint:
         print("판정과 지문이 어긋난다: id=%s 는 %s 인데 %s 로 왔다"
               % (jid, row.get("fingerprint"), fingerprint), file=sys.stderr)

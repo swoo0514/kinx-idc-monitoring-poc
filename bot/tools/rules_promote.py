@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""연계 규칙 교체 — 재측정 결과를 사람 승인 뒤에 반영한다.
-
-규칙이 조용히 바뀌면 봇의 판단 근거가 달라져도 아무도 모른다. 나쁜 측정이 그대로
-반영될 수도 있다. 그래서 자동 재측정 + 사람 승인으로 간다. 승인 계층은 새로 만들지 않고
-데모 B·월간 리포트에 쓰던 Keep 을 그대로 쓴다.
-
-흐름:
-  1) 마이닝이 후보 파일을 낸다        bridge_miner --emit-rules <staged>
-  2) 변경분을 만들어 승인 대기로 올린다  rules_promote.py propose --staged <f> --active <f>
-  3) 사람이 Keep 에서 Run Workflow    → SSH → 4)
-  4) 그 파일을 그대로 반영한다          rules_promote.py apply --staged <f> --active <f> --expect <hash>
-
---expect: 승인과 반영 사이에 재측정이 한 번 더 돌면 사람이 읽은 것과 다른 파일이
-반영된다. 월간 리포트의 초안 고정과 같은 문제다.
-
-사용법·운영 기준은 bot/GATEWAY_GUIDE.md.
-"""
+"""연계 규칙 교체 — 재측정 결과를 사람 승인 뒤에 반영한다."""
 
 import argparse
 import hashlib
@@ -175,8 +159,7 @@ def main():
         print("게이트웨이가 규칙을 다시 읽도록 재기동한다.")
         return
 
-    # propose — 변경이 없으면 승인 대기를 만들지 않는다. 매달 빈 승인 요청이 쌓이면
-    # 사람이 보지 않게 되고, 그러면 진짜 변경도 같이 지나간다.
+    # 변경이 없으면 승인 대기를 만들지 않는다 — 빈 요청이 쌓이면 사람이 안 보게 된다
     if not (d["added"] or d["removed"] or d["changed"]):
         print(body)
         print()

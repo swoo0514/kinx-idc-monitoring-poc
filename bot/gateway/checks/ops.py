@@ -1,8 +1,4 @@
-"""운영 검사 — 생존 신호·대기 파일·명부·동시 호출.
-
-원본은 `selftest.py` 한 파일(6,801줄)이었다. 2026-08-19 에 영역별로
-나눴고 검사 내용은 그대로다.
-"""
+"""운영 검사 — 생존 신호·대기 파일·명부·동시 호출."""
 
 import logging
 import asyncio
@@ -25,11 +21,7 @@ log = logging.getLogger("gateway.selftest")
 
 
 def _pending_checks() -> int:
-    """대기 알림 기록 — 창이 닫히기 전에 죽어도 알림이 남아 있는지.
-
-    기록에 실패했는데 참을 돌려주면 웹훅이 200 을 주고, 그러면 Zabbix 는 재시도하지
-    않는다. 그 경로가 가장 중요하므로 먼저 잠근다.
-    """
+    """대기 알림 기록 — 창이 닫히기 전에 죽어도 알림이 남아 있는지."""
     import os
     import tempfile
 
@@ -73,10 +65,7 @@ def _pending_checks() -> int:
         if os.name != "nt" and os.geteuid() != 0:
             assert wrote is False, "쓰지 못했는데 참을 돌려줬다"
 
-        # 동시성 — drop 은 파일 전체를 읽어 다시 쓴다. 그 사이에 다른 스레드가 넣은
-        # 줄이 덮어쓰기에 밀려 사라지면, 웹훅이 이미 200 을 준 알림이 없어진다.
-        # Zabbix 는 성공을 받았으므로 다시 보내지 않는다. 실제로 이 순서는 폭주 때
-        # 늘 일어난다 — 사건 마감(drop)과 새 알림 도착(append)이 겹친다.
+        # 동시성 — 사건 마감(drop)과 새 알림 도착(append)이 겹치면 200 을 준 알림이 사라진다
         import threading
 
         for i in range(60):
@@ -116,11 +105,7 @@ def _pending_checks() -> int:
 
 
 def _heartbeat_checks() -> int:
-    """생존 신호 — 프로토콜이 실제로 통하는지, 안 켰을 때 조용한지.
-
-    가짜 Zabbix 를 띄워 바이트를 그대로 주고받는다. 헤더를 손으로 조립하는 코드라
-    형식이 틀리면 실환경에서야 드러나고, 그때는 신호가 끊긴 것과 구분되지 않는다.
-    """
+    """생존 신호 — 프로토콜이 실제로 통하는지, 안 켰을 때 조용한지."""
     import json
     import os
     import socket
@@ -154,8 +139,7 @@ def _heartbeat_checks() -> int:
 
     saved = {k: os.environ.get(k) for k in
              ("HEARTBEAT_ZABBIX_SERVER", "HEARTBEAT_ZABBIX_PORT", "HEARTBEAT_HOST")}
-    # 배포된 서버에는 이 값이 들어 있다. 지우고 검사하지 않으면 그 서버에서만 깨지고,
-    # 설정 문제인지 코드 문제인지 구분할 수 없다(선판정·연계 규칙에서 겪은 것과 같다).
+    # 배포 서버에 든 값을 지우고 검사한다 — 안 그러면 설정 탓인지 코드 탓인지 모른다
     for k in saved:
         os.environ.pop(k, None)
     try:
@@ -196,9 +180,7 @@ def _heartbeat_checks() -> int:
             else:
                 os.environ[k] = val
 
-    # Zabbix 가 response=success 를 주면서 failed 를 세는 경우. 아이템이 없거나 호스트가
-    # 미등록이면 이렇게 온다. 이걸 성공으로 읽으면 값이 하나도 안 쌓이는 동안 로그는
-    # 계속 성공이고, 아이템이 없으니 nodata 트리거도 없다 — 이 기능이 막으려던 상태다.
+    # Zabbix 는 아이템이 없어도 response=success 를 준다 — failed 를 세야 한다
     assert heartbeat._accepted("processed: 7; failed: 0; total: 7") is True
     assert heartbeat._accepted("processed: 0; failed: 7; total: 7") is False
     assert heartbeat._accepted("형식이 바뀐 문자열") is True, "못 읽으면 오탐 대신 통과"
@@ -252,12 +234,7 @@ def _heartbeat_checks() -> int:
 
 
 def _flush_checks() -> int:
-    """정상 종료 시 마감 — 대기 중인 사건이 버려지지 않는지.
-
-    버려져도 대기 파일이 받아 주므로 겉으로는 멀쩡해 보인다. 그래서 조용히 깨진다.
-    깨지면 재기동마다 창을 처음부터 다시 세고 재시도 횟수가 올라가, 배포 몇 번에
-    아직 처리도 안 한 알림이 한도에 걸려 버려진다.
-    """
+    """정상 종료 시 마감 — 대기 중인 사건이 버려지지 않는지."""
     import asyncio
     import time
 
@@ -299,8 +276,7 @@ def _flush_checks() -> int:
         await m.submit(_alert("h3", "disk_space"))
         n = await m.flush(timeout_s=0.2)
         return n
-    # 마감 건수에 안 잡혀야 한다. 메모리에 남는지는 중요하지 않다 — 종료 중이고,
-    # 처리를 못 끝냈으므로 대기 파일이 그대로 갖고 있어 재기동 후 다시 처리된다.
+    # 마감 건수에 안 잡혀야 한다 — 대기 파일이 갖고 있어 재기동 후 다시 처리된다
     assert asyncio.run(_slow()) == 0
 
     # 마감 중 예외가 나도 종료가 멈추면 안 된다
@@ -318,11 +294,7 @@ def _flush_checks() -> int:
 
 
 def _llm_concurrency_checks() -> int:
-    """LLM 동시 호출 상한 — 상한이 실제로 걸리는지, 대기를 포기하면 열화로 내려가는지.
-
-    상한이 안 걸려도 평소에는 아무 증상이 없다. 여러 호스트가 한꺼번에 무너져
-    창이 동시에 닫힐 때만 드러나고, 그때는 429 와 비용으로 나타난다.
-    """
+    """LLM 동시 호출 상한 — 상한이 실제로 걸리는지, 대기를 포기하면 열화로 내려가는지."""
     import io
     import os
     import threading
@@ -364,8 +336,7 @@ def _llm_concurrency_checks() -> int:
     egress._sem = threading.BoundedSemaphore(2)
     egress._stats.update({"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0})
     try:
-        # **절대값이 아니라 증가분으로 본다.** 앞선 검사가 같은 계수기를 쓰면 절대값
-        # 비교는 검사 순서에 따라 깨진다(2026-08-13 질의 루프 검사 추가 시 발생).
+        # 절대값이 아니라 증가분으로 본다 — 앞선 검사가 같은 계수기를 쓰면 순서에 깨진다
         base_calls = egress.calls_last_hour()
         out = []
         ts = [threading.Thread(target=lambda: out.append(llm.triage_reply(ctx, "SEV3")))
@@ -382,8 +353,7 @@ def _llm_concurrency_checks() -> int:
         assert st["inflight"] == 0, st
         assert st["queue_timeouts"] == 0, st
 
-        # 앞선 8건은 실제로 나갔으므로 예산을 쓴 것이 맞다. 아래에서 "안 나간 호출"만
-        # 따로 보려면 창을 비우고 시작해야 한다.
+        # 앞선 8건은 실제로 나갔다 — "안 나간 호출"만 보려면 창을 비우고 시작한다
         assert egress.calls_last_hour() - base_calls == 8, egress.calls_last_hour()
         egress._calls.clear()
         egress._by_kind.clear()
@@ -397,9 +367,7 @@ def _llm_concurrency_checks() -> int:
         assert "대기를 포기" in r["text"], r["text"]
         assert "처음" in r["text"], "열화여도 코드 판정은 실어야"
         assert egress.stats()["queue_timeouts"] == 1, egress.stats()
-        # 나가지도 않은 호출이 시간당 예산을 먹으면 안 된다. 예전에는 확인과 세기를
-        # 같이 해서, 키가 만료된 채 200건이 들어오면 실제 호출 0건으로 상한에 닿았다.
-        # 그리고 지표는 200건을 정상으로 썼다고 보고했다.
+        # 나가지도 않은 호출이 시간당 예산을 먹으면 안 된다
         assert egress.calls_last_hour() == 0, \
             f"대기 포기가 예산을 먹었다: {egress.calls_last_hour()}건"
         assert egress.kind_counts() == {}, egress.kind_counts()
@@ -427,8 +395,7 @@ def _llm_concurrency_checks() -> int:
         egress._calls.clear()
         egress._by_kind.clear()
 
-        # 시간당 총량 — 동시 수를 눌러도 폭풍이 길게 이어지면 총량은 계속 는다.
-        # 게이트가 아니라 여기서 세므로, 게이트 규칙이 몇 개든 구멍이 안 생긴다.
+        # 시간당 총량 — 게이트가 아니라 여기서 세므로 게이트 규칙이 몇 개든 구멍이 안 생긴다
         egress._sem = threading.BoundedSemaphore(2)
         egress.QUEUE_WAIT_S = 5
         egress.MAX_PER_HOUR = 3
@@ -445,9 +412,7 @@ def _llm_concurrency_checks() -> int:
         egress._calls[:] = [t - 3601 for t in egress._calls]
         assert llm.triage_reply(ctx, "SEV3")["degraded"] is False, "1시간 뒤엔 회복해야"
 
-        # 월간 리포트도 같은 출구를 지나야 한다. 예전에는 이 경로가 어댑터를 직접
-        # 불러서 상한 밖에 있었고, 코드를 읽기 전까지 그 사실이 드러나지 않았다.
-        # 나가는 길이 하나라는 것은 주장이 아니라 검사로 붙들어야 한다.
+        # 월간 리포트도 같은 출구를 지나야 한다 — 나가는 길이 하나라는 것은 검사로 붙든다
         egress._calls.clear()
         egress._by_kind.clear()
         r = llm.monthly_reply({"report.sev1": 1}, [{"host": "h1", "name": "n"}])
@@ -459,13 +424,7 @@ def _llm_concurrency_checks() -> int:
         assert r2["degraded"] is True and "상한" in r2["text"], r2["text"]
         assert "집계 수치는 유효" in r2["text"], "리포트는 수치가 살아 있어야"
 
-        # 출구를 우회하는 코드가 어디에도 없어야 한다. llm.py 만 검사하면 다른 파일에
-        # 새 길이 나도 못 잡는다 — 월간 리포트에서 겪은 것이 바로 그 경우다.
-        #
-        # 그리고 철자 몇 개만 막으면 안 된다. 처음엔 `.complete(` 와 어댑터 반복문만
-        # 봤는데, 심층조사는 `httpx.post(.../api/chat)` 으로 나가므로 그 그물에 안
-        # 걸렸다. 지금은 LLM 으로 나가는 표현을 모아서 보고, **아직 못 옮긴 것은
-        # 예외 목록에 이유와 함께 적게** 한다. 목록에 없는 새 경로가 생기면 실패한다.
+        # 출구를 우회하는 코드가 어디에도 없어야 한다 — 못 옮긴 것은 예외 목록에 이유와 함께 적는다
         import glob
         import re
         # 파일 -> 왜 아직 출구 밖인가. 옮기면 여기서 지운다.
@@ -476,18 +435,12 @@ def _llm_concurrency_checks() -> int:
         # 어댑터를 부르는 것은 출구만 한다.
         CALLS_ADAPTER = [(r"\.complete\s*\(", "어댑터 직접 호출"),
                          (r"^\s+for adapter in ", "어댑터 반복문")]
-        # 공급자에 직접 말을 거는 것은 어댑터가 사는 곳(llm.py)만 한다.
-        # Slack 은 chat.postMessage 라 `/api/chat` 로 잡으면 오검출된다. Ollama·Holmes 의
-        # `/api/chat` 만 잡도록 뒤에 점이나 글자가 오면 제외한다.
+        # 공급자에 직접 말을 거는 것은 어댑터가 사는 곳만 한다
+        # Slack 은 chat.postMessage 라 /api/chat 로 잡으면 오검출된다
         TALKS_PROVIDER = [(r"/api/chat(?![.\w])", "채팅 API"),
                           (r"/v1/messages", "Anthropic 메시지 API"),
                           (r"\banthropic\.", "Anthropic SDK")]
-        # gateway/ 만 보면 그 바깥에 새 길이 나도 못 잡는다. bot/ 도 같이 본다 —
-        # latency_bench.py 가 실제로 공급자를 직접 부르고 있었고, 이 검사는 그걸
-        # 보지 못했다. "출구가 하나"라는 말의 범위를 좁게 잡으면 말만 남는다.
-        # 게이트웨이 아래 전부와 bot/ 의 스크립트를 본다. 예전에는 `gateway/*.py` 만
-        # 훑어서 패키지 안(질의 경로)은 아예 안 봤다. 검사 파일은 뺀다 — 거기에는
-        # 공급자 주소가 문자열로 들어 있고 그것은 나가는 코드가 아니다.
+        # gateway/ 아래 전부와 bot/ 스크립트를 본다 — 검사 파일은 뺀다(주소가 문자열로 들어 있다)
         gw = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         bot = os.path.dirname(gw)
         files = sorted(glob.glob(os.path.join(gw, "**", "*.py"), recursive=True))
@@ -500,10 +453,7 @@ def _llm_concurrency_checks() -> int:
             hits = []
             if base != "egress.py":
                 hits += [w for p, w in CALLS_ADAPTER if re.search(p, src, re.M)]
-            # 어댑터가 사는 곳은 공급자에 직접 말을 걸어도 된다. 지금은 두 곳이다 —
-            # llm.py(Claude·Ollama)와 holmes.py(심층조사). 둘 다 출구가 부른다.
-            # proxy.py 는 상류로 그대로 중계하는 것이 일이라 공급자 주소를 쓴다.
-            # app.py 는 그 경로를 라우팅만 한다.
+            # 어댑터가 사는 곳 둘(llm.py·holmes.py)과 중계(proxy.py)만 공급자 주소를 쓴다
             if base not in ("egress.py", "llm.py", "holmes.py", "proxy.py", "app.py"):
                 hits += [w for p, w in TALKS_PROVIDER if re.search(p, src, re.M)]
             if base in KNOWN_OUTSIDE:
@@ -525,11 +475,7 @@ def _llm_concurrency_checks() -> int:
 
 
 def _registry_checks() -> int:
-    """호스트 명부 — 한 호스트의 사실이 한 곳에서 읽히는지.
-
-    명부에 없는 호스트도 그대로 돌아야 한다. 명부는 식별이 아니라 성질을 담고,
-    식별은 (감시 서버, 호스트명)이 이미 한다.
-    """
+    """호스트 명부 — 한 호스트의 사실이 한 곳에서 읽히는지."""
     import importlib
     import os
     import tempfile
@@ -615,8 +561,7 @@ def _registry_checks() -> int:
         assert registry.realm("zabbix-msp", "무명호스트", {}) == "msp"
         assert registry.source_names() == ["zabbix-internal", "zabbix-msp"]
 
-        # 생존 신호도 서버마다 따로 센다. 한 곳만 세면 그 서버는 멀쩡한데 다른 서버의
-        # 알림 경로가 끊긴 상태를 못 잡는다 — 판정이 절반만 도는 셈이다.
+        # 생존 신호도 서버마다 따로 센다 — 한 곳만 세면 다른 서버의 끊김을 못 잡는다
         from .. import heartbeat as _hb
         b = _hb.Beat(interval_s=999)
         for src in ("zabbix-internal", "zabbix-msp", "zabbix-internal"):
@@ -628,8 +573,7 @@ def _registry_checks() -> int:
         os.environ["ZABBIX_URL"] = "http://global:8080"
         os.environ["ZABBIX_TOKEN"] = "global-tok"
         try:
-            # 명부에 적힌 서버인데 그 토큰이 비어 있으면 조회하지 않는다. 전역 토큰으로
-            # 대신 찌르면 남의 서버 수치를 그 서버 것으로 기록하게 된다.
+            # 명부에 있는데 토큰이 비면 조회하지 않는다 — 전역 토큰이면 남의 수치를 그 서버 것으로 쓴다
             assert _hb.zabbix_recent_events(600, source="zabbix-msp") is None
             v = b.values(now=now)
         finally:

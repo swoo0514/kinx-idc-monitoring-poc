@@ -13,8 +13,7 @@ LINK_PAD_S = 900   # 링크 창을 사건 앞뒤로 얼마나 벌릴지
 API = "https://slack.com/api/chat.postMessage"
 
 _SEV_EMOJI = {"SEV1": "🔴", "SEV2": "🟠", "SEV3": "🟡", "SEV4": "🔵", "NONE": "⚪"}
-# 축이 늘 때 여기를 빠뜨리면 그 축이 통째로 실패해도 카드에 아무 표시가 안 난다.
-# open_problems·metrics 가 실제로 그렇게 빠져 있었다.
+# 축이 늘 때 여기를 빠뜨리면 그 축이 실패해도 카드에 아무 표시가 안 난다
 _SOURCE_LABEL = {"logs": "로그(Loki)", "security": "보안(Wazuh)",
                  "metrics": "지표(Zabbix)", "open_problems": "선행 문제"}
 
@@ -39,12 +38,7 @@ def _source_note(sources: dict) -> str:
 
 
 def _grafana_link(host: str, event_ts: float = 0) -> str:
-    """Slack 카드→Grafana 딥링크. GRAFANA_URL 설정 시만. 그 호스트로 필터(데모 A 재사용).
-
-    창은 **사건 시각 기준 절대 구간**이다. `now-30m` 같은 상대 구간을 쓰면 재기동 후
-    대기 알림을 다시 넣었을 때 엉뚱한 구간이 열린다. 사건 시각을 모르면 그때만 상대
-    구간으로 내려간다.
-    """
+    """Slack 카드→Grafana 딥링크. GRAFANA_URL 설정 시만. 그 호스트로 필터(데모 A 재사용)."""
     base = os.environ.get("GRAFANA_URL", "").rstrip("/")
     dash = os.environ.get("GRAFANA_DASHBOARD", "kinx-overview")
     if not base or not host:
@@ -80,12 +74,7 @@ def _blocks(alert_name: str, sev: str, host: str, verdict: str, body: str,
 
 
 def post_raw(alert_name: str, sev: str, host: str, thread_ts: str = None) -> dict:
-    """트리거 즉시 띄우는 원시 신호 카드 — LLM·수집 호출 없이 "무슨 일이 났다"만 (P1-A).
-
-    병합 디바운스 창이 닫혀야 나오는 분석 카드는 최악 1분 이상 걸린다. 그동안 사람이 아무것도
-    못 보는 것을 막는다. 반환의 'ts'가 스레드 앵커이며, 분석은 그 스레드 답글로 이어 붙는다.
-    thread_ts 를 주면 후속 신호를 같은 스레드 답글로 단다(부모는 인시던트당 하나만 유지).
-    """
+    """트리거 즉시 띄우는 원시 신호 카드 — LLM·수집 호출 없이 "무슨 일이 났다"만 (P1-A)."""
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     channel = os.environ.get("SLACK_CHANNEL_ID", "")
     head = f"{_SEV_EMOJI.get(sev, '⚪')} [{sev}] {alert_name}"
@@ -115,12 +104,7 @@ def post_raw(alert_name: str, sev: str, host: str, thread_ts: str = None) -> dic
 
 
 def post_digest(alert_name: str, sev: str, host: str, note: str = "") -> dict:
-    """덜 급한 알림(SEV3)을 별도 채널로 경량 게시. LLM·수집 호출 없음.
-
-    채널이 설정돼 있지 않으면 **게시하지 않는다.** 메인 채널로 흘려보내면 노이즈를 걷어내려던
-    목적이 정확히 뒤집히기 때문이다(진단 ① Warning 99.5%). 게시를 건너뛰어도 Keep 에는 남으므로
-    기록이 사라지지는 않는다.
-    """
+    """덜 급한 알림(SEV3)을 별도 채널로 경량 게시. LLM·수집 호출 없음."""
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     channel = os.environ.get("SLACK_CHANNEL_ID_DIGEST", "")
     if not token or not channel:

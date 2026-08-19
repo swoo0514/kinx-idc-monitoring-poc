@@ -1,9 +1,4 @@
-"""LLM 어댑터 — Claude → Ollama → 열화 모드(전멸 시 선판정만). 상세는 GATEWAY_GUIDE.md §11.
-
-환경변수: ANTHROPIC_API_KEY / LLM_CLAUDE_MODEL(기본 claude-opus-4-8) / LLM_TIMEOUT_S(20) /
-          OLLAMA_URL / OLLAMA_MODEL(기본 qwen3:8b).
-드라이런(외부 전송 없이 전문 확인): python -m gateway.llm
-"""
+"""LLM 어댑터 — Claude → Ollama → 열화 모드(전멸 시 선판정만). 상세는 GATEWAY_GUIDE.md §11."""
 
 import json
 import logging
@@ -82,13 +77,8 @@ DEFAULT_TIMEOUT_S = 20  # 실측 최대 14.8s(llm_latency_20260726.md) + 여유
 MAX_TOKENS = 2048
 
 
-# 용도마다 모델 등급을 나눈다. **나누는 자리는 서로 다른 호출 사이뿐이다.**
-#
-# 한 대화 안에서 모델을 바꾸면 캐시가 모델별로 잡히므로 도구·시스템·대화 캐시가 통째로
-# 무효가 된다. 그래서 질의 반복문은 처음부터 끝까지 한 모델로 돈다.
-#
-# 판단은 싼 모델에 맡기지 않는다. 2026-08-13 실측으로 haiku 는 복제 지연 회신에
-# `RESET SLAVE` 를 권했고 opus 는 금지를 명시했다. 트리아지와 조사는 같은 등급을 쓴다.
+# 용도마다 모델 등급을 나눈다 — 나누는 자리는 서로 다른 호출 사이뿐이다(캐시가 모델별)
+# 판단은 싼 모델에 맡기지 않는다 — 실측 근거는 GATEWAY_GUIDE §29
 _MODEL_ENV = {
     "investigate": "LLM_MODEL_INVESTIGATE",   # 질의 반복문·트리아지
     "triage": "LLM_MODEL_INVESTIGATE",
@@ -184,8 +174,7 @@ TRUNCATION_RULE = (
     " 로그 축을 근거로 삼을 때는 '실린 범위에서는' 이라고 밝히고, 확인 명령에 원본 로그를"
     " 더 넓게 보는 명령을 넣어라.\n\n")
 
-# 위탁 계약이 임의 조치를 금지한 고객사에만 붙는다. 실행은 라우터가 막지만, 담당자가
-# 읽는 문장은 그것과 무관하게 만들어지고 있었다.
+# 위탁 계약이 임의 조치를 금지한 고객사에만 붙는다 — 실행 차단과 별개로 문장도 막는다
 NOTIFY_ONLY_RULE = (
     "이 사건은 위탁 계약상 **우리가 시스템을 변경할 수 없는 대상**이다"
     "(incident.scope = notify_only). 재기동·설정 변경·프로세스 종료처럼 상태를 바꾸는"
@@ -203,12 +192,8 @@ PRIOR_INSTRUCTION = (
     "회신 마지막 줄에 반드시 이 형식 한 줄을 붙인다:\n"
     "변화: 동일 | 달라짐 — 무엇이 같고 무엇이 달라졌는지 한 문장\n\n")
 
-# 회신에 섞이면 안 되는 복구 명령. 되돌릴 수 없거나 상태를 지우는 것만 넣는다.
-# 재기동처럼 흔하고 가역인 조치는 넣지 않는다 — 다 위험하다고 하면 표시가 무의미해진다.
-#
-# 2026-08-13: 모델을 haiku 로 내린 뒤 복제 지연 회신에 `RESET SLAVE; START SLAVE;` 가
-# 권장 조치로 들어왔다. 같은 시나리오에서 opus 는 "복제 리셋 금지"를 명시했었다. 즉 이
-# 안전 제약이 모델 품질에 얹혀 있었다. 판정과 안전은 코드가 진다.
+# 회신에 섞이면 안 되는 복구 명령 — 되돌릴 수 없거나 상태를 지우는 것만 넣는다
+# 판정과 안전은 코드가 진다. 모델 등급을 내려도 이 목록은 그대로다
 _DESTRUCTIVE = (
     (re.compile(r"\bRESET\s+(SLAVE|REPLICA|MASTER)\b", re.IGNORECASE),
      "복제 위치·설정이 지워진다"),
@@ -281,11 +266,7 @@ MONTHLY_SYSTEM = """\
 
 
 def build_monthly_context(stats: dict, incidents: list, masker: Masker) -> dict:
-    """월간 분석 화이트리스트. 여기 없는 필드는 구조적으로 전송되지 않는다(전송 명세표 원칙).
-
-    개별 로그 라인·보안 경보 원문은 **의도적으로 제외**한다. 월 단위 판단에 필요 없고,
-    고객 문서로 나가는 경로라 반출 표면을 최소로 유지한다.
-    """
+    """월간 분석 화이트리스트. 여기 없는 필드는 구조적으로 전송되지 않는다(전송 명세표 원칙)."""
     # 승인 대기 자리표시자("검토 대기")는 넣지 않는다 — 모델이 그것을 사실로 읽는다.
     skip = ("report.summary", "report.insight")
     out = {k[len("report."):]: v for k, v in stats.items()
@@ -313,9 +294,7 @@ def monthly_reply(stats: dict, incidents: list) -> dict:
                       user, kind="monthly")
     if not res["degraded"]:
         return {**res, "text": masker.unmask(res["text"])}
-    # 열화 — 리포트는 실시간이 아니므로 빈 문장 대신 "생성 실패"를 그대로 남긴다.
-    # 무엇 때문에 못 만들었는지까지 남긴다. 리포트는 고객에게 나가므로 "실패"만
-    # 적혀 있으면 다시 돌려야 할지 기다려야 할지 판단할 수 없다.
+    # 열화 — 리포트는 실시간이 아니므로 실패 사유까지 그대로 남긴다
     return {**res, "text": f"(월간 분석 생성 실패 — {_reason_text(res['reason'])}. "
                            "집계 수치는 유효하다.)"}
 
@@ -345,9 +324,7 @@ def triage_reply(context: dict, sev: str) -> dict:
     masked = build_llm_context(context, sev, masker)
     user = build_user_prompt(masked)
 
-    # **용도를 어댑터에도 넘긴다.** `kind` 는 계수용으로만 넘기고 있어서, 매핑에
-    # `"triage": "LLM_MODEL_INVESTIGATE"` 가 있어도 모델은 기본값으로 떨어졌다
-    # (2026-08-19 감사 F-5). 질의 경로는 제대로 넘기고 있었다.
+    # 용도를 어댑터에도 넘긴다 — 계수용으로만 넘기면 매핑이 있어도 기본값으로 떨어진다
     res = egress.call(_adapters("triage"), _prompt("triage", TRIAGE_SYSTEM), user,
                       exempt=(sev == "SEV1"), kind="triage")
     if not res["degraded"]:
@@ -407,17 +384,7 @@ def _prompt(name: str, fallback: str) -> str:
 
 
 def cached_system(system: str):
-    """시스템 문구를 캐시 표시가 붙은 블록으로. 끄면 문자열 그대로.
-
-    렌더 순서가 도구 → 시스템 → 대화라서, 시스템 마지막 블록에 표시를 하나 달면 도구
-    정의와 시스템 문구가 함께 캐시된다. 읽기는 정가의 약 0.1배, 쓰기는 1.25배이므로
-    두 번째 라운드부터 이득이다.
-
-    **최소 길이가 모델마다 다르다.** 접두사가 그 아래면 오류 없이 조용히 안 걸리고
-    쓰기 값만 더 낸다. haiku 4.5 는 4,096 토큰이 최소이고 우리 접두사는 **8,803 토큰**
-    이다(2026-08-19 랩 재실측 — 도구가 늘어 7,119 에서 올랐다). 프롬프트를 줄일 때 이
-    여유를 확인할 것. 수치는 가이드 §29 와 같아야 한다.
-    """
+    """시스템 문구를 캐시 표시가 붙은 블록으로. 끄면 문자열 그대로."""
     if os.environ.get("LLM_CACHE", "1").strip().lower() in ("0", "false", "no"):
         return system
     return [{"type": "text", "text": system,
@@ -426,19 +393,11 @@ def cached_system(system: str):
 
 def claude_tools(system: str, messages: list, tools: list,
                  model: str = "", timeout_s: float = 0) -> dict:
-    """도구를 쓸 수 있는 호출. 반환은 응답 본문 그대로(content 블록·stop_reason).
-
-    Ollama 로 폴백하지 않는다. 도구 호출에서 약하다는 것이 HolmesGPT 조사에서 이미
-    나왔고, 여기서 폴백하면 조사가 조용히 얕아진다. 실패는 실패로 알린다.
-    """
+    """도구를 쓸 수 있는 호출. 반환은 응답 본문 그대로(content 블록·stop_reason)."""
     import anthropic
     ad = ClaudeAdapter(model=model, kind="investigate")
-    # **질의는 사람이 화면 앞에서 기다린다.** 알림 분석용 여유 시간(LLM_TIMEOUT_S 는 랩에서
-    # 100초)을 그대로 쓰면 한 번의 느린 응답이 질의 전체 마감(ASK_DEADLINE_S 기본 60초)을
-    # 넘겨 버린다. 2026-08-18 랩 실측으로 한 호출이 96초 걸렸고, 사람은 조회를 한 번도
-    # 못 한 채 "상한에 닿아 멈췄다" 를 받았다.
-    # 예열처럼 사람이 안 기다리는 호출은 더 오래 기다려도 된다. 도구 정의가 바뀐 뒤
-    # 첫 호출은 캐시를 새로 쓰느라 느리다(2026-08-19 실측: 30초 넘김, 그다음은 3.8초).
+    # 질의는 사람이 기다린다 — 알림용 여유 시간을 쓰면 느린 응답 한 번이 마감을 넘긴다
+    # 예열처럼 사람이 안 기다리는 호출은 더 오래 기다려도 된다
     timeout = float(timeout_s) or min(ad.timeout,
                                       float(os.environ.get("ASK_LLM_TIMEOUT_S", "30")))
     client = anthropic.Anthropic(timeout=timeout, max_retries=0)

@@ -1,17 +1,4 @@
-"""대화 이력 — 사용자별 대화방. 설계는 bot/GATEWAY_GUIDE.md §27-1.
-
-**저장소는 Redis 다.** 담는 것이 키로 빠르게 읽고 만료가 필요한 상태이고, 게이트웨이를
-프로세스 여럿으로 늘리는 순간 공유되어야 하기 때문이다. 판정 이력과 증거는 여기 두지
-않는다 — 그건 재현과 감사를 위한 것이라 영속 저장소가 맞다.
-
-**Redis 가 죽어도 질의는 돈다.** 대화 이력과 목록만 포기한다. 대화는 다시 물으면 되지만
-관측 조회는 그렇지 않다. 알림 경로에서 저장소가 죽어도 알림을 흘려보내는 것과 같은 판단이다.
-
-키 구조
-    ask:convo:{id}          대화 본문(리스트). TTL 은 마지막 사용에서 30일
-    ask:convo-meta:{id}     제목·주인·시각(해시)
-    ask:convo-list:{user}   그 사람의 대화 목록(정렬 집합, 점수=마지막 시각)
-"""
+"""대화 이력 — 사용자별 대화방. 설계는 bot/GATEWAY_GUIDE.md §27-1."""
 
 import json
 import logging
@@ -105,11 +92,7 @@ def _owner(cid: str) -> str:
 
 
 def append(cid: str, user: str, role: str, text: str, images: list = None) -> bool:
-    """한 줄 더한다. **주인이 아니면 아무것도 하지 않는다.**
-
-    답에 붙었던 그림도 함께 남긴다. 본문만 저장하면 새로고침한 순간 화면에서 그림이
-    사라진다(2026-08-18 실측). 그림은 바이트가 아니라 주소라서 부피는 작다.
-    """
+    """한 줄 더한다. **주인이 아니면 아무것도 하지 않는다.**"""
     if _backend is None or not cid or _owner(cid) != user:
         return False
     body = {"role": role, "content": text, "at": time.time()}

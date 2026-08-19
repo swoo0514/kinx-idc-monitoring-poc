@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""MSP 월간 리포트 발송 — Grafana 대시보드를 PDF 로 만들어 메일로 보낸다.
-
-Grafana OSS 에는 예약 리포트 기능이 없다(Enterprise/Cloud 전용). 있는 것은 **렌더러**뿐이고,
-그것은 OSS 에서도 동작한다("Image rendering works with Grafana OSS, Grafana Enterprise, and
-Grafana Cloud"). 그래서 렌더러만 붙이고 예약·조립·발송은 이 스크립트가 한다.
-
-  Grafana /render/d/<uid>  ->  PNG  ->  PDF(페이지 분할)  ->  메일(첨부 + 대시보드 링크)
-
-**의존성을 늘리지 않는다.** PNG 의 IDAT 는 zlib deflate 이고 PDF 의 FlateDecode +
-Predictor 15 가 PNG 필터를 그대로 이해하므로, 이미지 라이브러리 없이 PDF 를 만들 수 있다.
-페이지를 나눌 때만 스캔라인을 풀었다가 다시 감는다(zlib 은 표준 라이브러리).
-
-**승인 없이 나가지 않는다.** 서사 항목이 "검토 대기" 상태면 발송을 거부한다. 값 자체에도
-게이트가 걸려 있어(승인 전에는 서사가 아이템에 실리지 않음) 이중 안전이다.
-
-사용법·근거는 ansible/DEPLOY_GUIDE.md "MSP 월간 리포트".
-"""
+"""MSP 월간 리포트 발송 — Grafana 대시보드를 PDF 로 만들어 메일로 보낸다."""
 
 import argparse
 import json
@@ -61,11 +45,7 @@ def png_size(data: bytes):
 
 
 def png_decode(data: bytes):
-    """반환 (width, height, RGB 픽셀 바이트). 8비트·비인터레이스만 다룬다.
-
-    Grafana 렌더러 산출물이 그 형식이다. 아니면 즉시 실패시킨다 — 조용히 깨진 PDF 를
-    만드는 것보다 낫다.
-    """
+    """반환 (width, height, RGB 픽셀 바이트). 8비트·비인터레이스만 다룬다."""
     idat, w, h, bd, ct = b"", 0, 0, 0, 0
     for typ, body in png_chunks(data):
         if typ == b"IHDR":
@@ -139,13 +119,7 @@ def _pdf(objs: list) -> bytes:
 
 
 def png_to_pdf_direct(png: bytes) -> bytes:
-    """디코딩 없이 PNG 압축 스트림을 그대로 PDF 이미지로 넣는다 (한 페이지).
-
-    PDF 의 FlateDecode + Predictor 15 가 **PNG 의 행 필터를 그대로 해석**하므로,
-    IDAT 를 손대지 않고 옮겨도 된다. 순수 파이썬으로 1,400×2,800 을 언필터링하면
-    1,100만 바이트를 파이썬 루프로 돌아 분 단위가 걸린다 — 그 일을 아예 안 한다.
-    페이지 분할이 필요할 때만(--split) 디코딩 경로를 쓴다.
-    """
+    """디코딩 없이 PNG 압축 스트림을 그대로 PDF 이미지로 넣는다 (한 페이지)."""
     idat, w, h, ct = b"", 0, 0, 0
     for typ, body in png_chunks(png):
         if typ == b"IHDR":
@@ -441,8 +415,7 @@ def main():
     else:
         print("[!] ZABBIX_URL/ZABBIX_TOKEN 미설정 — 승인 상태를 확인하지 못한다")
 
-    # 주소가 둘이다 — 렌더는 내부 주소(자기 공인 IP 로 되돌아 접속하면 멈춘다),
-    # 링크는 사람이 클릭할 주소.
+    # 주소가 둘이다 — 렌더는 내부 주소, 링크는 사람이 클릭할 주소
     render_base = (os.environ.get("GRAFANA_RENDER_URL")
                    or os.environ.get("GRAFANA_INTERNAL_URL")
                    or "http://127.0.0.1:3000")
@@ -458,8 +431,7 @@ def main():
     else:
         pdf = png_to_pdf_direct(png)
     pages = pdf.count(b"/Type /Page ")
-    # 기본 출력은 private/report/ — 고객 데이터가 작업 디렉토리에 떨어지면 실수로 커밋된다.
-    # bot/tools/report_deliver.py → bot/tools → bot → 리포 뿌리.
+    # 기본 출력은 private/report/ — 작업 디렉토리에 떨어지면 실수로 커밋된다
     _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     out_dir = os.environ.get("REPORT_OUT_DIR") or os.path.join(_root, "private", "report")
     if a.out:

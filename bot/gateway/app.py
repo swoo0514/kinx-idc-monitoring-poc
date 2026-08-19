@@ -40,8 +40,7 @@ app = FastAPI(title="kinx-poc alert gateway", version="0.1.0")
 _grafana_state: dict = {}   # 기동 시 1회 확인. /healthz 가 참·거짓만 내보낸다.
 _zabbix_state: dict = {}    # 감시 서버별 조회 가능 여부. 토큰 만료를 미리 본다.
 
-# 규칙 로드는 import 시점이라 로깅 설정 전에 끝난다. 어느 규칙으로 도는지가 반드시
-# 드러나도록 기동 시 한 번 더 남긴다.
+# 규칙 로드는 import 시점이라 로깅 설정 전이다 — 기동 시 한 번 더 남긴다
 log.info("열린 문제 연계 규칙 %d건 / 측정: %s",
          len(incident.OPEN_LINK_RULES), incident.OPEN_LINK_MEASURED)
 if not os.environ.get("OPEN_LINK_RULES_FILE"):
@@ -57,17 +56,11 @@ async def _raw_ping(alert, thread_ts):
 
 
 async def _close_incident(inc):
-    """분석까지 끝난 뒤에 대기 목록에서 뺀다.
-
-    분석 전에 빼면 분석 도중 죽었을 때 알림이 사라진다. 뒤에 빼면 그 경우 재기동 후
-    한 번 더 분석해 카드가 겹칠 수 있다. 겹치는 것은 눈에 보이고 사라지는 것은 안 보여서
-    뒤에 빼는 쪽을 골랐다.
-    """
+    """분석까지 끝난 뒤에 대기 목록에서 뺀다."""
     _beat.mark("incidents")
     res = await triage.run_incident(inc)   # 예외를 위로 던지지 않는다
     _beat.mark("skipped" if res and res.get("gated_out") else "analyzed")
-    # 여기까지 와야 목록에서 뺀다. finally 에 두면 종료 중 취소됐을 때도 지워져서
-    # 처리하지 않은 알림이 사라진다(종료 마감 시간 초과가 그 경우다).
+    # 여기까지 와야 목록에서 뺀다 — finally 에 두면 종료 중 취소에도 지워진다
     pending.drop([{"source": a.source, "event_id": a.event_id} for a in inc.alerts])
     return res
 
@@ -80,9 +73,7 @@ _pruner = store.Pruner()
 
 @app.on_event("startup")
 async def _start_heartbeat():
-    # 명부 로드 결과를 여기서 남긴다. 명부는 모듈을 들여올 때 읽히는데 그때는 로깅
-    # 설정 전이라 성공도 실패도 기록이 사라진다. 못 읽으면 환경변수 설정으로 조용히
-    # 도는 것이 설계이므로, 기록이 없으면 잘못 도는 것을 아무도 모른다.
+    # 명부 로드 결과를 여기서 남긴다 — 모듈 적재 시점은 로깅 설정 전이라 기록이 사라진다
     st = registry.status()
     if not st["path"]:
         log.info("호스트 명부 미설정 — 환경변수 설정으로 동작한다(HOST_REGISTRY_FILE)")
@@ -104,8 +95,7 @@ async def _start_heartbeat():
     elif not _grafana_state["ok"]:
         log.error("Grafana 에 닿지 못했다(%s) — 판정 주석이 안 올라간다",
                   _grafana_state["error"])
-    # 조회 토큰도 같은 이유로 기동 때 본다. 만료는 사건이 나기 전엔 안 보이고,
-    # JSON-RPC 는 오류도 HTTP 200 이라 접근 로그에도 성공만 찍힌다.
+    # 조회 토큰도 기동 때 본다 — JSON-RPC 는 오류도 200 이라 접근 로그에 안 남는다
     global _zabbix_state
     for name in (registry.source_names() or [""]):
         st = await collector.zabbix_probe(name)
@@ -118,26 +108,20 @@ async def _start_heartbeat():
         log.info("대화 이력 저장소 연결됨 (Redis)")
     else:
         log.warning("대화 이력 저장소 없음 — 질의는 되지만 대화가 안 남는다 (REDIS_URL)")
-    # 질의 추적. 외부로 값이 한 벌 더 나가는 지점이라 기본은 꺼져 있고, 운영자가 파일에
-    # 적었을 때만 켜진다. 켜졌는지·왜 안 켜졌는지를 기록에 남긴다(§33).
+    # 질의 추적 — 외부로 값이 한 벌 더 나가므로 기본은 꺼져 있다 (§33)
     _tr = tracing.setup()
     log.info("질의 추적 %s%s", "켜짐 (프로젝트 %s)" % _tr["project"] if _tr["on"]
              else "꺼짐", "" if _tr["on"] else " — %s" % _tr["why"])
     _beat.start()
-    # 무거운 모듈을 여기서 불러 둔다. 첫 질의가 임포트 값을 뒤집어쓰면 사람은 화면에서
-    # 502 를 본다(2026-08-18 실측: langgraph 첫 임포트 95초). 기동은 사람이 기다리는
-    # 시간이 아니다.
+    # 무거운 모듈을 기동 때 불러 둔다 — 첫 질의가 뒤집어쓰면 화면에 502 가 뜬다
     import time as _t
     _t0 = _t.monotonic()
     if graph.warmup():
         log.info("질의 그래프 준비 완료 (%.1f초, %s)", _t.monotonic() - _t0,
                  graph.versions())
-    # 이름 표는 조회가 몇 초 걸리므로 별도 스레드에서 만든다. 만들어지기 전에도
-    # 캐시가 있으면 그걸로 돌고, 없으면 오늘까지의 동작(맥락 기반 등록)으로 돈다.
+    # 이름 표는 조회가 몇 초 걸리므로 별도 스레드에서 만든다
     _names.start()
-    # 첫 질의가 느린 것을 기동 때 미리 치른다(2026-08-18 실측: 재기동 직후 첫 호출
-    # 96초, 다음 호출 6초). 별도 스레드라 기동을 붙잡지 않는다. 켜고 끄는 값은
-    # ASK_PREWARM 이며, 유료 호출이 한 번 나가므로 끄고 싶을 수 있다.
+    # 첫 질의가 느린 것을 기동 때 미리 치른다 — 유료 호출이 한 번 나간다(ASK_PREWARM)
     if os.environ.get("ASK_PREWARM", "1") not in ("0", "false", "no"):
         threading.Thread(target=lambda: log.info("%s", ask.prewarm()),
                          name="ask-prewarm", daemon=True).start()
@@ -145,11 +129,7 @@ async def _start_heartbeat():
 
 @app.on_event("shutdown")
 async def _flush_open_incidents():
-    """정상 종료 — 대기 중인 사건을 마감하고 나간다 (GATEWAY_GUIDE §8-6).
-
-    강제 종료는 대기 파일이 받아 준다(§8-4). 이 경로는 그 앞단이다 — 재기동 때마다
-    창을 처음부터 다시 세고 재시도 횟수가 올라가는 것을 막는다.
-    """
+    """정상 종료 — 대기 중인 사건을 마감하고 나간다 (GATEWAY_GUIDE §8-6)."""
     _beat.stop()
     _names.stop()
     _pruner.stop()
@@ -181,14 +161,7 @@ _seen_lock = threading.Lock()
 
 
 async def _off_loop(fn, *a, **kw):
-    """이벤트 루프 밖에서 돌린다. 느린 저장소가 서버 전체를 세우지 않게.
-
-    `/ask` 는 비동기인데 그 안에서 Redis 와 SQLite 를 그대로 불렀다. Redis 클라이언트는
-    동기이고 시한이 2초라, 저장소가 늦으면 호출마다 루프가 서고 한 요청에 세 번이므로
-    6초다. 그동안 웹훅 수신도 다른 질의도 인시던트 타이머 마감도 함께 멈춘다
-    (2026-08-19 감사 E-5). SQLite 쪽은 더 나쁘다 — 알림이 몰려 워커가 전역 락을 잡고
-    있으면 루프가 그 락을 기다리며 통째로 정지한다.
-    """
+    """이벤트 루프 밖에서 돌린다. 느린 저장소가 서버 전체를 세우지 않게."""
     return await asyncio.to_thread(functools.partial(fn, *a, **kw))
 
 
@@ -197,25 +170,14 @@ def _as_bytes(v) -> bytes:
 
 
 def _token_ok(token: str) -> bool:
-    """웹훅·LLM 중계용 토큰인가.
-
-    **질의용 토큰은 여기서 거부한다.** 화면이 지나는 Grafana 데이터소스 프록시는 선언한
-    경로의 하위 경로를 전부 통과시킨다. 2026-08-19 랩 실측으로 Viewer 권한 계정이
-    `/webhook/zabbix` 를 부르면 핸들러까지 닿았고 `/v1/messages` 는 회사 키로 실제 답을
-    받았다. 토큰이 하나뿐이라 용도를 가릴 수 없었다.
-    """
+    """웹훅·LLM 중계용 토큰인가."""
     expected = os.environ.get("GATEWAY_TOKEN", "")
-    # **바이트로 견준다.** 문자열끼리 비교하면 아스키가 아닌 값이 들어왔을 때
-    # `compare_digest` 가 예외를 던져 401 대신 500 이 나간다.
+    # 바이트로 견준다 — 문자열끼리 비교하면 비아스키에서 401 대신 500 이 나간다
     return bool(expected) and hmac.compare_digest(_as_bytes(token), _as_bytes(expected))
 
 
 def _ask_token_ok(token: str) -> bool:
-    """질의용 토큰인가. 게이트웨이 토큰도 받는다.
-
-    `ASK_TOKEN` 을 안 적은 배포는 예전처럼 하나로 돈다. 설정을 아직 안 나눈 곳이
-    갑자기 멈추면 안 되기 때문이다. 나눠 적은 곳에서는 질의용 토큰이 웹훅을 못 연다.
-    """
+    """질의용 토큰인가. 게이트웨이 토큰도 받는다."""
     ask = os.environ.get("ASK_TOKEN", "")
     if ask and hmac.compare_digest(_as_bytes(token), _as_bytes(ask)):
         return True
@@ -223,18 +185,8 @@ def _ask_token_ok(token: str) -> bool:
 
 
 def _duplicate(key: tuple) -> bool:
-    """이미 처리한 알림인가. 확인과 등록이 한 동작이어야 한다.
-
-    웹훅이 `async def` 가 아니라 동기 함수라 FastAPI 가 워커 스레드에서 돌린다. 즉 이
-    함수는 처음부터 여러 스레드에서 동시에 불린다. 확인과 등록 사이에 틈이 있으면
-    같은 알림이 둘 다 통과해 인시던트에 두 번 담기고, 그러면 병합으로 보여 발동 조건
-    까지 바뀐다(병합은 상한을 안 거친다). 틈을 벌려 재현해 보니 8개가 전부 통과했다.
-
-    낡은 항목을 지우는 순회도 같은 잠금 안에 둔다. 순회 중에 다른 스레드가 넣으면
-    사전 크기가 바뀌어 예외가 나고, 그 알림은 500 으로 거절된다.
-    """
-    # 저장소가 열려 있으면 그쪽이 정본이다 — 재기동해도 창이 남는다 (§24-3).
-    # 못 쓰면 메모리로 떨어진다. 그때도 알림은 흘러야 한다.
+    """이미 처리한 알림인가. 확인과 등록이 한 동작이어야 한다."""
+    # 저장소가 열려 있으면 그쪽이 정본이다 (§24-3) — 못 쓰면 메모리로 떨어진다
     if store.status()["open"]:
         return not store.seen_once("|".join(str(x) for x in key),
                                    ttl_s=IDEMPOTENCY_TTL_S)
@@ -272,9 +224,7 @@ class WazuhEvent(BaseModel):
 
 @app.get("/healthz")
 def healthz():
-    # 값은 참·거짓만 싣는다. 인증이 없는 경로라 경로·주소·오류 문구를 내보내지 않는다.
-    # 이름 표는 개수와 오류 여부까지 싣는다. 표가 얼어붙으면 질의 경로가 이름을 원문으로
-    # 내보내는데, 그 상태를 밖에서 볼 방법이 없었다(2026-08-19 감사 E-9).
+    # 인증 없는 경로라 경로·주소·오류 문구는 안 싣는다. 이름 표만 개수와 오류 여부를 낸다
     _names = nametable.status()
     return {"ok": True, "version": app.version,
             "names": int(_names.get("terms") or 0),
@@ -300,11 +250,7 @@ class AskRequest(BaseModel):
 async def ask_endpoint(req: AskRequest, request: Request,
                        x_gateway_token: str = Header(default=""),
                        x_grafana_user: str = Header(default="")):
-    """사람이 자연어로 묻는 창구 (§27).
-
-    신원은 Grafana 가 프록시하면서 붙이는 헤더로 들어온다. **그 헤더는 Grafana 를 거친
-    요청에서만 믿을 수 있으므로**, 이 포트를 Grafana 만 접근하도록 막는 것이 전제다.
-    """
+    """사람이 자연어로 묻는 창구 (§27)."""
     if not _ask_token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="unauthorized")
     user = ask.who(x_grafana_user)
@@ -315,8 +261,7 @@ async def ask_endpoint(req: AskRequest, request: Request,
     cid = req.convo_id or await _off_loop(convo.create, user, req.question)
     stored = await _off_loop(convo.load, cid, user)
     hist = [{"role": m["role"], "content": m["content"]} for m in stored] or req.history
-    # 화면이 무엇을 넘겼는지 남긴다. 구간이 안 오면 도구가 최근 창으로 떨어지는데,
-    # 회신만 보면 그것이 화면 탓인지 게이트웨이 탓인지 가릴 수 없다(2026-08-18).
+    # 화면이 무엇을 넘겼는지 남긴다 — 없으면 화면 탓인지 게이트웨이 탓인지 못 가린다
     log.info("ask panel keys=%s from=%r to=%r",
              sorted((req.panel or {}).keys()),
              (req.panel or {}).get("from"), (req.panel or {}).get("to"))
@@ -379,11 +324,7 @@ def convo_delete(cid: str, x_gateway_token: str = Header(default=""),
 @app.post("/ask/cancel")
 def ask_cancel(req: AskRequest, x_gateway_token: str = Header(default=""),
                x_grafana_user: str = Header(default="")):
-    """사람이 멈춤 단추를 눌렀다. 다음 라운드에서 멈춘다.
-
-    **누른 사람의 세션만 멈춘다.** 화면이 보내는 세션 이름은 새 대화의 첫 턴에 모두
-    같으므로, 신원을 함께 넣지 않으면 한 사람의 멈춤이 남의 질문을 끊는다.
-    """
+    """사람이 멈춤 단추를 눌렀다. 다음 라운드에서 멈춘다."""
     if not _ask_token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="unauthorized")
     ask.cancel(ask.session_key(req.session or "-", ask.who(x_grafana_user)))
@@ -400,8 +341,7 @@ async def llm_messages(req: Request, x_api_key: str = Header(default=""),
         body = await req.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid json")
-    # **호출자가 신고한 값으로 막을지 정하지 않는다.** 판단은 proxy 안에서 운영자 설정으로
-    # 한다. 예전에는 metadata.user_id 가 "msp" 로 시작하는지를 봤다.
+    # 호출자가 신고한 값으로 막을지 정하지 않는다 — 판단은 proxy 안에서 운영자 설정으로 한다
     status, resp = await llm_proxy.handle(body)
     return JSONResponse(status_code=status, content=resp)
 
@@ -472,8 +412,7 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
     """경로별 후속 처리를 백그라운드로 넘긴다 — 웹훅은 즉시 200(발송측 타임아웃 회피)."""
     route = decision["route"]
     _beat.mark_alert(source)
-    # rule_id 를 빠뜨리면 분류 선언 파일의 wazuh 절이 통째로 죽는다. 파일은 정상
-    # 로드되고 로그도 찍히므로, 설정한 사람은 적용됐다고 믿는다.
+    # rule_id 를 빠뜨리면 분류 선언 파일의 wazuh 절이 통째로 죽는다
     if cls is None:
         cls = incident.classify(alert_name, tags=tags, groups=groups, rule_id=rule_id)
     log.info("event=%s source=%s host=%s sev=%s class=%s route=%s playbook=%s",
@@ -486,12 +425,10 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
             # 계약 제약은 라우팅에서 쓰고 끝나면 안 된다 — 분석 문장에도 필요하다.
             scope=tag_router.tag_value(tags or [], tag_router.SCOPE_TAG) or "",
             automate=tag_router.tag_value(tags or [], tag_router.AUTOMATE_TAG) or "")
-        # 이 경로만 기다린다. 기다리는 동안 죽으면 알림이 사라지므로 파일에 먼저 적고,
-        # 적지 못하면 200 을 주지 않는다 — Zabbix 가 재시도하게 둔다.
+        # 파일에 먼저 적고, 적지 못하면 200 을 주지 않는다 — Zabbix 가 재시도하게 둔다
         rec = {"source": source, "event_id": event_id, "trigger_id": trigger_id,
                "host": host, "alert_name": alert_name, "sev": sev, "class": cls,
-               # 사건이 난 시각. 이게 없으면 재기동 후 다시 넣을 때 지금 시각으로
-               # 잡혀 로그를 엉뚱한 구간에서 찾는다.
+               # 사건이 난 시각 — 없으면 재기동 후 다시 넣을 때 지금 시각으로 잡힌다
                "clock": _as_clock(clock)}
         if not pending.append(rec):
             raise HTTPException(status_code=503, detail="pending write failed")

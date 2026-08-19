@@ -18,16 +18,7 @@ def _env_int(name: str, default: int) -> int:
 WINDOW_DAYS = _env_int("PREJUDGE_WINDOW_DAYS", 90)
 WINDOW_S = WINDOW_DAYS * 24 * 3600
 
-# 만성의 기준은 횟수가 아니라 **재발 간격**으로 둔다. 횟수로 두면 "왜 5회인가"에 답할 수
-# 없고, 관측 창을 90일에서 180일로 늘리면 같은 5회가 두 배로 느슨해지는데 아무도 모른다.
-#
-# 30일로 잡은 근거는 우리가 만든 월간 리포트다. 한 달에 한 번 이상 반복되면 리포트가
-# 나올 때마다 그 항목이 실리고, 매달 실리는데 안 고쳐지고 있으면 그것이 정비 대상이다.
-# 즉 "월간 리포트에 매번 등장하는 것"이 만성이다. 리포트 주기가 바뀌면 이 값도 바뀐다.
-#
-# 참고로 밖에는 정해진 수치가 없다. ITIL 문헌에 "같은 증상이 30일에 3건 이상이면 별도
-# 관리 대상"이라는 관행이 언급되나 같은 자료가 표준이 아니라 조직별 조정값이라고 밝힌다.
-# 우연히 우리 값과 같은 간격이다.
+# 만성의 기준은 횟수가 아니라 재발 간격 — 근거는 GATEWAY_GUIDE §7
 CHRONIC_INTERVAL_DAYS = _env_int("PREJUDGE_CHRONIC_INTERVAL_DAYS", 30)
 
 
@@ -49,23 +40,16 @@ CHRONIC_MIN_COUNT = (_env_int("PREJUDGE_CHRONIC_MIN", 0)
 def judge(past_clocks: list, now: float = None, window_s: int = None,
           chronic_min: int = None, total_count: int = None,
           listed_truncated: bool = None) -> dict:
-    """past_clocks: 현재 이벤트 제외한 동일 트리거 과거 발생 unix time 목록.
-
-    total_count 는 창 안 전체 발생 수다. 목록은 조회 상한이 있어 잘리므로 개수를 따로
-    받는다 — 안 그러면 상한을 넘는 것들이 전부 같은 수로 보여 무엇이 더 자주 나는지
-    가릴 수 없다. 목록은 마지막 발생 시각에만 쓴다.
-    """
+    """past_clocks: 현재 이벤트 제외한 동일 트리거 과거 발생 unix time 목록."""
     now = now or time.time()
     window_s = window_s or WINDOW_S
     chronic_min = chronic_min or CHRONIC_MIN_COUNT
     window_days = round(window_s / 86400)
     in_window = sorted(c for c in past_clocks if now - c <= window_s)
     listed = len(in_window)
-    # 개수를 못 받았으면 목록 길이로 떨어진다. 그 경우 상한에 걸렸을 수 있으므로
-    # 아래에서 그 사실을 함께 남긴다 — 잘린 값을 실제 값처럼 쓰면 안 된다.
+    # 개수를 못 받았으면 목록 길이로 떨어진다 — 상한에 걸렸을 수 있으므로 함께 남긴다
     count = listed if total_count is None else max(total_count, listed)
-    # 절단 여부는 조회한 쪽이 알려 주는 것이 정확하다. 여기서 개수로 추측하면,
-    # 조회 측이 현재 이벤트를 목록에서 빼는 순간 한 칸씩 어긋나 영원히 안 걸린다.
+    # 절단 여부는 조회한 쪽이 알려 주는 것이 정확하다
     if listed_truncated is None:
         listed_truncated = listed >= _list_limit()
     truncated = total_count is None and bool(listed_truncated)

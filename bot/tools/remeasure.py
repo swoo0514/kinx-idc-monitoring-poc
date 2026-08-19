@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""연계 규칙 정기 재측정 — 수집부터 승인 요청까지 한 번에.
-
-측정 조건을 한 곳에 두고 매번 같은 값으로 돌린다 — 조건이 달라지면 이전 규칙과
-비교가 성립하지 않는다. 주기·실행 시점·실패 처리는 BRIDGE_MINER_GUIDE 정기 재측정 절.
-
-사용:
-  python remeasure.py --active ~/rules/active.json --workdir ~/rules
-  python remeasure.py --active ~/rules/active.json --workdir ~/rules --dry-run
-"""
+"""연계 규칙 정기 재측정 — 수집부터 승인 요청까지 한 번에."""
 
 import argparse
 import os
@@ -23,8 +15,7 @@ for _s in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-# 측정 조건 — **여기 한 곳에만 둔다.** 바꾸면 이전 규칙과 비교가 성립하지 않으므로
-# 바꾼 사실이 `measured` 문자열을 통해 승인 화면에 드러난다.
+# 측정 조건은 여기 한 곳에만 둔다 — 바꾼 사실이 measured 문자열로 승인 화면에 드러난다
 DAYS = 90
 AXIS = "cls"              # 게이트웨이가 사건 유형 단위로 연계를 판정한다
 MIN_OPEN_S = 3600         # 1시간 미만 열린 것은 만성이 아니다
@@ -67,8 +58,7 @@ def main():
     promote = os.path.join(HERE, "rules_promote.py")
     excl = EXCLUDE if a.exclude is None else a.exclude
 
-    # 1) 수집 — 소스 하나가 실패해도 나머지는 저장되지만, 그 사실이 파일에 남고
-    #    아래 마이닝 출력의 [ 측정 범위 ] 에 드러난다.
+    # 1) 수집 — 소스 하나가 실패해도 나머지는 저장되고 그 사실이 파일에 남는다
     run([py, miner, "--days", str(a.days), "--dump", dump], "수집")
 
     # 2) 마이닝 + 규칙 산출 — 조건은 위 상수 그대로.

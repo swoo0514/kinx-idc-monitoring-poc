@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""데모 C(AI 초동 분석) LLM 응답시간 실측 스크립트.
-
-Claude API(주 경로)와 Ollama(온프레 폴백)의 트리아지 응답 지연을 같은
-프롬프트로 측정한다. 사용법·판정 기준·근거 문서는 bot/BENCH_GUIDE.md 참조.
-
-크리덴셜은 환경변수(ANTHROPIC_API_KEY)로만 읽는다. 코드·출력에 남기지 않는다.
-"""
+"""데모 C(AI 초동 분석) LLM 응답시간 실측 스크립트."""
 
 import argparse
 import json
@@ -15,9 +9,7 @@ import time
 import urllib.error
 import urllib.request
 
-# ---------------------------------------------------------------------------
 # 트리아지 프롬프트 (데모 C 실제 페이로드 모사 — 전부 가짜 랩 데이터)
-# ---------------------------------------------------------------------------
 
 TRIAGE_SYSTEM = """\
 당신은 KINX IDC 모니터링 트리아지 봇이다. Zabbix/Wazuh 알림이 오면
@@ -74,18 +66,12 @@ BUDGET_TOKENS = 100_000
 
 
 def estimate_input_tokens(runs: int, max_tokens: int) -> int:
-    """이번 실행이 쓸 입력 토큰의 어림값.
-
-    영문·한글이 섞인 프롬프트라 글자당 토큰이 일정하지 않다. 과소평가하면 막는
-    의미가 없으므로 **글자당 1토큰**으로 넉넉히 잡는다.
-    """
+    """이번 실행이 쓸 입력 토큰의 어림값."""
     per_call = len(TRIAGE_SYSTEM) + len(TRIAGE_USER)
     return per_call * max(runs, 0)
 
 
-# ---------------------------------------------------------------------------
 # Claude API (공식 anthropic SDK, 스트리밍)
-# ---------------------------------------------------------------------------
 
 def bench_claude(model, runs, max_tokens, thinking):
     try:
@@ -130,9 +116,7 @@ def bench_claude(model, runs, max_tokens, thinking):
     return results
 
 
-# ---------------------------------------------------------------------------
 # Ollama (/api/chat 스트리밍, 표준 라이브러리만 사용)
-# ---------------------------------------------------------------------------
 
 def bench_ollama(base_url, model, runs, max_tokens):
     results = []
@@ -189,9 +173,7 @@ def bench_ollama(base_url, model, runs, max_tokens):
     return results
 
 
-# ---------------------------------------------------------------------------
 # 요약
-# ---------------------------------------------------------------------------
 
 def summarize(results, target_s):
     by_key = {}
@@ -229,10 +211,7 @@ def main():
                    help="상한을 넘겨서라도 돌린다고 사람이 명시할 때만")
     args = p.parse_args()
 
-    # 유료 호출은 사람이 액수를 알고 승인한 만큼만 쓴다. 2026-08-13 에 이 도구 밖에서
-    # 같은 성격의 측정을 opus 로 15콜(입력 133만 토큰) 돌려 잔액을 소진시켰고, 그 결과
-    # 게이트웨이의 실제 트리아지가 크레딧 부족으로 죽었다. 곡선의 모양만 필요한
-    # 측정이었으므로 저가 모델과 작은 표본으로 충분했다.
+    # 유료 호출은 사람이 액수를 알고 승인한 만큼만 쓴다 — 곡선 모양만 필요하면 저가 모델·작은 표본
     est = estimate_input_tokens(args.runs, args.max_tokens)
     if est > args.budget_tokens and not args.i_accept_cost:
         raise SystemExit(

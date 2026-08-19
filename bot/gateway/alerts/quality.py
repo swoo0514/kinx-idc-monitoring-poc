@@ -1,8 +1,4 @@
-"""판정 품질 산출. 지표 정의와 정직성 기준은 bot/GATEWAY_GUIDE.md §25-5.
-
-  python -m gateway.quality --days 30
-  python -m gateway.quality --days 30 --send --target quality-bot
-"""
+"""판정 품질 산출. 지표 정의와 정직성 기준은 bot/GATEWAY_GUIDE.md §25-5."""
 
 import argparse
 import math

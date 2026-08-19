@@ -1,9 +1,4 @@
-"""질의 도구의 질의문 조립과 검사. 설계는 bot/GATEWAY_GUIDE.md §27.
-
-`collector.ZabbixClient.call` 은 `.get` 아닌 메서드를 거부한다. Loki 와 Wazuh 에는
-메서드 이름이 없어 같은 검사를 걸 수 없다. **두 축의 등가물은 호출자가 질의문을 못
-주는 것이다.** 도구는 라벨·기간·문자열 필터만 받고 질의문은 여기서 만든다.
-"""
+"""질의 도구의 질의문 조립과 검사. 설계는 bot/GATEWAY_GUIDE.md §27."""
 
 import logging
 import re
@@ -13,11 +8,9 @@ log = logging.getLogger("gateway.asktools")
 # 조회 기간(분). 모델이 큰 값을 넣어도 여기서 잘린다.
 WINDOW_DEFAULT_M = 60
 WINDOW_MAX_M = 1440
-# 건수 상한이 있어 구간을 넓혀도 무겁지 않은 조회(보안 경보·문제 목록). 사람이 보는
-# 대시보드 구간이 7일인 일이 흔한데 하루로 자르면 그 화면을 설명하지 못한다.
+# 건수 상한이 있어 구간을 넓혀도 무겁지 않은 조회 — 대시보드 구간이 7일인 일이 흔하다
 WINDOW_MAX_WIDE_M = 10080
-# 추세(trend)는 시간 단위로 집계돼 있어 긴 구간도 가볍다. Zabbix 기본 보관도 이력보다
-# 훨씬 길다. "90일 추이" 는 사람이 흔히 묻는 것이라 그만큼은 볼 수 있어야 한다.
+# 추세는 시간 단위 집계라 긴 구간도 가볍고 Zabbix 기본 보관도 이력보다 길다
 WINDOW_MAX_TREND_M = 129600
 # 이 길이를 넘으면 이력 대신 추세를 본다. 이력 보관이 짧아 그보다 길면 비거나 잘린다.
 TREND_FROM_S = 2 * 86400
@@ -33,26 +26,20 @@ _TERM_OK = re.compile(r"^[A-Za-z0-9._/\- ]+$")
 # 한 번에 찾을 낱말 수. 늘리면 질의가 무거워진다.
 FILTER_MAX_TERMS = 5
 
-# 도구가 쓰는 Zabbix 메서드. `.get` 이어도 이 목록 밖이면 거부한다 — 읽기 전용이라고
-# 다 열어 주면 사용자·설정 조회까지 나간다.
+# `.get` 이어도 이 목록 밖이면 거부한다 — 다 열면 사용자·설정 조회까지 나간다
 ZBX_METHODS = frozenset((
     "host.get", "item.get", "history.get", "trend.get", "problem.get", "trigger.get",
     "event.get",
 ))
 
 
-# 지표 표본을 얼마나 받아 얼마로 줄일지. 상한만큼만 최신순으로 받으면 긴 구간의
-# 앞부분이 통째로 잘려 먼저 난 스파이크를 못 본다(2026-08-18 실측).
+# 지표 표본을 얼마나 받아 얼마로 줄일지 — 최신순 상한이면 앞부분 스파이크를 못 본다
 HISTORY_FETCH_MAX = 2000
 HISTORY_BUCKETS = 60
 
 
 def downsample(points: list, buckets: int = HISTORY_BUCKETS) -> list:
-    """시계열을 구간별로 줄이되 **극단값을 살린다.**
-
-    사람이 그래프를 보고 묻는 이유는 대개 튄 자리 때문이다. 균등하게 솎아 내면 그
-    한 점이 사라져 "정상입니다" 가 나온다. 구간마다 최소·최대만 남기면 모양이 유지된다.
-    """
+    """시계열을 구간별로 줄이되 **극단값을 살린다.**"""
     pts = sorted(points or [], key=lambda p: p["t"])
     if len(pts) <= buckets or buckets <= 0:
         return pts
@@ -69,11 +56,7 @@ def downsample(points: list, buckets: int = HISTORY_BUCKETS) -> list:
 
 
 def parse_when(value):
-    """시각 한 개를 유닉스 초로. 못 읽으면 None — 지어내지 않는다.
-
-    사람은 화면에 보이는 절대 시각으로 묻는다. 도구가 상대 창만 받으면 모델이 그것을
-    "지금부터 N분" 으로 바꾸고, 그러면 **엉뚱한 날을 본다**(2026-08-18 실측).
-    """
+    """시각 한 개를 유닉스 초로. 못 읽으면 None — 지어내지 않는다."""
     if value is None or value == "":
         return None
     try:                                   # 유닉스 초(문자열 포함)
@@ -100,14 +83,7 @@ _ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?")
 
 
 def span_in_text(text: str):
-    """질문 글에 적힌 구간 `(시작, 끝)`. 못 읽으면 None.
-
-    화면에서 열지 않고 질문 글만 붙여 넣는 일이 잦다. 그러면 패널 맥락이 아예 안 오고
-    도구는 최근 창을 본다. 사람은 글에 구간을 적어 놓고 물었는데 봇은 다른 구간을 보고
-    답한다(2026-08-18 실측: 답은 8월 11~13일을 말하는데 붙은 그림은 최근 1시간이었다).
-
-    **지어내지 않는다.** 글에서 시각 두 개를 실제로 읽었을 때만 쓴다.
-    """
+    """질문 글에 적힌 구간 `(시작, 끝)`. 못 읽으면 None."""
     found = []
     for m in _ISO_RE.findall(str(text or "")):
         t = parse_when(m)
@@ -124,12 +100,7 @@ _SPAN_SEP = re.compile(r"\s*(?:~|\.\.|—|–|to)\s*")
 
 
 def span_of(args: dict) -> tuple:
-    """절대 구간 `(시작, 끝)`. 못 읽으면 `(None, None)`.
-
-    인자 하나(`range`)로 받는다. 예전에는 `from`·`to` 두 개였는데 도구마다 두 칸씩
-    차지해 도구 정의가 한도를 넘었다. 한쪽만 준 요청이 조용히 무시되던 문제도 함께
-    사라진다(2026-08-19 감사 A-5).
-    """
+    """절대 구간 `(시작, 끝)`. 못 읽으면 `(None, None)`."""
     a = (args or {}).get("range")
     if a in (None, ""):
         # 예전 형태도 계속 읽는다. 스키마에는 없지만 이력이나 손 호출로 들어올 수 있다.
@@ -141,32 +112,20 @@ def span_of(args: dict) -> tuple:
 
 
 def window_bounds(args: dict, now: int, max_m: int = 0, default_span=None) -> tuple:
-    """조회 구간 `(시작, 끝, 잘렸는가)`. 절대 구간이 있으면 그것을, 없으면 상대 창을.
-
-    구간 길이는 상한 안으로 자른다. 뒤집혀 오면 바로잡는다 — 사람이 끌어 놓은 순서를
-    모델이 그대로 옮기는 일이 있다.
-
-    **잘랐으면 잘랐다고 돌려준다.** 조용히 자르면 7일을 물은 사람이 1일치 결과를 보고
-    7일 내내 아무 일도 없었다고 읽는다(2026-08-18 랩 실측).
-    """
+    """조회 구간 `(시작, 끝, 잘렸는가)`. 절대 구간이 있으면 그것을, 없으면 상대 창을."""
     cap = int(max_m or WINDOW_MAX_M) * 60
     a, b = span_of(args)
-    # **사람이 보던 구간을 모델에게 받아 적으라고 시키지 않는다.** 화면이 이미 넘겨 준
-    # 값이 있는데 모델이 인자로 안 옮기면 조용히 최근 창으로 떨어진다. 2026-08-18 실측:
-    # 8월 11~13일 패널을 보고 물었는데 최근 1시간만 조회하고 "과거 구간 조회가
-    # 불가능합니다" 라고 답했다. 모델이 구간을 직접 주면 그쪽이 이긴다.
+    # 화면이 넘긴 구간을 모델에게 받아 적으라고 시키지 않는다 — 모델이 직접 주면 그쪽이 이긴다
     if a is None and b is None and default_span and not (args or {}).get("window_m"):
         a, b = int(default_span[0]), int(default_span[1])
     if a is not None and b is not None:
         if a > b:
             a, b = b, a
-        # 자를 때는 **최신 쪽을 남긴다.** 조회가 최신순 정렬이라 앞쪽을 남기면 사람이
-        # 보고 있는 화면의 오른쪽 끝이 통째로 빠지고, 방금 난 일을 못 본다.
+        # 자를 때는 최신 쪽을 남긴다 — 조회가 최신순이라 앞을 남기면 화면 오른쪽 끝이 빠진다
         return max(a, b - cap), b, (b - a) > cap
     asked = raw_window_s((args or {}).get("window_m"))
     win = min(clamp_window((args or {}).get("window_m"), cap // 60) * 60, cap)
-    # **상대 구간도 잘렸으면 잘렸다고 말한다.** 절대 구간에만 통지를 붙였더니 90일을
-    # 물은 요청이 조용히 하루가 됐고, 모델은 하루치를 90일치로 알고 답했다(실측).
+    # 상대 구간도 잘렸으면 잘렸다고 말한다 — 90일 요청이 조용히 하루가 된 적이 있다
     return now - win, now, asked > win
 
 
@@ -180,11 +139,7 @@ def raw_window_s(minutes) -> int:
 
 
 def window_label(start: int, end: int) -> str:
-    """실제로 본 구간을 사람이 읽는 형태로.
-
-    잘렸는지만 알려서는 모델이 몇 시부터 몇 시까지를 봤는지 모른다. 물결표는 쓰지
-    않는다 — 화면의 마크다운이 취소선으로 읽는다.
-    """
+    """실제로 본 구간을 사람이 읽는 형태로."""
     import datetime
     def fmt(t):
         return datetime.datetime.utcfromtimestamp(int(t)).strftime("%Y-%m-%d %H:%M")
@@ -200,16 +155,7 @@ _WORD = re.compile(r"[A-Za-z0-9]+")
 
 
 def rank_items(items: list, match: str) -> list:
-    """이름 검색 결과를 관련도 순으로. 검색어가 없으면 순서를 안 바꾼다.
-
-    Zabbix 는 이름 가나다순으로 돌려주는데, 그 앞쪽이 원하는 값이라는 보장이 없다.
-    2026-08-18 랩 실측으로 `cpu` 는 17개가 걸리고 앞 5개가 guest·idle·interrupt·iowait·
-    nice 로 채워져 **`CPU utilization` 이 한 번도 안 들어왔다.**
-
-    기준은 둘이다. 검색어가 낱말로 맞는 것을 먼저 보고, 그다음 이름이 짧은 것을 먼저
-    본다. 낱말이 적은 이름일수록 그 값을 직접 가리킨다("CPU utilization" 대 "CPU guest
-    nice time"). 잡음 낱말 목록을 코드에 박지 않는다 — 환경마다 다르고 금방 낡는다.
-    """
+    """이름 검색 결과를 관련도 순으로. 검색어가 없으면 순서를 안 바꾼다."""
     want = str(match or "").strip().lower()
     if not want:
         return list(items or [])
@@ -224,11 +170,7 @@ def rank_items(items: list, match: str) -> list:
 
 
 def note_if_cut(out, total: int, shown: int, dropped: list):
-    """이름 검색이 잘렸으면 몇 개를 못 봤고 그것이 무엇인지 결과에 적는다.
-
-    이름은 짧아서 열 몇 개라도 부담이 없다. 안 알리면 모델은 실린 것이 전부인 줄 알고
-    "정상" 이라 답한다.
-    """
+    """이름 검색이 잘렸으면 몇 개를 못 봤고 그것이 무엇인지 결과에 적는다."""
     if not isinstance(out, dict) or int(total or 0) <= int(shown or 0):
         return out
     names = ", ".join(str(n) for n in (dropped or [])[:20])
@@ -239,12 +181,7 @@ def note_if_cut(out, total: int, shown: int, dropped: list):
 
 
 def note_if_no_points(out):
-    """지표를 받았는데 점이 0개면 그 사실을 결과에 적는다.
-
-    조회는 성공했고 아이템도 있는데 값이 없다면 구간을 잘못 고른 것이다. 안 알리면
-    모델은 현재 값(last)만 보고 "지금 정상" 으로 답한다. 2026-08-18 랩 실측으로 2025년
-    1월을 조회하고 90일 추이 질문에 현재 상태로 답했다.
-    """
+    """지표를 받았는데 점이 0개면 그 사실을 결과에 적는다."""
     if not isinstance(out, dict):
         return out
     items = out.get("metrics") or []
@@ -256,15 +193,7 @@ def note_if_no_points(out):
 
 
 def note_if_capped(out, limit: int = 0):
-    """받을 수 있는 줄 수를 다 채웠으면 그 사실을 결과에 적는다.
-
-    로그는 최신순으로 받는다. 상한을 채웠다는 것은 구간 앞부분이 안 실렸다는 뜻이다.
-    안 알리면 모델은 실린 것이 그 구간 전부인 줄 알고 "없었다" 로 답한다.
-
-    **그 조회에 실제로 쓴 상한을 받는다.** 예전에는 알림 경로의 상수(300)와 견줬는데
-    질의는 늘 60줄로 조회하므로 통지가 한 번도 안 붙었다(2026-08-19 감사). 고쳤다고
-    적어 둔 고장이 임계값 불일치로 살아 있었다.
-    """
+    """받을 수 있는 줄 수를 다 채웠으면 그 사실을 결과에 적는다."""
     if not isinstance(out, dict):
         return out
     from ..alerts import collector
@@ -277,12 +206,7 @@ def note_if_capped(out, limit: int = 0):
 
 
 def bad_when(args: dict) -> list:
-    """시각으로 읽지 못한 인자 이름들.
-
-    **조용히 기본 창으로 떨어지면 모델은 잘못 물은 줄 모른다.** 2026-08-18 랩 실측으로
-    `at: 90` 을 시작으로 네 번 되풀이하며 라운드를 다 썼다. 결과가 그럴듯해 보였기
-    때문이다.
-    """
+    """시각으로 읽지 못한 인자 이름들."""
     out = []
     for key in ("from", "to"):
         v = (args or {}).get(key)
@@ -338,18 +262,12 @@ def clamp_window(minutes, max_m: int = 0) -> int:
 
 
 def check_filter(text: str) -> tuple:
-    """로그 문자열 필터가 쓸 만한가. 반환 `(가능 여부, 사유)`.
-
-    `a|b` 는 "둘 중 하나" 로 받는다. 모델은 이 표기를 정규식으로 쓰는데, 글자 그대로
-    찾으면 절대 맞지 않아 결과가 비고 사람은 그것을 "기록 없음" 으로 읽는다
-    (2026-08-18 랩 실측).
-    """
+    """로그 문자열 필터가 쓸 만한가. 반환 `(가능 여부, 사유)`."""
     s = str(text or "")
     if len(s) > FILTER_MAX_CHARS:
         return False, "필터가 %d자를 넘는다" % FILTER_MAX_CHARS
     if _UNSAFE.search(s):
-        # 무엇을 잘못했는지까지 적는다. 실측으로 모델이 구간 값을 contains 에 밀어 넣고
-        # 거부당한 뒤 같은 인자로 두 번 더 불렀다(2026-08-19).
+        # 무엇을 잘못했는지까지 적는다 — 안 적으면 모델이 같은 인자로 다시 부른다
         return False, ("질의문을 깨뜨리는 글자가 있다(따옴표·중괄호·역슬래시·줄바꿈). "
                        "contains 에는 찾을 낱말만 넣는다. 기간은 range 에, 대상은 host 에 "
                        "따로 넣어라")
@@ -393,19 +311,14 @@ def zbx_method_ok(method: str) -> bool:
 
 def build_wazuh_query(agent_name: str, start: int, end: int, min_level: int,
                       rule_group: str = "") -> dict:
-    """Wazuh 질의 본문. 틀을 코드가 만들고 값만 끼운다.
-
-    에이전트명은 정확 일치(`term`)를 유지한다. 부분 일치로 바꾸면 이름이 비슷한 다른
-    호스트의 경보가 섞인다.
-    """
+    """Wazuh 질의 본문. 틀을 코드가 만들고 값만 끼운다."""
     try:
         lvl = max(0, min(15, int(min_level)))
     except (TypeError, ValueError):
         lvl = 0
     return {
         "size": 50,
-        # **총 건수를 함께 받는다.** 50건만 받아 세면 그보다 많을 때 조용히 적게 센다.
-        # 오늘 하루 반복된 실패가 전부 이 모양이었다(2026-08-19).
+        # 총 건수를 함께 받는다 — 50건만 받아 세면 그보다 많을 때 조용히 적게 센다
         "track_total_hits": True,
         "sort": [{"@timestamp": {"order": "desc"}}],
         "_source": ["@timestamp", "rule.level", "rule.id", "rule.description",
@@ -421,40 +334,21 @@ def build_wazuh_query(agent_name: str, start: int, end: int, min_level: int,
     }
 
 
-# ---------------------------------------------------------------------------
-# 도구 목록과 실행
-#
-# 모델이 도구 이름과 인자를 정한다. 그 값이 어떻든 **거부는 예외가 아니라 도구 결과로
-# 돌려준다** — 예외로 끝내면 모델이 스스로 고칠 기회가 없고, 사람은 답 대신 오류를 본다.
-#
-# 대상은 언제나 가명 토큰으로 받는다. 실명은 표에만 있고 표는 허용된 감시 서버에서만
-# 만들어지므로, 표에 없는 대상은 조회 자체가 불가능하다.
-# ---------------------------------------------------------------------------
+# 도구 목록과 실행 — 거부는 예외가 아니라 도구 결과로 돌려준다.
+# 대상은 언제나 가명 토큰으로 받으므로 표에 없는 대상은 조회 자체가 불가능하다.
 
 LOG_LIMIT_DEFAULT = 60
 # 모델이 더 달라고 할 수 있는 최대. 알림 경로가 받는 줄 수와 같다(collector.LOKI_FETCH_LIMIT).
 LOG_LIMIT_MAX = 300
 JUDGMENT_DAYS_DEFAULT = 7
-# 판정 이력은 90일까지 남는다(store.KEEP_DAYS). **분 단위 상한을 쓰면 안 된다** —
-# days 를 분 상한(1440)에 통과시켜 30일이 1일이 됐다(2026-08-18 실측).
+# 판정 이력은 90일까지 남는다 — 분 단위 상한을 쓰면 30일이 1일이 된다
 JUDGMENT_DAYS_MAX = 90
 
-# 값이 정해져 있는 인자는 스키마로 묶는다.
-#
-# 프롬프트로 "없는 이름을 쓰지 마라" 라고 부탁하는 것과, 스키마가 값의 집합을 좁히는
-# 것은 다르다. 부탁은 지켜지기도 하고 안 지켜지기도 하지만 스키마는 표현 자체를 막는다.
-#
-# **묶는 자리를 고르는 기준은 캐시다.** 도구 정의는 프롬프트 맨 앞에 놓이므로, 정의가
-# 바뀌면 그 뒤 전부가 캐시에서 빠진다. 그래서 요청 내내 안 바뀌는 값(호스트 토큰)만
-# enum 으로 묶고, 턴 중에 생기는 값(그림 손잡이·조회 구간)은 코드가 검증한다.
+# 값이 정해진 인자는 스키마로 묶는다 — 부탁과 달리 스키마는 표현 자체를 막는다
+# 묶는 자리는 캐시가 정한다 — 요청 내내 안 바뀌는 값만 enum, 나머지는 코드가 검증한다
 
 def _host_prop(desc: str, tokens=None, allow_all: bool = False) -> dict:
-    """대상 호스트 인자. `allow_all` 이면 "전체" 를 뜻하는 빈 값도 고를 수 있다.
-
-    빈 값을 목록에 안 넣으면 설명이 "전체면 빈 문자열" 이어도 모델이 그 값을 넣지
-    못한다. 2026-08-19 실측으로 `open_problems` 를 필수 인자로 옮기면서 "열린 문제
-    전부" 가 통째로 막혔다. 설명과 목록이 어긋나면 목록이 이긴다.
-    """
+    """대상 호스트 인자. `allow_all` 이면 "전체" 를 뜻하는 빈 값도 고를 수 있다."""
     p = {"type": "string", "description": desc}
     if tokens:
         # 정렬은 필수다. 순서가 흔들리면 접두사 바이트가 달라져 캐시가 한 번도 안 걸린다.
@@ -466,19 +360,14 @@ _WINDOW_PROPS = {
     "window_m": {"type": "integer",
                  "description": ("지금부터 거슬러 볼 분. 90일이면 129600. 셋 다 비우면 "
                                  "사람이 화면에서 보고 있는 구간을 본다")},
-    # **시작과 끝을 인자 두 개로 받지 않는다.** 도구 네 개에 두 개씩이라 정의가 커지고,
-    # 2026-08-19 랩 실측으로 그 상태에서 API 가 "Schema is too complex for compilation"
-    # 으로 모든 질의를 거부했다. 하나로 합치니 통과한다. 한쪽만 주는 실수도 사라진다.
+    # 시작과 끝을 인자 두 개로 받지 않는다 — 정의가 커지면 API 가 모든 질의를 거부한다
     "range": {"type": "string",
               "description": ("절대 구간. '2026-08-13T00:00Z ~ 2026-08-13T06:00Z' 처럼 "
                               "물결표로 잇는다. 유닉스 초도 된다")},
 }
 
 
-# 엄격 모드(strict)에서 도구 정의 전체가 가질 수 있는 선택 인자 수. 넘기면 API 가 호출을
-# 통째로 거부한다(2026-08-18 실측: "Schemas contains too many optional parameters (25),
-# which would make grammar compilation inefficient ... limit: 24"). 인자를 하나 더할 때마다
-# 이 한도를 먼저 본다.
+# 엄격 모드에서 도구 정의 전체가 가질 수 있는 선택 인자 수. 넘기면 호출이 통째로 거부된다
 OPTIONAL_PARAM_MAX = 24
 
 
@@ -569,7 +458,7 @@ def build_tool_specs(table: dict = None) -> list:
               {"host": _host_prop("전체면 빈 문자열", toks, allow_all=True),
                "days": {"type": "integer", "description": "며칠 전까지. 최대 90"}}),
         _spec("answer",
-              "사람에게 줄 최종 답. 조사가 끝나면 이 도구로 답한다. 산문에 그림 손잡이나 "
+              "사람에게 줄 최종 답. 조사가 끝나면 이 도구로 답한다. 산문에 그림 표시나 "
               "조회 구간을 적지 말고 여기 필드에 넣는다.",
               {"summary": {"type": "string", "description": "결론 한두 문장"},
                "window_utc": {"type": "string",
@@ -588,12 +477,7 @@ TOOL_SPECS = build_tool_specs()
 
 
 def check_answer(args: dict, images, windows) -> tuple:
-    """답 도구의 인자를 검증한다. 반환 `(통과 여부, 사유)`.
-
-    턴 중에 생기는 값은 enum 으로 묶을 수 없다. 묶으면 도구 정의가 라운드마다 바뀌어
-    캐시가 죽는다. 대신 여기서 본다. 위반은 예외가 아니라 도구 결과로 돌려주어 모델이
-    스스로 고치게 한다.
-    """
+    """답 도구의 인자를 검증한다. 반환 `(통과 여부, 사유)`."""
     a = args or {}
     for iid in (a.get("image_ids") or []):
         if iid not in (images or set()):
@@ -609,14 +493,7 @@ def check_answer(args: dict, images, windows) -> tuple:
 
 
 def panel_pick(panel: dict) -> tuple:
-    """보고 있는 패널. 반환 `(대시보드 uid, 패널 번호)`. 화면 맥락이 없으면 `(None, None)`.
-
-    화면이 패널 번호를 넘겨 주므로 제목으로 뒤지지 않는다. 제목으로 찾으면 이름이
-    비슷한 옆 패널이 걸린다(2026-08-18 실측).
-
-    다른 대시보드의 패널은 `list_panels` 로 목록을 받아 **손잡이로 가리킨다.** 제목을
-    인자로 넘기는 길은 없앴다 — 그 길이 있는 한 이름이 비슷한 패널이 계속 걸린다.
-    """
+    """보고 있는 패널. 반환 `(대시보드 uid, 패널 번호)`. 화면 맥락이 없으면 `(None, None)`."""
     p = panel or {}
     uid, pid = p.get("uid"), p.get("panelId")
     if not uid or pid in (None, ""):
@@ -628,19 +505,14 @@ PANEL_REF_MAX = 40
 
 
 def panel_refs(items: list, refs: dict) -> list:
-    """패널 목록에 손잡이를 붙여 모델에 줄 형태로. 대시보드 식별자는 안 나간다.
-
-    그림 손잡이(`img-...`)와 같은 방식이다. 모델은 `pnl-3` 만 보고, 그 뒤의 대시보드
-    uid 와 패널 번호는 서버가 들고 있는다.
-    """
+    """패널 목록에 번호를 붙여 모델에 줄 형태로. 대시보드 식별자는 안 나간다."""
     out = []
     for it in (items or [])[:PANEL_REF_MAX]:
         ref = "pnl-%d" % (len(refs) + 1)
         refs[ref] = (it.get("uid"), it.get("panel_id"), it.get("title") or "")
         row = {"ref": ref, "dashboard": it.get("dashboard") or "",
                "title": it.get("title") or ""}
-        # 무엇을 조회하는 패널인지 함께 준다. 제목만 주면 두 패널이 같은 값을 보는지
-        # 짐작하게 되고, 짐작은 틀린다(2026-08-19 실측).
+        # 무엇을 조회하는 패널인지 함께 준다 — 제목만 주면 짐작하게 되고 짐작은 틀린다
         for key in ("source", "query"):
             if it.get(key):
                 row[key] = it[key]
@@ -649,11 +521,7 @@ def panel_refs(items: list, refs: dict) -> list:
 
 
 def query_count(trace) -> int:
-    """조회 횟수. **답 도구는 안 센다.**
-
-    답은 조사가 아니라 마무리다. 상한에 세면 조사할 수 있는 횟수가 하나 줄고 그만큼
-    답이 얕아진다(2026-08-18 실측: 답을 부르려다 rounds 로 끝났다).
-    """
+    """조회 횟수. **답 도구는 안 센다.**"""
     return sum(1 for t in (trace or []) if (t or {}).get("tool") != "answer")
 
 
@@ -662,12 +530,7 @@ def _err(msg: str) -> dict:
 
 
 def _lookup(tok: str, ctx: dict):
-    """토큰 하나를 표에서 찾는다. **대상을 찾는 규칙은 한 곳에만 둔다.**
-
-    대괄호 완화를 `_target` 에만 넣었더니 past_judgments·open_problems 가 같은 값을
-    거부했다(2026-08-18 실측). 규칙이 도구마다 다르면 어느 도구는 되고 어느 도구는
-    안 되는 상태가 조용히 생긴다.
-    """
+    """토큰 하나를 표에서 찾는다. **대상을 찾는 규칙은 한 곳에만 둔다.**"""
     table = ctx.get("table") or {}
     return table.get(tok) or table.get("[%s]" % str(tok).strip("[]"))
 
@@ -684,12 +547,7 @@ def _target(args: dict, ctx: dict) -> tuple:
 
 
 def tool_timeout_s() -> float:
-    """도구 한 번의 시한(초).
-
-    없으면 느린 조회 하나가 질의 전체를 잡아먹는다. 관측 화면 목록은 대시보드 상세를
-    순차로 도느라 최악 255초였다(2026-08-19 감사 E-1). 마감 검사는 라운드 사이에서만
-    도므로 그동안 아무도 못 끊는다.
-    """
+    """도구 한 번의 시한(초)."""
     import os
 
     try:
@@ -710,8 +568,7 @@ async def run_tool(name: str, args: dict, ctx: dict) -> dict:
         out = await asyncio.wait_for(fn(args or {}, ctx), timeout=tool_timeout_s())
         return _hint_if_empty(name, out)
     except asyncio.TimeoutError:
-        # **다른 조회 실패와 같은 형태로 돌려준다.** 새 형태를 만들면 모델이 그것만
-        # 다르게 읽는다. 비어 있다는 뜻이 아니라는 것도 함께 적는다.
+        # 다른 조회 실패와 같은 형태로 돌려준다 — 비어 있다는 뜻이 아니라는 것도 함께 적는다
         from ..alerts import collector
         log.warning("도구 %s 시한 초과 (%.0f초)", name, tool_timeout_s())
         return {"status": collector.SOURCE_UNAVAILABLE,
@@ -725,8 +582,7 @@ async def run_tool(name: str, args: dict, ctx: dict) -> dict:
         return _err("조회하지 못했다(%s). 이 결과를 '없음'으로 읽지 마라" % type(e).__name__)
 
 
-# 빈 결과에 붙일 다음 수. **그냥 비어 있으면 모델이 포기한다** — 오늘 랩에서
-# "찾을 수 없습니다" 로 끝난 자리가 이것이다. 조회는 성공했으니 다르게 물어보게 한다.
+# 빈 결과에 붙일 다음 수 — 그냥 비어 있으면 모델이 포기한다
 _EMPTY_HINT = {
     "host_logs": "그 창에 로그가 없다. 기간을 넓히거나 contains 를 빼고 다시 보라",
     "host_metrics": "그 조건에 맞는 아이템이 없다. match 를 넓히거나 빼고 다시 보라",
@@ -738,11 +594,7 @@ _LIST_KEYS = ("logs", "metrics", "alerts", "problems", "judgments", "hosts")
 
 
 def _hint_if_empty(name: str, out):
-    """비어 있는데 조회는 성공한 경우에만 다음 수를 붙인다.
-
-    조회가 실패한 경우에는 붙이지 않는다 — 그건 '없다' 가 아니라 '못 봤다' 이고,
-    이미 그렇게 표시하고 있다.
-    """
+    """비어 있는데 조회는 성공한 경우에만 다음 수를 붙인다."""
     if not isinstance(out, dict) or out.get("error") or out.get("hint"):
         return out
     if out.get("status") not in (None, "ok"):
@@ -755,15 +607,7 @@ def _hint_if_empty(name: str, out):
 
 
 def span_note(start: int, end: int, span) -> str:
-    """화면 구간이 있는데 다른 구간을 봤으면 그 사실과 되부르는 법을 알린다.
-
-    모델이 `window_m` 을 스스로 넣으면 화면 구간 기본값이 안 쓰인다. 그 자체는 옳다 —
-    사람이 "그럼 지금은?" 하고 물을 수 있어야 한다. 문제는 모델이 최근 창 결과를 받고
-    **화면 구간은 조회할 수 없다고 단정한 것**이다(2026-08-18 실측: "현재 시스템의 조회
-    도구가 현시점 기준의 제한된 시간 범위만 지원하고 있습니다").
-
-    그래서 결과에 되부르는 법을 적는다. 지시문에 적는 것으로는 부족했다.
-    """
+    """화면 구간이 있는데 다른 구간을 봤으면 그 사실과 되부르는 법을 알린다."""
     if not span or not start or not end:
         return ""
     if int(start) == int(span[0]) and int(end) == int(span[1]):
@@ -792,16 +636,13 @@ def _add_cut(out, cut: bool, max_m: int, start: int = 0, end: int = 0,
 
 async def _tool_list_hosts(args: dict, ctx: dict) -> dict:
     """표에서 만든다. 조회를 안 하므로 라운드를 아낀다."""
-    # **검색은 실명으로 맞춘다.** 사람은 실명으로 묻고 모델은 그 말을 그대로 옮긴다.
-    # 토큰 문자열을 훑으면 아무것도 안 맞는다(2026-08-18 랩 실측). 실명은 여기서만
-    # 쓰이고 결과에는 토큰만 실린다.
+    # 검색은 실명으로 맞춘다 — 실명은 여기서만 쓰이고 결과에는 토큰만 실린다
     q = str(args.get("query") or "").lower()
     out = []
     for tok, ent in (ctx.get("table") or {}).items():
         if q and q not in str(ent.get("host", "")).lower():
             continue
-        # 표의 호스트는 전부 감시 서버에서 왔으므로 지표는 언제나 볼 수 있다.
-        # 안 알리면 모델이 "이 호스트는 지표가 없다"고 단정한다(2026-08-18 실측).
+        # 표의 호스트는 전부 감시 서버에서 왔으므로 지표는 언제나 볼 수 있다
         axes = ["metrics"] + sorted(k for k in ("logs", "security") if ent.get(k))
         out.append({"host": tok, "axes": axes})
     if not out:
@@ -810,8 +651,7 @@ async def _tool_list_hosts(args: dict, ctx: dict) -> dict:
     shown = out[:HOST_LIST_MAX]
     res = {"hosts": shown, "n": len(out)}
     if len(out) > len(shown):
-        # **자르면 잘랐다고 말한다.** 안 알리면 모델은 실린 것이 전부인 줄 알고
-        # "그런 호스트는 없다" 로 답한다.
+        # 자르면 잘랐다고 말한다 — 안 알리면 모델이 "그런 호스트는 없다"로 답한다
         res["note"] = ("호스트 %d대 중 %d대만 실었다. query 에 이름 일부를 넣어 좁혀라"
                        % (len(out), len(shown)))
     return res
@@ -829,9 +669,7 @@ async def _tool_host_logs(args: dict, ctx: dict) -> dict:
     if not ok:
         return _err(why)
     q = build_logql(label, args.get("contains") or "")
-    # 로그도 보안 경보와 같은 상한을 쓴다. 하루로 자르면 사람이 이틀 구간을 보며
-    # 물었을 때 앞 하루가 통째로 빠지고, 봇은 그 절반만 보고 답한다(2026-08-18 실측).
-    # 결과 크기는 구간이 아니라 줄 수 상한이 정하므로 넓혀도 무겁지 않다.
+    # 로그도 보안 경보와 같은 상한 — 결과 크기는 구간이 아니라 줄 수 상한이 정한다
     a, b, cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
                               default_span=ctx.get("panel_span"))
     # 상한 자체도 상한이 있다. 모델이 큰 값을 넣어도 여기서 잘린다.
@@ -904,7 +742,7 @@ async def _tool_panel_image(args: dict, ctx: dict) -> dict:
     if ref:
         target = (ctx.get("panel_refs") or {}).get(ref)
         if not target:
-            return _err("%s 는 이번 대화에서 받은 패널 손잡이가 아니다. list_panels 를 "
+            return _err("%s 는 이번 대화에서 받은 패널 표시가 아니다. list_panels 를 "
                         "먼저 부르고 거기 적힌 ref 를 그대로 써라" % ref)
     return await ctx["fetch_panel"](ent, target, a, b)
 

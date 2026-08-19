@@ -1,8 +1,4 @@
-"""반복문 엔진 선택과 LangGraph 경로(§28).
-
-원본은 한 파일(`ask.py`, 1,289줄)이었다. 2026-08-19 에 옮기기만 했고
-기능은 바꾸지 않았다.
-"""
+"""반복문 엔진 선택과 LangGraph 경로(§28)."""
 
 import logging
 import os
@@ -16,12 +12,7 @@ log = logging.getLogger("gateway.ask")
 
 
 def engine_name() -> str:
-    """질의 반복문을 무엇으로 돌릴까. `graph`(LangGraph, 기본) 또는 `loop`(직접 구현).
-
-    프레임워크가 안 깔린 서버에서는 기존 반복문으로 돈다. 설정이나 설치가 빠진 사람이
-    답을 아예 못 받는 상황이 가장 나쁘다. `ASK_ENGINE=loop` 이 되돌리는 길이며,
-    두 엔진이 같은 답을 내는지는 셀프테스트가 지킨다.
-    """
+    """질의 반복문을 무엇으로 돌릴까. `graph`(LangGraph, 기본) 또는 `loop`(직접 구현)."""
     from . import graph
     want = os.environ.get("ASK_ENGINE", "graph").strip().lower()
     if want == "loop":
@@ -36,11 +27,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
                      exec_tool, model_fn, started: float, tick,
                      specs=None, final=None, made_images=None,
                      ok_queries=None) -> dict:
-    """LangGraph 로 도는 경로. 반환 계약은 기존 반복문과 같다.
-
-    상한·멈춤·마스킹·도구는 전부 우리 것을 그대로 쓴다. 프레임워크가 맡는 것은 모델과
-    도구 사이를 오가는 흐름뿐이다.
-    """
+    """LangGraph 로 도는 경로. 반환 계약은 기존 반복문과 같다."""
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
     from . import tools as asktools
@@ -69,8 +56,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
     state = {"messages": lc, "trace": [], "images": [], "spent": 0, "called": {},
              "stopped": "", "error": ""}
     try:
-        # 노드가 라운드마다 둘이라 프레임워크 상한은 넉넉히 두고, 실제 제한은 우리
-        # `route` 가 건다. 프레임워크 상한에 먼저 닿으면 사람이 이유를 못 읽는다.
+        # 프레임워크 상한은 넉넉히 두고 실제 제한은 route 가 건다 — 먼저 닿으면 이유를 못 읽는다
         out = await app.ainvoke(state, {"recursion_limit": MAX_ROUNDS * 2 + 4})
     except Exception as e:
         log.warning("그래프 실행 실패: %s", e)
@@ -83,7 +69,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
                 "error": "모델을 부르지 못했다: %s" % out.get("error", "")}
     text = ""
     if final:
-        # 답 도구로 받았으면 그것이 답이다. 산문에서 손잡이를 걷어 낼 일이 없다.
+        # 답 도구로 받았으면 그것이 답이다. 산문에서 그림 표시를 걷어 낼 일이 없다.
         text = render_answer(final, int((ok_queries or {}).get("n", 1)) > 0)
     else:
         for m in reversed(out.get("messages") or []):
@@ -91,8 +77,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
                 text = m.content
                 break
     stopped = _stop["why"] or out.get("stopped") or "end_turn"
-    # 답을 받았으면 상한 표시를 붙이지 않는다. 마지막 라운드에 답한 것을 "멈췄다" 로
-    # 적으면 기록을 보는 사람이 답이 잘린 줄 안다.
+    # 답을 받았으면 상한 표시를 붙이지 않는다 — 기록을 보는 사람이 답이 잘린 줄 안다
     if stopped == "end_turn" and not final and len(trace) >= MAX_ROUNDS:
         stopped = "rounds"
     if stopped in ("rounds", "deadline", "budget") and not final and trace:

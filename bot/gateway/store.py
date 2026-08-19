@@ -8,8 +8,7 @@ import time
 
 log = logging.getLogger("gateway.store")
 
-# 환경변수로 들어온 값에도 물결표를 편다. 안 펴면 작업 디렉토리 밑에 `~` 폴더가 생기고,
-# 파일은 열리므로 아무 오류 없이 다른 곳에 쌓인다 (§24-1).
+# 환경변수 값에도 물결표를 편다 — 안 펴면 `~` 폴더가 생기고 오류 없이 다른 곳에 쌓인다 (§24-1)
 PATH = os.path.expanduser(os.environ.get("GATEWAY_STORE_FILE",
                                          "~/.kinx-gateway/history.db"))
 KEEP_DAYS = int(os.environ.get("GATEWAY_STORE_KEEP_DAYS", "90"))
@@ -68,11 +67,7 @@ def _columns(c, table: str) -> list:
 
 
 def _migrate(c) -> None:
-    """구스키마를 판올림한다. 근거는 가이드 §24-4.
-
-    판정 식별자는 ALTER 로 붙일 수 없으므로(SQLite 제약) 표를 한 번 다시 만든다.
-    ALTER 는 다른 프로세스가 같은 파일에 먼저 붙였을 수 있어 중복 오류를 흡수한다.
-    """
+    """구스키마를 판올림한다. 근거는 가이드 §24-4."""
     old = _columns(c, "judgment")
     if old and "id" not in old:
         keep = [x for x in ("ts",) + JUDGMENT_COLS if x in old]
@@ -91,8 +86,7 @@ def _migrate(c) -> None:
         except sqlite3.OperationalError as e:
             if "duplicate column" not in str(e).lower():
                 raise
-    # 이미 있던 usage 표에는 캐시·모델 열이 없다. 없으면 절감분과 등급별 사용량이
-    # 조용히 0이 되어 비교 자체가 성립하지 않는다.
+    # 이미 있던 usage 표에는 캐시·모델 열이 없다 — 없으면 절감분이 조용히 0이 된다
     have_usage = _columns(c, "usage")
     for name in ("cache_write INTEGER", "cache_read INTEGER", "model TEXT"):
         if name.split()[0] in have_usage:
@@ -255,14 +249,7 @@ def judgments(since: float = 0, now: float = None, limit: int = 1000) -> list:
 
 def judgments_in_realms(realms, since: float = 0, now: float = None,
                         host: str = "", limit: int = 20) -> list:
-    """허용된 감시 영역의 판정만. 대화형 질의가 남의 영역을 못 읽게 하는 자리다.
-
-    `judgments()` 에 조건을 얹지 않고 따로 둔다. 그 함수는 품질 지표와 월간 리포트가
-    분모로 쓰고 있어, 조건이 붙으면 그 수치가 조용히 바뀐다.
-
-    **허용 영역이 비면 아무것도 주지 않는다.** 빈 목록을 "제한 없음" 으로 읽으면
-    설정을 빠뜨린 사람이 전부를 보게 된다.
-    """
+    """허용된 감시 영역의 판정만. 대화형 질의가 남의 영역을 못 읽게 하는 자리다."""
     names = [str(r) for r in (realms or []) if str(r)]
     if not names:
         return []
@@ -298,11 +285,7 @@ def seen_once(key: str, ttl_s: float, now: float = None) -> bool:
 
 
 def record_call(kind: str, now: float = None, user: str = "") -> bool:
-    """호출 한 건을 센다. 사용자를 주면 그 이름으로도 셀 수 있다.
-
-    누가 얼마나 썼는지는 공유 토큰 하나로는 알 수 없다. 파트·팀원별 관리가 필요해지는
-    순간 이 열이 근거가 된다.
-    """
+    """호출 한 건을 센다. 사용자를 주면 그 이름으로도 셀 수 있다."""
     now = time.time() if now is None else now
     return _exec("INSERT INTO call (ts,kind,user) VALUES (?,?,?)",
                  (now, kind, user or "")) is True
@@ -311,14 +294,7 @@ def record_call(kind: str, now: float = None, user: str = "") -> bool:
 def record_tokens(kind: str, user: str, in_tok: int, out_tok: int,
                   now: float = None, cache_write: int = 0, cache_read: int = 0,
                   model: str = "") -> bool:
-    """실제로 쓴 토큰 수. **호출 횟수만 세면 짧은 질문과 긴 조사가 같은 한 건이다.**
-
-    응답에 실려 오는 값을 그대로 남긴다(사후 정산). 추정하지 않는다.
-
-    **캐시 토큰을 따로 센다.** 읽기는 정가의 약 0.1배, 쓰기는 1.25배다. 입력에 뭉뚱그리면
-    캐싱으로 아낀 몫이 숫자에 나타나지 않아 절감 여부를 확인할 수 없다. 모델도 함께
-    남긴다 — 등급을 나눈 뒤에는 어느 등급이 얼마를 썼는지가 비교의 전부다.
-    """
+    """실제로 쓴 토큰 수. **호출 횟수만 세면 짧은 질문과 긴 조사가 같은 한 건이다.**"""
     now = time.time() if now is None else now
     return _exec("INSERT INTO usage (ts,kind,user,in_tok,out_tok,cache_write,"
                  "cache_read,model) VALUES (?,?,?,?,?,?,?,?)",
@@ -328,11 +304,7 @@ def record_tokens(kind: str, user: str, in_tok: int, out_tok: int,
 
 def tokens_since(window_s: float, now: float = None, kind: str = "",
                  user: str = "") -> dict:
-    """창 안에 쓴 토큰 합계.
-
-    반환 `{"in", "out", "cache_write", "cache_read"}`. 캐시 두 값은 단가가 달라
-    입력과 합치면 절감분이 안 보인다.
-    """
+    """창 안에 쓴 토큰 합계."""
     now = time.time() if now is None else now
     sql = ("SELECT COALESCE(SUM(in_tok),0) AS i, COALESCE(SUM(out_tok),0) AS o,"
            " COALESCE(SUM(cache_write),0) AS cw, COALESCE(SUM(cache_read),0) AS cr"
@@ -378,11 +350,7 @@ def kind_counts(window_s: float, now: float = None) -> dict:
 
 
 class Pruner:
-    """보관 기한을 실제로 지키는 주기 정리.
-
-    기동 때 한 번만 지우면 오래 떠 있는 프로세스는 영원히 안 지운다. 서술을 담기
-    시작한 뒤로는 그게 못 지키는 보관 약속이 된다.
-    """
+    """보관 기한을 실제로 지키는 주기 정리."""
 
     def __init__(self, interval_s: float = None):
         self.interval_s = float(interval_s if interval_s is not None
@@ -414,8 +382,7 @@ def prune(now: float = None) -> None:
     """행보다 서술을 먼저 지운다 — 지표는 구조화 값만으로 산출된다 (§24-6)."""
     now = time.time() if now is None else now
     cut = now - KEEP_DAYS * 86400
-    # 증거 참조도 서술과 같이 지운다. Loki 보존이 31일인데 판정 행은 90일이라,
-    # 오래된 조회문을 눌러 0건이 나오면 "로그가 없었다"로 읽힌다.
+    # 증거 참조도 서술과 같이 지운다 — Loki 보존 31일 < 판정 행 90일
     _exec("UPDATE judgment SET summary=NULL, evidence=NULL"
           " WHERE ts < ? AND (summary IS NOT NULL OR evidence IS NOT NULL)",
           (now - SUMMARY_DAYS * 86400,))

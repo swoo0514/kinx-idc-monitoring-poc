@@ -1,8 +1,4 @@
-"""지표·열린 문제 조회(Zabbix).
-
-원본은 한 파일(`ask.py`, 1,289줄)이었다. 2026-08-19 에 옮기기만 했고
-기능은 바꾸지 않았다.
-"""
+"""지표·열린 문제 조회(Zabbix)."""
 
 import logging
 from ... import masking
@@ -12,17 +8,11 @@ log = logging.getLogger("gateway.ask")
 
 
 def metric_item(it: dict, raw: list, shown: list, kind: str, mask) -> dict:
-    """지표 아이템 하나의 전송 형태.
-
-    **이름과 키를 이름 표에 거친다.** 인증서 감시 아이템 키가
-    `web.certificate.get[<도메인>,443]` 형태라, 가리지 않으면 "인증서 며칠 남았어" 한 마디에
-    고객 도메인이 통째로 나간다(2026-08-19 감사).
-    """
+    """지표 아이템 하나의 전송 형태."""
     return {"name": mask(str(it.get("name") or "")),
             "key": mask(str(it.get("key_") or "")),
             "units": it.get("units"), "last": it.get("lastvalue"),
-            # 몇 점을 읽어 몇 점으로 줄였는지, 그리고 **무엇을 읽었는지** 준다.
-            # 안 알리면 모델이 실린 점이 전부라고 여기고 간격도 지어낸다.
+            # 몇 점을 읽어 몇 점으로 줄였는지, 무엇을 읽었는지 함께 준다
             "sampled_from": len(raw), "series": shown,
             "source_kind": kind,
             "point_meaning": ("1시간 최대값(추세). avg·min 동봉"
@@ -41,14 +31,7 @@ def metrics_result(items: list, series: dict, masker: masking.Masker = None) -> 
 
 
 def problems_result(rows: list, masker: masking.Masker = None, total: int = 0) -> dict:
-    """열린 문제 결과 한 벌.
-
-    Zabbix 문제명은 매크로가 풀린 문장이라 `Zabbix agent is not available on <호스트명>`
-    처럼 호스트명이 박혀 있다. 같은 값을 알림 경로는 이미 가린다(masking.py).
-
-    **총 건수를 함께 받는다.** 소스당 50건에서 자르는데 그 말이 없으면 모델은 실린 것이
-    전부인 줄 안다. 실환경 사내 Zabbix 는 Warning 노이즈로 50건을 쉽게 넘는다.
-    """
+    """열린 문제 결과 한 벌."""
     from ...alerts import collector
     mask = masker.mask if masker is not None else (lambda x: x)
     out = {"problems": [{"name": mask(str(p.get("name") or "")),
@@ -66,11 +49,7 @@ def problems_result(rows: list, masker: masking.Masker = None, total: int = 0) -
 
 async def fetch_metrics(entry: dict, match: str, start: int, end: int,
                         masker: masking.Masker = None) -> dict:
-    """호스트의 지표 추이. 아이템 이름·키에 든 문자열로 고른다.
-
-    특정 시각을 물으면 `range` 로 절대 구간이 온다. 사람은 "어제 2시에 튀었다" 로 묻지
-    "지금부터 몇 분" 으로 묻지 않는다.
-    """
+    """호스트의 지표 추이. 아이템 이름·키에 든 문자열로 고른다."""
     import httpx
 
     from ...alerts import collector
@@ -95,15 +74,12 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int,
             if not items:
                 return {"metrics": [], "status": collector.SOURCE_OK,
                         "note": "그 조건에 맞는 아이템이 없다. match 를 넓혀 보라"}
-            # **가나다순 앞에서 자르지 않는다.** 랩 실측으로 `cpu` 는 17개가 걸리고
-            # 앞 5개가 guest·idle 시간으로 채워져 CPU utilization 이 한 번도 안 들어왔다.
+            # 가나다순 앞에서 자르지 않는다 — cpu 17개 중 앞 5개가 guest·idle 로 채워졌다
             items = asktools.rank_items(items, match)
             total = len(items)
             dropped = [mask(str(x.get("name") or "")) for x in items[asktools.ITEM_LIMIT:]]
             picked = items[:asktools.ITEM_LIMIT]
-            # **아이템마다 따로 묻지 않는다.** 상한이 8개라 왕복이 10번까지 갔고 콜당
-            # 5초라 최악 50초였다(2026-08-19 감사). Zabbix 는 itemids 에 배열을 받으므로
-            # 값 유형으로 묶으면 이력은 최대 두 번, 추세는 한 번이다.
+            # 아이템마다 따로 묻지 않는다 — itemids 배열로 묶으면 이력 최대 두 번, 추세 한 번이다
             trend = asktools.use_trend(start, end)
             series = {}
             if trend:
@@ -113,8 +89,7 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int,
                     "time_from": start, "time_till": end, "output": "extend",
                     "limit": asktools.HISTORY_FETCH_MAX * len(picked)})
                 for r in rows:
-                    # 값은 시간별 **최대**를 쓴다. 평균으로 줄이면 한 시간 안에 튄 자리가
-                    # 묻혀 "정상입니다" 가 나온다.
+                    # 값은 시간별 최대를 쓴다 — 평균으로 줄이면 튄 자리가 묻혀 "정상입니다"가 나온다
                     series.setdefault(str(r.get("itemid")), []).append(
                         {"t": int(r["clock"]), "v": r.get("value_max"),
                          "avg": r.get("value_avg"), "min": r.get("value_min")})
@@ -126,8 +101,7 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int,
                     if vt in (0, 3):
                         by_type.setdefault(vt, []).append(it["itemid"])
                 for vt, ids in by_type.items():
-                    # **구간 전체를 받아 놓고 줄인다.** 상한만큼만 최신순으로 받으면
-                    # 앞부분이 잘려 먼저 난 스파이크를 못 본다(2026-08-18 실측).
+                    # 구간 전체를 받아 놓고 줄인다 — 최신순 상한이면 먼저 난 스파이크를 못 본다
                     hist = await zbx.call(c, "history.get", {
                         "itemids": ids, "history": vt,
                         "time_from": start, "time_till": end, "output": "extend",
@@ -171,9 +145,7 @@ async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
                         continue
                     params["hostids"] = hosts[0]["hostid"]
                 got = await zbx.call(c, "problem.get", params)
-                # 총계는 따로 센다. Zabbix 는 countOutput 으로 개수만 돌려준다.
-                # **빼는 것이지 비우는 것이 아니다.** `output: None` 을 보내면 Zabbix 가
-                # 거부해 조회 전체가 실패한다(2026-08-19 랩 실측).
+                # 총계는 countOutput 으로 따로 센다 — 빼는 것이지 비우는 것이 아니다(output: None 은 거부)
                 cnt_params = {k: v for k, v in params.items()
                               if k not in ("output", "limit", "sortfield", "sortorder")}
                 cnt_params["countOutput"] = True

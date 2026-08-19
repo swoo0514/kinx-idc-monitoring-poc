@@ -1,10 +1,4 @@
-"""Keep push 어댑터 — 봇 분석을 Keep 알림(enrichment)으로 전송.
-
-환경변수: KEEP_URL(예: http://<keep>:8080), KEEP_API_KEY(no-auth 모드는 아무 값이나 통과).
-KEEP_URL 없으면 skip(열화) — Keep 미배선 환경에서도 봇은 그대로 동작.
-Keep generic webhook(/alerts/event/keep)로 네이티브 형식 알림 전송, analysis/prejudge를
-커스텀 필드로 실어 운영자가 Keep 한 화면에서 분석을 보고 Run Workflow(승인)로 조치.
-Keep은 온프렘 저장소라 실 호스트 전송 무방(외부 LLM 마스킹 경계와 별개)."""
+"""Keep push 어댑터 — 봇 분석을 Keep 알림(enrichment)으로 전송."""
 
 import logging
 import os
@@ -23,20 +17,7 @@ def push_alert(name: str, sev: str, host: str, analysis: str,
                sources: str = "", extra: dict = None) -> dict:
     """분석 담은 알림을 Keep에 전송. 실패해도 예외를 던지지 않음(봇 흐름 보호).
     fingerprint 지정 시 Keep이 그 값으로 디듑 → 같은 사건은 한 행에 모임(홈즈 enrich 대상).
-    source: 빠른 봇 분석=kinx-bot / HolmesGPT 심층조사=holmesgpt 로 구분.
-    playbook: 조치 후보의 플레이북 논리명(데모 B). Keep 워크플로가 `{{ alert.playbook }}` 로
-    읽어 실행 대상을 고른다 — host·service 도 같은 방식으로 참조하므로 별도 필드가 필요 없다.
-    (근거: Keep 공식 문서 workflows/syntax/context — 임의 알림 속성을 템플릿으로 참조 가능)
-
-    prejudge·classes·alert_count 는 "반복 → 자동화 후보" 폐루프의 재료다(전략 방향 2).
-    prejudge 에는 반드시 **만성/재발/신규 판정**이 들어가야 한다. Keep 에서 이 값으로 필터·facet
-    해서 "무엇이 반복 최다인가"를 보고, 그것이 자동화 1순위가 된다. 병합 건수 같은 다른 값을
-    넣으면 필터가 통째로 무의미해진다(2026-07-29 이 자리에 "2건 병합"이 들어가고 있었다).
-    merge 는 병합 요약을 따로 담는 필드다.
-
-    sources 는 그 사건에서 **어느 축을 실제로 읽었는지**의 기록이다("logs:ok,security:ok").
-    G1 의 3상태 계약을 알림 레코드까지 끌고 온 것이다 — 이게 없으면 나중에 "이 사건은
-    로그를 보고 판단한 것인가"를 알 방법이 없다. 월간 리포트의 근거 커버리지가 여기서 나온다."""
+    source: 빠른 봇 분석=kinx-bot / HolmesGPT 심층조사=holmesgpt 로 구분."""
     url = os.environ.get("KEEP_URL", "").rstrip("/")
     if not url:
         log.info("[keep skipped: no KEEP_URL] %s", name)
@@ -57,8 +38,7 @@ def push_alert(name: str, sev: str, host: str, analysis: str,
         payload["merge"] = merge
     if sources:
         payload["sources"] = sources
-    # 워크플로가 `{{ alert.<키> }}` 로 읽을 임의 필드. 실행에 필요한 값을 알림에 실어
-    # 보내면 워크플로에 대상·수신자를 하드코딩하지 않아도 된다(데모 B 와 같은 방식).
+    # 워크플로가 `{{ alert.<키> }}` 로 읽을 임의 필드 — 대상·수신자를 하드코딩하지 않는다
     for k, v in (extra or {}).items():
         if v:
             payload[k] = v

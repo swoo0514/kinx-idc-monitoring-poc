@@ -1,8 +1,4 @@
-"""판정 이력 저장소와 그것을 쓰는 기능 검사.
-
-원본은 `selftest.py` 한 파일(6,801줄)이었다. 2026-08-19 에 영역별로
-나눴고 검사 내용은 그대로다.
-"""
+"""판정 이력 저장소와 그것을 쓰는 기능 검사."""
 
 import logging
 import asyncio
@@ -369,8 +365,7 @@ def _feedback_checks() -> int:
         store.init()
         jid = store.record_judgment({"fingerprint": "fp-a", "host": "h1"}, now=1000.0)
 
-        # ① 없는 판정·지문 불일치·모르는 축은 전부 실패로 끝난다.
-        #    워크플로는 종료코드로만 성패를 안다. 0 을 돌려주면 사람은 정정이 된 줄 안다.
+        # 워크플로는 종료코드로만 성패를 안다 — 0 을 돌려주면 사람은 정정이 된 줄 안다
         assert mark_judgment.run(jid=999999, fingerprint="fp-a", ok=False) != 0
         assert mark_judgment.run(jid=jid, fingerprint="다른지문", ok=False) != 0
         assert mark_judgment.run(jid=jid, fingerprint="fp-a", ok=False, axis="없는축") != 0
@@ -534,8 +529,7 @@ def _annotation_checks() -> int:
         grafana.httpx = _FakeHttpx()
         assert grafana.annotate("x", 0) is None
 
-        # ⑤ 주석은 판정 행에 남은 사건 시각을 그대로 쓴다. 다시 계산하면 발행 측이 시각을
-        #    안 실어 보낸 알림에서 분석에 걸린 시간만큼 밀린다(2026-08-12 랩 실측 21초).
+        # 주석은 판정 행의 사건 시각을 그대로 쓴다 — 다시 계산하면 분석에 걸린 만큼 밀린다
         import asyncio
         import time as _t
 
@@ -600,8 +594,7 @@ def _quality_checks() -> int:
                                "gate_fired": 1, "event_ts": T - 100,
                                "total_s": 99.0}, now=T - 100)
 
-        # ① 라벨이 하나도 없으면 정확도 칸에 백분율이 없어야 한다.
-        #    각주 붙은 92%는 슬라이드에 92%로 옮겨진다.
+        # 라벨이 하나도 없으면 정확도 칸에 백분율이 없어야 한다 — 각주는 슬라이드에서 떨어진다
         m = quality.collect(days=30, now=T)
         acc = quality.render_accuracy(m)
         assert "%" not in acc, "라벨 0건인데 백분율을 만들었다:\n%s" % acc
@@ -647,8 +640,7 @@ def _quality_checks() -> int:
         # ⑨ 보낼 키와 받을 아이템이 문자 단위로 같다. 어긋나면 전송은 성공인데 화면만 빈다.
         import io
         import re as _re
-        # checks/store.py → checks → gateway → bot → 리포 뿌리. 검사 파일이 한 단계
-        # 깊어졌으므로 그만큼 더 올라간다.
+        # checks/store.py → checks → gateway → bot → 리포 뿌리
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__)))))
         with io.open(os.path.join(root, "ansible", "quality_metrics.yml"),
@@ -807,8 +799,7 @@ def _dashboard_annotation_checks() -> int:
     import os
     import sys
 
-    # gateway/selftest.py → gateway → bot → 리포 뿌리. 한 겹만 세면 bot 안만 훑고
-    # 대시보드 JSON 은 검사 대상에서 통째로 빠진다.
+    # gateway/selftest.py → gateway → bot → 리포 뿌리
     here = os.path.abspath(__file__)
     root = os.path.dirname(os.path.dirname(os.path.dirname(here)))
     if not os.path.isdir(os.path.join(root, ".git")):
@@ -849,12 +840,7 @@ def _dashboard_annotation_checks() -> int:
 
 
 def _select_invariant_checks() -> int:
-    """무작위·극단 입력으로 불변 조건을 흔든다.
-
-    2026-08-13 에 상한 40줄짜리 선별기가 300줄을 내보내고 있었는데 검사는 통과했다.
-    사람이 상상한 입력만 넣었기 때문이다. 같은 줄이 같은 초에 겹치는 경우가 없었다.
-    아래는 그 형태를 포함해 무작위로 흔든다.
-    """
+    """무작위·극단 입력으로 불변 조건을 흔든다."""
     import random
 
     from ..alerts import collector as c
@@ -917,8 +903,7 @@ def _evidence_checks() -> int:
     blob = json.dumps(out, ensure_ascii=False)
     assert "logs_query" not in blob and 'host="h1"' not in blob, blob[:200]
 
-    # ② 판정 이력에 남고, 서술과 같은 시점에 지워진다. Loki 보존이 31일인데 판정 행은
-    #    90일이라, 오래된 참조를 눌러 0건이 나오면 "로그가 없었다"로 읽힌다.
+    # Loki 보존이 31일인데 판정 행은 90일이라 오래된 참조는 0건이 "없었다"로 읽힌다
     d = tempfile.mkdtemp(prefix="evi-")
     saved = store.PATH
     try:
@@ -944,8 +929,7 @@ def _evidence_checks() -> int:
         store.PATH = saved
         shutil.rmtree(d, ignore_errors=True)
 
-    # ④ Grafana 링크가 사건 시각 기준 절대 창이다. 지금은 게시 시각 기준 상대 창이라
-    #    재기동 후 대기 알림을 다시 넣으면 엉뚱한 구간이 열린다.
+    # Grafana 링크는 사건 시각 기준 절대 창 — 상대 창이면 재투입 때 엉뚱한 구간이 열린다
     saved_url = os.environ.get("GRAFANA_URL")
     os.environ["GRAFANA_URL"] = "http://g.local"
     try:

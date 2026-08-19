@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""사람이 요청한 분석 — 봇이 건너뛴 사건을 다시 돌린다.
-
-봇은 교차 신호가 없거나 심각도가 낮으면 분석하지 않는다. 그 판단이 늘 맞지는 않으므로
-관제 담당자가 필요하다고 보면 직접 요청할 수 있어야 한다. Keep 카드의 Run Workflow 가
-이 명령을 부른다.
-
-발동 조건을 건너뛴다. 봇이 안 하기로 한 것을 사람이 뒤집는 경로라서, 여기서 조건을
-다시 걸면 요청이 무시된다.
-
-사용:
-  python3 analyze_now.py --host customer-a --ref "zabbix-internal,103125,25384,replication"
-
---ref 는 Keep 카드의 analyze_ref 값이다. 알림이 여럿이면 `|` 로 이어진다.
-운영 기준은 bot/GATEWAY_GUIDE.md §8-5, 워크플로는 keep/KEEP_GUIDE.md.
-"""
+"""사람이 요청한 분석 — 봇이 건너뛴 사건을 다시 돌린다."""
 
 import argparse
 import asyncio

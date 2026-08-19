@@ -1,8 +1,4 @@
-"""태그 라우팅 — SEV·태그로 경로 결정.
-
-경로: resolve(복구) / drop / dashboard_only(SEV4) / digest(SEV3) /
-      triage(SEV1·2, 데모 C) / remediate(automate 태그, 데모 B).
-"""
+"""태그 라우팅 — SEV·태그로 경로 결정."""
 
 from . import severity
 
@@ -21,8 +17,7 @@ def decide(sev: str, tags: list, event_value: int = 1) -> dict:
     if sev == severity.SEV3:
         return {"route": "digest", "playbook": None}
 
-    # SEV1/2: automate 태그 + 계약 허용이면 remediate, 아니면 triage.
-    # scope 가 automate 를 이긴다 — 계약상 임의 조치가 금지된 대상이 실재한다.
+    # SEV1/2 는 automate 태그 + 계약 허용이면 remediate — scope 가 automate 를 이긴다
     playbook = tag_value(tags, AUTOMATE_TAG)
     scope = tag_value(tags, SCOPE_TAG)
     if playbook and scope != "notify_only":

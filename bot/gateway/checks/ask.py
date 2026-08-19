@@ -1,8 +1,4 @@
-"""질의 경로 검사 — 창구·도구·반복문·추적.
-
-원본은 `selftest.py` 한 파일(6,801줄)이었다. 2026-08-19 에 영역별로
-나눴고 검사 내용은 그대로다.
-"""
+"""질의 경로 검사 — 창구·도구·반복문·추적."""
 
 import logging
 import asyncio
@@ -23,12 +19,7 @@ log = logging.getLogger("gateway.selftest")
 
 
 def _ask_masking_checks() -> int:
-    """여러 턴에 걸쳐도 같은 이름이 같은 토큰인가 (대화형 질의의 선결 조건).
-
-    토큰이 턴마다 달라지면 모델은 같은 기계를 다른 기계로 읽는다. 더 나쁜 경우는
-    **같은 토큰이 다른 기계를 가리키는 것**이다 — 그때 사람은 되돌아온 이름을 사실로
-    읽는다.
-    """
+    """여러 턴에 걸쳐도 같은 이름이 같은 토큰인가 (대화형 질의의 선결 조건)."""
     from .. import masking, nametable, proxy
 
     # ① 이름은 이미 결정적이다. 표를 새로 만들어도 같은 토큰이어야 한다.
@@ -40,9 +31,7 @@ def _ask_masking_checks() -> int:
         b = proxy.build_masker()
         assert a._fwd["db-prod-01"] == b._fwd["db-prod-01"], "표가 바뀌자 토큰이 달라졌다"
 
-        # ② **해시 자릿수가 좁으면 충돌한다.** sha256[:6] 은 16진 6자리 = 약 1,678만
-        #    가지뿐이라 이름 3,708개에서 실제 충돌이 나왔다(2026-08-13 탐색).
-        #    충돌하면 `_rev` 가 덮여 역치환이 **다른 호스트 이름**을 돌려준다.
+        # 해시 6자리는 이름 3,708개에서 충돌한다 — 역치환이 다른 호스트를 돌려준다
         x, y = "host-1422.kinx.net", "host-3707.kinx.net"
         assert proxy.token_for("host", x) != proxy.token_for("host", y), (
             "6자리 시절 충돌 쌍이 여전히 같은 토큰이다 — 자릿수를 넓혀야 한다")
@@ -58,9 +47,7 @@ def _ask_masking_checks() -> int:
         finally:
             proxy.token_for = real
 
-        # ④ **IP 는 아직 일련번호다.** 1턴에 두 개가 나오면 [ip-1]·[ip-2] 인데,
-        #    3턴에 두 번째 것만 나오면 그게 [ip-1] 이 된다. 같은 토큰이 다른 기계를
-        #    가리킨다.
+        # IP 토큰은 일련번호라 턴이 바뀌면 같은 토큰이 다른 기계를 가리킨다
         nametable._terms = {}
         m1 = proxy.build_masker()
         m1.mask("10.0.0.1 과 10.0.0.2 에서 오류")
@@ -82,11 +69,7 @@ def _ask_masking_checks() -> int:
 
 
 def _ask_question_checks() -> int:
-    """사람이 자유롭게 친 질문을 어떻게 다루는가.
-
-    컨텍스트는 `build_llm_context` 화이트리스트가 지켜 준다. 질문 문자열에는 그런
-    보호가 없다 — 사람은 호스트명이든 IP든 계정명이든 아무거나 친다.
-    """
+    """사람이 자유롭게 친 질문을 어떻게 다루는가."""
     from .. import ask, nametable
 
     saved = dict(nametable._terms)
@@ -99,8 +82,7 @@ def _ask_question_checks() -> int:
         assert r["ok"], r
         assert "db-prod-01" not in r["text"] and "10.0.0.7" not in r["text"], r["text"]
 
-        # ② **가린 뒤에도 아는 이름이 남으면 보내지 않고 거절한다.** 낱말 경계 밖에
-        #    붙어 있으면 치환기가 못 잡는다. 조용히 내보내는 것보다 되묻는 것이 낫다.
+        # 가린 뒤에도 아는 이름이 남으면 보내지 않고 거절한다
         r = ask.sanitize_question("xdb-prod-01y 가 이상함", mk)
         assert not r["ok"] and r["reason"], r
 
@@ -115,9 +97,7 @@ def _ask_question_checks() -> int:
         # ⑤ 빈 질문은 거절
         assert not ask.sanitize_question("   ", mk)["ok"]
 
-        # ⑥ **표에서 이름이 빠져도 앞 턴의 토큰을 되돌릴 수 있어야 한다.**
-        #    이름 표는 1시간마다 다시 만들어진다. 대화 도중 갱신되면 앞 턴에 발행한
-        #    토큰이 표에 없어져 역치환이 안 되고, 사람은 토큰 문자열을 받는다.
+        # 이름 표가 1시간마다 새로 만들어져도 앞 턴에 발행한 토큰은 되돌아가야 한다
         tok = mk._fwd["db-prod-01"]
         ask.remember("s1", mk)
         nametable._terms = {}                      # 표에서 사라졌다
@@ -141,11 +121,7 @@ def _ask_question_checks() -> int:
 
 
 def _ask_scope_checks() -> int:
-    """질의가 닿을 수 있는 대상을 서버가 정하는가.
-
-    호출자가 신고한 값은 믿지 않는다. `/v1/messages` 의 테넌트 판정이
-    `metadata.user_id` 로 되어 있는데 그건 호출자가 채우는 값이라 격리 근거가 못 된다.
-    """
+    """질의가 닿을 수 있는 대상을 서버가 정하는가."""
     import os
 
     from .. import ask, registry
@@ -167,9 +143,7 @@ def _ask_scope_checks() -> int:
         ok, why = ask.target_allowed("zabbix-msp", "db01")
         assert not ok and why, (ok, why)
 
-        # ② **영역을 안 적은 소스는 거부가 기본이다.** 설정을 빠뜨린 사람이 가장
-        #    위험해지면 안 된다. `registry.realm()` 이 소스 이름을 그대로 돌려주므로
-        #    허용 목록에 없는 값이 되어 자동으로 막힌다.
+        # 영역을 안 적은 소스는 거부가 기본 — 설정을 빠뜨린 사람이 가장 위험하면 안 된다
         ok, why = ask.target_allowed("zabbix-etc", "db01")
         assert not ok, "영역 미기재 소스가 통과했다"
 
@@ -195,12 +169,7 @@ def _ask_scope_checks() -> int:
 
 
 def _ask_tool_checks() -> int:
-    """도구가 무엇을 조회할 수 있는가.
-
-    Zabbix 축에는 `.get` 아닌 메서드를 거부하는 검사가 있지만 Loki·Wazuh 에는 없다.
-    두 축의 등가물은 **호출자가 질의문을 못 주는 것**이다. 도구는 라벨·기간·문자열
-    필터만 받고 질의문은 코드가 만든다.
-    """
+    """도구가 무엇을 조회할 수 있는가."""
     from ..ask import tools as asktools
 
     # ① 창 길이는 상한을 넘지 못한다. 모델이 큰 값을 넣어도 잘린다.
@@ -208,9 +177,7 @@ def _ask_tool_checks() -> int:
     assert asktools.clamp_window(0) == asktools.WINDOW_DEFAULT_M
     assert asktools.clamp_window(30) == 30
 
-    # ①-b **절대 구간을 받는다.** 사람은 "8월 13일 12시" 를 보고 묻는데 도구에
-    #      상대 창만 있으면 모델이 '지금부터 N분' 으로 바꿔 **엉뚱한 날을 본다**
-    #      (2026-08-18 랩 실측: 8월 13일 화면을 보고 물었는데 8월 18일을 조회했다).
+    # 절대 구간을 받는다 — 상대 창만 있으면 모델이 엉뚱한 날을 본다
     assert asktools.parse_when("2026-08-13T02:56:26.163Z") == 1786589786
     assert asktools.parse_when(1786589786) == 1786589786
     assert asktools.parse_when("말도 안 되는 값") is None
@@ -225,9 +192,7 @@ def _ask_tool_checks() -> int:
                                      now=1787000000)
     assert (a, b) == (1786590000, 1786600000), (a, b)
 
-    # ①-c **구간을 골고루 보되 극단은 살린다.** 최신순으로 상한만큼만 받으면 긴
-    #      구간에서 앞부분이 통째로 잘려 **먼저 난 스파이크를 못 본다**
-    #      (2026-08-18 랩 실측: 4시간 구간에서 최근 1시간만 봤다).
+    # 구간을 골고루 보되 극단은 살린다 — 최신순 절단은 앞부분 스파이크를 버린다
     pts = [{"t": i, "v": 1.0} for i in range(600)]
     pts[10]["v"] = 99.0          # 앞쪽 스파이크
     pts[590]["v"] = 98.0         # 뒤쪽 스파이크
@@ -265,24 +230,20 @@ def _ask_tool_checks() -> int:
     assert not asktools.zbx_method_ok("user.get"), "목록 밖 조회를 허용했다"
     assert not asktools.zbx_method_ok("host.update")
 
-    # ⑥-a **규칙 그룹 조건은 조회에 건다.** 받아 온 50건 안에서 세면 그보다 많을 때
-    #      조용히 적게 센다. 대시보드 패널이 그룹으로 거르므로 같은 조건으로 세야 한다.
+    # 규칙 그룹 조건은 조회에 건다 — 받아 온 뒤 세면 조용히 적게 센다
     g = asktools.build_wazuh_query("vm-a.example", 60, 70, 0, "authentication_failed")
     assert {"term": {"rule.groups": "authentication_failed"}} in g["query"]["bool"]["filter"], g
     # 그룹을 안 주면 조건을 안 건다.
     plain = asktools.build_wazuh_query("vm-a.example", 60, 70, 0)
     assert all("rule.groups" not in str(f) for f in plain["query"]["bool"]["filter"]), plain
 
-    # ⑥-a-2 **"전체" 를 뜻하는 빈 값이 실제로 통과해야 한다.** 인자를 필수로 옮기면서
-    #        enum 에 빈 값을 안 넣으면, 설명은 "전체면 빈 문자열" 인데 모델이 그 값을
-    #        넣을 수 없다. 2026-08-19 실측: 그렇게 "열린 문제 전부" 가 막혔다.
+    # "전체"를 뜻하는 빈 값이 enum 에 있어야 모델이 실제로 넣을 수 있다
     for name in ("open_problems", "past_judgments"):
         prop = {t["name"]: t for t in asktools.build_tool_specs(
             {"[h-1]": {}})}[name]["input_schema"]["properties"]["host"]
         assert "" in (prop.get("enum") or []), (name, prop)
 
-    # ⑥-b **선택 인자 한도는 선택만 센다.** 지울 필요 없이 필수로 옮기면 자리가 난다.
-    #      항목을 지우면 기능이 없어지지만, 필수로 옮기면 모델이 매번 적을 뿐이다.
+    # 선택 인자 한도는 선택만 센다 — 지우지 않고 필수로 옮기면 자리가 난다
     names = {t["name"]: t for t in asktools.build_tool_specs({"[h]": {}})}
     for name, key in (("list_hosts", "query"), ("open_problems", "host"),
                       ("list_panels", "dashboard")):
@@ -302,18 +263,12 @@ def _ask_tool_checks() -> int:
 
 
 def _ask_result_checks() -> int:
-    """조회 결과가 사람에게 닿기까지 무엇이 사라지는가.
-
-    2026-08-18 랩 실측에서 봇이 "수집된 데이터가 없습니다" 라고 답했는데, 실제로는
-    보안 경보 50건이 왔고 그 50건이 전부 공백으로 채워져 있었다. 조회 실패가 아니라
-    **성공한 조회를 없음으로 바꾸는** 경로였다. 그런 경로만 모은다.
-    """
+    """조회 결과가 사람에게 닿기까지 무엇이 사라지는가."""
     from .. import masking, ask
     from ..alerts import collector
     from ..ask import tools as asktools
 
-    # (1) **Wazuh 응답은 중첩이고 화이트리스트는 평탄하다.** 옮기는 단계를 건너뛰면
-    #     50건이 전부 공백이 되고, 모델은 그것을 "기록 없음" 으로 읽는다.
+    # Wazuh 응답은 중첩이라 평탄화를 건너뛰면 50건이 전부 공백이 된다
     raw = {"@timestamp": "2026-07-20T01:00:00.000Z",
            "rule": {"level": 10, "id": "5710", "description": "SSH 로그인 실패",
                     "groups": ["authentication_failed", "sshd"]},
@@ -330,8 +285,7 @@ def _ask_result_checks() -> int:
     assert item["level"] == 10 and item["desc"], item
     assert not all(v is None for v in item.values()), "화이트리스트가 전부 공백이다"
 
-    # (2) **여러 낱말 중 하나를 찾는 필터.** 모델은 `a|b|c` 를 정규식으로 쓴다.
-    #     그것을 글자 그대로 찾으면 절대 안 맞고, 결과가 비어 "기록 없음" 이 된다.
+    # 모델은 a|b|c 를 정규식으로 쓴다 — 글자 그대로 찾으면 결과가 빈다
     q = asktools.build_logql("vm-a.example", "failed|invalid user")
     assert q == '{host="vm-a.example"} |~ "(failed|invalid user)"', q
     # 낱말 하나면 정규식으로 만들지 않는다
@@ -346,14 +300,12 @@ def _ask_result_checks() -> int:
         except ValueError:
             pass
 
-    # (3) **구간을 잘랐으면 잘랐다고 말한다.** 7일을 물었는데 1일만 보고 "없음" 이라
-    #     답하면 사람은 7일에 아무것도 없었다고 읽는다.
+    # 구간을 잘랐으면 잘랐다고 말한다 — 안 하면 "그 기간에 없었다"로 읽힌다
     T0 = 1786500000
     a, b, cut = asktools.window_bounds({"from": T0, "to": T0 + 30 * 86400}, now=T0)
     assert cut, "7일을 1일로 자르고도 알리지 않았다"
     assert b - a == asktools.WINDOW_MAX_M * 60, (a, b)
-    # **남기는 쪽은 최신이다.** 조회가 최신순 정렬이라 앞쪽을 남기면 사람이 보고 있는
-    # 화면의 오른쪽 끝이 통째로 빠진다.
+    # 남기는 쪽은 최신 — 조회가 최신순이라 앞을 남기면 화면 오른쪽 끝이 빠진다
     assert b == T0 + 30 * 86400, (a, b)
     a, b, cut = asktools.window_bounds({"from": T0, "to": T0 + 3600}, now=T0)
     assert not cut and b - a == 3600, (a, b, cut)
@@ -362,9 +314,7 @@ def _ask_result_checks() -> int:
                                        max_m=asktools.WINDOW_MAX_WIDE_M)
     assert not cut and b - a == 7 * 86400, (a, b, cut)
 
-    # (3)-b **상대 구간도 잘렸으면 잘렸다고 말한다.** 절대 구간에만 통지를 붙였더니
-    #       90일(window_m=129600)을 물은 요청이 조용히 하루가 됐고, 하루치를 줄인
-    #       24개 점을 모델이 "24일치"로 읽어 "90일간 건강하다"고 답했다(2026-08-18 실측).
+    # 상대 구간도 잘렸으면 말한다 — 90일 요청이 조용히 하루가 된 적이 있다
     a, b, cut = asktools.window_bounds({"window_m": 129600}, now=T0)
     assert cut, "90일을 하루로 자르고도 알리지 않았다"
     assert b - a == asktools.WINDOW_MAX_M * 60, (a, b)
@@ -374,13 +324,11 @@ def _ask_result_checks() -> int:
     a, b, cut = asktools.window_bounds({"at": T0, "window_m": 129600}, now=T0)
     assert cut, "시점 앞뒤 구간을 자르고도 알리지 않았다"
 
-    # (3)-c **실제로 본 구간을 사람이 읽는 형태로 함께 준다.** 잘렸는지만 알려서는
-    #       모델이 몇 시부터 몇 시까지를 봤는지 모른다.
+    # 실제로 본 구간을 사람이 읽는 형태로 함께 준다
     span = asktools.window_label(T0, T0 + 86400)
     assert "2026" in span and "~" not in span, span
 
-    # (3)-d **긴 구간은 추세(trend)로 본다.** 이력은 보관 기간이 짧아 90일을 물으면
-    #       비거나 잘린다. 사람이 "90일 추이" 를 묻는 것은 정상적인 요구다.
+    # 긴 구간은 추세로 본다 — 이력은 보관 기간이 짧아 90일이면 비거나 잘린다
     assert asktools.zbx_method_ok("trend.get"), "추세 조회를 막고 있다"
     assert asktools.use_trend(1786500000, 1786500000 + 86400) is False
     assert asktools.use_trend(1786500000, 1786500000 + 30 * 86400) is True
@@ -389,16 +337,12 @@ def _ask_result_checks() -> int:
                                        max_m=asktools.WINDOW_MAX_TREND_M)
     assert not cut and b - a == 90 * 86400, (a, b, cut)
 
-    # (3)-d-1 **패널은 번호로 가리킨다.** 화면이 넘긴 번호를 그대로 쓰고, 다른 패널은
-    #         list_panels 가 준 손잡이로 가리킨다. 제목으로 찾는 길은 아예 없앴다 —
-    #         그 길이 있는 한 이름이 비슷한 옆 패널이 계속 걸린다(2026-08-18 실측:
-    #         "인증 활동" 을 보고 물었는데 "보안 이벤트" 가 그려졌고, 다른 대시보드를
-    #         물었을 때는 보고 있던 대시보드에서 찾아 놓고 "없다" 고 답했다).
+    # 패널은 번호로만 가리킨다 — 제목으로 찾으면 이름이 비슷한 옆 패널이 걸린다 (§31-5)
     ctx = {"uid": "kinx-overview", "panelId": 12, "title": "인증 활동 (Wazuh)"}
     assert asktools.panel_pick(ctx) == ("kinx-overview", 12)
     assert asktools.panel_pick({"uid": "kinx-overview"}) == (None, None)
     assert asktools.panel_pick(None) == (None, None)
-    # 손잡이는 이번 턴 안에서만 뜻이 있고, 대시보드 식별자는 모델에 안 간다.
+    # 표시는 이번 턴 안에서만 뜻이 있고, 대시보드 식별자는 모델에 안 간다.
     import json as _js
     refs = {}
     shown = asktools.panel_refs(
@@ -414,43 +358,34 @@ def _ask_result_checks() -> int:
     assert refs["pnl-1"] == ("u-msp", 16, "인증 활동"), refs
     assert "u-msp" not in _js.dumps(shown, ensure_ascii=False)
 
-    # (3)-d-2 **`at` 을 없앤다.** 모델이 90일 추이를 물을 때 window_m 대신 at 을 고르고
-    #         엉뚱한 시점을 반복해서 라운드를 태웠다(2026-08-18 랩 실측 두 번). from/to 가
-    #         특정 시점을, window_m 이 최근 기간을 덮으므로 at 은 덫이기만 하다.
+    # at 은 없앤다 — from/to 와 window_m 이 덮으므로 덫이기만 하다
     for t in asktools.build_tool_specs({"[h]": {}}):
         assert "at" not in t["input_schema"]["properties"], t["name"]
 
-    # (3)-e **못 읽은 시각을 말해 준다.** 조용히 기본 창으로 떨어지면 모델은 잘못 물은
-    #       줄 모르고 같은 실수를 반복한다. 2026-08-18 랩 실측: 시각 인자에 90 을 넣고
-    #       네 번 되풀이하며 라운드를 다 썼다. 지금 시각 인자는 `range` 하나다.
+    # 못 읽은 시각을 말해 준다 — 조용히 기본 창으로 떨어지면 같은 실수를 반복한다
     assert asktools.bad_when({"range": "90"}), "못 읽은 시각을 알리지 않았다"
     assert not asktools.bad_when({"range": "%d ~ %d" % (T0, T0 + 600)})
     assert not asktools.bad_when({"window_m": 129600})
     assert "range" in asktools.when_note({"range": "어제쯤"})
     assert asktools.when_note({"range": "%d ~ %d" % (T0, T0 + 600)}) == ""
 
-    # (3)-f **구간에 값이 없으면 그 자리에서 말한다.** 조회는 성공했고 아이템도 있는데
-    #       점이 0개면 구간을 잘못 고른 것이다. 안 알리면 모델은 현재 값만 보고 답한다
-    #       (2026-08-18 랩 실측: 2025년 1월을 보고 "현재 0초" 로 답했다).
+    # 구간에 값이 없으면 그 자리에서 말한다 — 안 알리면 현재 값만 보고 답한다
     out = asktools.note_if_no_points(
         {"metrics": [{"name": "repl", "sampled_from": 0, "last": "0"}], "status": "ok"})
     assert "window_m" in (out.get("note") or ""), out
     keep = {"metrics": [{"name": "repl", "sampled_from": 120}], "status": "ok"}
     assert not (asktools.note_if_no_points(keep).get("note") or "")
 
-    # (4) **잘린 사실은 도구 결과에 실린다.** 프롬프트가 아니라 결과에 실어야
-    #     모델이 답에 옮긴다.
+    # 잘린 사실은 프롬프트가 아니라 도구 결과에 실어야 모델이 답에 옮긴다
     note = asktools.cut_note(True, 1440)
     assert note and "1일" in note and "최근" in note, note
     assert asktools.cut_note(False, 1440) == ""
 
-    # (5) 그림 손잡이를 걷어내고 남은 빈 괄호까지 정리한다. "패널()의" 가 화면에
-    #     그대로 나왔다(2026-08-18 실측).
+    # 그림 표시를 걷어낸 뒤 남는 빈 괄호까지 정리한다
     assert ask.strip_handles("패널(img-6598)의 그래프") == "패널의 그래프"
     assert ask.strip_handles("패널 [img-6598] 참고") == "패널 참고"
     assert ask.strip_handles("image-6598 은 그대로") == "image-6598 은 그대로"
-    # 마크다운 그림 표기를 통째로 걷어 낸다. 손잡이만 빼면 `![image]()` 같은 깨진
-    # 표기가 남아 화면에 "!(image)" 로 찍힌다(2026-08-18 실측).
+    # 마크다운 그림 표기를 통째로 걷어 낸다 — 표시만 빼면 깨진 표기가 남는다
     assert ask.strip_handles("![image](img-6598)" + chr(10) + "90일 추이") == "90일 추이"
     assert ask.strip_handles("보기: ![복제 지연]([img-6598])") == "보기:"
     return 24
@@ -460,15 +395,7 @@ def _ask_result_checks() -> int:
 
 
 def _tool_schema_checks() -> int:
-    """도구 스키마가 모델이 고를 수 있는 값을 얼마나 좁히는가.
-
-    프롬프트로 "지어내지 마라" 라고 부탁하는 것과, 스키마가 값의 집합을 좁히는 것은
-    다르다. 부탁은 지켜지기도 하고 안 지켜지기도 하지만 스키마는 표현 자체를 막는다.
-    2026-08-18 랩에서 봇이 없는 보관 정책을 지어내고 24개 점을 "24일치" 로 읽었다.
-
-    **접두사 안정성도 여기서 지킨다.** 도구 정의는 프롬프트 맨 앞에 놓이므로 바이트가
-    흔들리면 캐시가 영영 안 걸린다.
-    """
+    """도구 스키마가 모델이 고를 수 있는 값을 얼마나 좁히는가."""
     import json
 
     from ..ask import tools as asktools
@@ -482,8 +409,7 @@ def _tool_schema_checks() -> int:
         enum = by_name[name]["input_schema"]["properties"]["host"].get("enum")
         assert enum == ["[host-a]", "[host-b]"], (name, enum)
 
-    # ② **같은 표는 같은 바이트를 만든다.** 정렬을 빠뜨리면 매 요청 접두사가 달라져
-    #    캐시가 한 번도 안 걸린다(조용히 실패한다).
+    # 같은 표는 같은 바이트를 만든다 — 정렬을 빠뜨리면 캐시가 한 번도 안 걸린다
     other = {"[host-a]": {"host": "a1"}, "[host-b]": {"host": "b1"}}   # 순서만 다름
     assert (json.dumps(specs, ensure_ascii=False, sort_keys=True)
             == json.dumps(asktools.build_tool_specs(other), ensure_ascii=False,
@@ -499,15 +425,14 @@ def _tool_schema_checks() -> int:
         assert t.get("strict") is True, t["name"]
         assert t["input_schema"].get("additionalProperties") is False, t["name"]
 
-    # ⑤ **답도 도구로 받는다.** 산문으로 받으면 손잡이가 글자로 남고 구간이 지어내진다.
+    # ⑤ **답도 도구로 받는다.** 산문으로 받으면 표시가 글자로 남고 구간이 지어내진다.
     ans = by_name["answer"]
     props = ans["input_schema"]["properties"]
     for field in ("summary", "window_utc", "findings", "image_ids"):
         assert field in props, field
     assert "summary" in ans["input_schema"]["required"]
 
-    # ⑥ 턴 중에 생기는 값(그림 손잡이·조회 구간)은 enum 으로 못 묶는다. 묶으면 도구
-    #    정의가 라운드마다 바뀌어 캐시가 죽는다. 그래서 **코드가 검증한다.**
+    # 턴 중에 생기는 값은 enum 으로 못 묶는다 — 정의가 바뀌면 캐시가 죽는다
     seen_windows = {"2026-08-15 04:44 → 2026-08-18 04:44 UTC"}
     ok, why = asktools.check_answer(
         {"summary": "정상", "window_utc": "2026-08-15 04:44 → 2026-08-18 04:44 UTC",
@@ -535,16 +460,11 @@ def _tool_schema_checks() -> int:
 
 
 def _cache_checks() -> int:
-    """프롬프트 캐싱이 실제로 걸릴 모양인가.
-
-    캐싱은 접두사 일치다. 앞에서 한 바이트만 달라져도 그 뒤 전부가 캐시에서 빠진다.
-    걸리지 않아도 오류가 나지 않으므로 **조용히 비용만 낸다.** 그래서 모양을 검사로 잠근다.
-    """
+    """프롬프트 캐싱이 실제로 걸릴 모양인가."""
     from .. import llm, store
     from ..ask import tools as asktools
 
-    # ① 시스템 문구를 블록으로 감싸고 마지막 블록에 표시를 단다. 렌더 순서가
-    #    도구 → 시스템 → 대화라서 이 한 곳이 도구와 시스템을 함께 캐시한다.
+    # 렌더 순서가 도구 → 시스템 → 대화라 이 한 곳이 둘을 함께 캐시한다
     blocks = llm.cached_system("긴 시스템 문구")
     assert isinstance(blocks, list) and blocks[-1]["cache_control"]["type"] == "ephemeral"
     assert blocks[-1]["text"] == "긴 시스템 문구"
@@ -569,8 +489,7 @@ def _cache_checks() -> int:
                    ensure_ascii=False)
     assert a == b, "도구 정의가 요청마다 달라진다. 캐시가 한 번도 안 걸린다"
 
-    # ④ **캐시 토큰을 따로 센다.** 읽기는 정가의 0.1배, 쓰기는 1.25배라 입력에 뭉뚱그리면
-    #    절감분이 숫자에 안 나타난다.
+    # 캐시 토큰을 따로 센다 — 읽기 0.1배·쓰기 1.25배라 뭉뚱그리면 절감이 안 보인다
     import tempfile
     d = tempfile.mkdtemp(prefix="cache-")
     saved_path = store.PATH
@@ -596,14 +515,7 @@ def _cache_checks() -> int:
 
 
 def _model_tier_checks() -> int:
-    """호출 용도마다 모델 등급을 나눌 수 있는가.
-
-    나누는 자리는 **서로 다른 호출 사이**뿐이다. 한 대화 안에서 모델을 바꾸면 캐시가
-    모델별로 잡히므로 도구·시스템·대화 캐시가 통째로 무효가 된다(공식 문서 확인).
-
-    그리고 판단은 싼 모델에 맡기지 않는다. 2026-08-13 실측으로 haiku 는 복제 지연 회신에
-    `RESET SLAVE` 를 권했고 opus 는 금지를 명시했다(llm.py 주석).
-    """
+    """호출 용도마다 모델 등급을 나눌 수 있는가."""
     import os
 
     from .. import llm
@@ -643,18 +555,10 @@ def _model_tier_checks() -> int:
 
 
 def _graph_state_checks() -> int:
-    """그래프 상태가 스스로를 검사하는가.
-
-    동기분 코드(`InvestigationState.validate_graph_invariants`)는 단계마다 상태를 검증해
-    없는 증거를 참조하거나 개수가 어긋난 상태를 그 자리에서 실패시킨다. 우리 상태에도
-    같은 것을 둔다. 어긋난 상태로 계속 돌면 사람은 틀린 답을 정상으로 읽는다.
-
-    langgraph 없이도 도는 순수 함수라 개발 PC 에서도 검사된다.
-    """
+    """그래프 상태가 스스로를 검사하는가."""
     from ..ask import graph
 
-    # ⓪ **무거운 임포트를 기동 때 끝낸다.** 첫 질의가 그 값을 뒤집어쓰면 사람은 화면에서
-    #    502 를 본다(2026-08-18 실측: langgraph 첫 임포트 95초, Grafana 프록시가 먼저 끊음).
+    # 무거운 임포트를 기동 때 끝낸다 — 첫 질의가 뒤집어쓰면 화면에 502 가 뜬다
     assert graph.warmup() in (True, False)
     assert graph.warmup() is graph.warmup()      # 두 번 불러도 같은 답
 
@@ -662,8 +566,7 @@ def _graph_state_checks() -> int:
           "spent": 10, "stopped": ""}
     assert graph.check_state(ok) == ""
 
-    # ① 조회 기록과 중복 차단 표의 개수가 어긋나면 안 된다. 어긋나면 같은 조회를
-    #    두 번 하거나 추적에서 한 건이 사라진 것이다.
+    # 조회 기록과 중복 차단 표의 개수가 어긋나면 안 된다
     bad = dict(ok, called={"k": 1, "k2": 2})
     assert "조회" in graph.check_state(bad), graph.check_state(bad)
 
@@ -679,8 +582,7 @@ def _graph_state_checks() -> int:
     for good in ("", "budget", "llm_failed"):
         assert graph.check_state(dict(ok, stopped=good)) == "", good
 
-    # ④-b **답 도구는 조회 상한에 안 센다.** 답은 조사가 아니라 마무리다. 세면 조사할 수
-    #      있는 횟수가 하나 줄고, 그만큼 답이 얕아진다(2026-08-18 실측: rounds 로 끝났다).
+    # 답 도구는 조회 상한에 안 센다 — 세면 조사할 수 있는 횟수가 하나 준다
     from ..ask import tools as asktools
     assert asktools.query_count([{"tool": "host_logs"}, {"tool": "answer"}]) == 1
     assert asktools.query_count([{"tool": "answer"}]) == 0
@@ -710,12 +612,7 @@ def _graph_state_checks() -> int:
 
 
 def _prompt_file_checks() -> int:
-    """프롬프트를 파일에서 읽는가.
-
-    동기분 코드는 노드마다 프롬프트를 .md 한 장으로 둔다. 코드를 안 건드리고 문구만
-    고칠 수 있다. 다만 **파일이 없다고 기동을 막으면 안 된다** — 배포에서 파일 하나가
-    빠졌다고 봇 전체가 죽는 것이 문구가 조금 옛것인 것보다 나쁘다.
-    """
+    """프롬프트를 파일에서 읽는가."""
     import os
     import tempfile
 
@@ -735,8 +632,7 @@ def _prompt_file_checks() -> int:
         prompts.forget()
         assert prompts.load("ask", "예비 문구") == "파일에서 온 문구"
 
-        # ③ **실행 중에 다시 읽지 않는다.** 문구가 바뀌면 캐시 접두사가 바뀌어 그때까지
-        #    쌓인 캐시가 통째로 무효가 된다.
+        # 실행 중에 다시 읽지 않는다 — 문구가 바뀌면 쌓인 캐시가 통째로 무효가 된다
         with open(os.path.join(d, "ask.md"), "w", encoding="utf-8") as f:
             f.write("몰래 바뀐 문구" + chr(10))
         assert prompts.load("ask", "예비 문구") == "파일에서 온 문구"
@@ -756,12 +652,7 @@ def _prompt_file_checks() -> int:
 
 
 def _panel_route_checks() -> int:
-    """보고 있는 패널이 **실경로로** 그려지는가, 그리고 다른 패널을 가리킬 수 있는가.
-
-    `panel_pick` 을 직접 부르는 검사와 `panel_fn` 을 주입하는 검사만 있으면
-    `run_ask → fetch_panel` 사이가 안 지나간다. 2026-08-18 에 그 사이에 중복 대입이
-    있어 수정이 한 줄도 실행되지 않았는데 검사는 전부 통과했다.
-    """
+    """보고 있는 패널이 **실경로로** 그려지는가, 그리고 다른 패널을 가리킬 수 있는가."""
     import asyncio
 
     from .. import ask, nametable
@@ -801,28 +692,24 @@ def _panel_route_checks() -> int:
         assert not calls, "번호를 쥐고도 목록을 뒤졌다: %r" % (calls,)
         assert r["images"] and "/render/d-solo/kinx-overview/" in r["images"][0]["url"],             r["images"]
         assert "panelId=12" in r["images"][0]["url"], r["images"][0]["url"]
-        # **화면이 준 호스트 값을 쓴다.** Zabbix 축 이름을 넣으면 Loki·Wazuh 패널이
-        # 빈 그래프가 되고 사람은 "아무 일도 없었다" 로 읽는다.
+        # 화면이 준 호스트 값을 쓴다 — Zabbix 축 이름을 넣으면 Loki·Wazuh 가 빈다
         r2 = asyncio.run(ask.run_ask("이 패널", table=table, model_fn=model,
                                      panel={"uid": "u1", "panelId": 3,
                                             "title": "t", "host": "web-01.example"}))
         assert "web-01.example" in r2["images"][0]["url"], r2["images"][0]["url"]
 
-        # ①-b **행 안에 접힌 패널도 목록에 든다.** 최상위만 보면 사람이 펼쳐 본 패널을
-        #      "없다" 고 답한다.
+        # 행 안에 접힌 패널도 목록에 든다
         nested = [{"type": "row", "title": "묶음", "panels": [
             {"type": "timeseries", "title": "복제 지연", "id": 7}]}]
         assert [x["id"] for x in grafana._flatten(nested) if x.get("id")] == [7]
         assert grafana._flatten(None) == []
 
-        # ①-c **선택 인자 수 한도.** 넘기면 API 가 호출을 통째로 거부한다. 인자를 하나
-        #      더했다가 모든 질의가 400 으로 죽었다(2026-08-18 실측).
+        # 선택 인자 수 한도 — 넘기면 API 가 호출을 통째로 거부한다
         n = asktools.optional_params(asktools.build_tool_specs(table))
         assert n <= asktools.OPTIONAL_PARAM_MAX, "선택 인자가 %d개다 (한도 %d)" % (
             n, asktools.OPTIONAL_PARAM_MAX)
 
-        # ② **다른 대시보드 패널은 목록을 받아 손잡이로 가리킨다.** 제목을 넘기는 길이
-        #    없으므로 이름이 비슷한 옆 패널이 걸릴 수 없다.
+        # 다른 대시보드 패널은 목록을 받아 번호로 가리킨다
         seen = {}
 
         def model2(system, messages, tools):
@@ -843,7 +730,7 @@ def _panel_route_checks() -> int:
                                      panel={"uid": "kinx-overview", "panelId": 12,
                                             "title": "인증 활동"}))
         assert calls == ["월간 리포트"], calls
-        # 목록에는 손잡이와 제목만 간다. 대시보드 식별자는 서버가 들고 있는다.
+        # 목록에는 표시와 제목만 간다. 대시보드 식별자는 서버가 들고 있는다.
         assert "pnl-1" in seen["blob"] and "u-msp" not in seen["blob"], seen["blob"][:200]
         # 이름 표를 거치므로 제목에도 질의문에도 실명이 그대로 나가지 않는다.
         assert "web-01" not in seen["blob"], seen["blob"][:200]
@@ -851,7 +738,7 @@ def _panel_route_checks() -> int:
         assert r3["images"] and "/render/d-solo/u-msp/" in r3["images"][0]["url"], r3["images"]
         assert "panelId=16" in r3["images"][0]["url"], r3["images"][0]["url"]
 
-        # ③ **모르는 손잡이는 거부한다.** 모델이 지어내면 엉뚱한 패널이 그려진다.
+        # ③ **모르는 표시는 거부한다.** 모델이 지어내면 엉뚱한 패널이 그려진다.
         def model3(system, messages, tools):
             if len(messages) == 1:
                 return {"stop_reason": "tool_use", "content": [
@@ -864,7 +751,7 @@ def _panel_route_checks() -> int:
         assert not r4["images"], r4["images"]
         assert "list_panels" in r4["trace"][0]["error"], r4["trace"][0]
 
-        # ④ 화면 맥락도 손잡이도 없으면 무엇을 하라고 알린다.
+        # ④ 화면 맥락도 패널 번호도 없으면 무엇을 하라고 알린다.
         r5 = asyncio.run(ask.run_ask("이 패널 뭐야", table=table, model_fn=model))
         assert not r5["images"], r5["images"]
         assert "list_panels" in r5["trace"][0]["error"], r5["trace"][0]
@@ -879,13 +766,7 @@ def _panel_route_checks() -> int:
 
 
 def _item_rank_checks() -> int:
-    """이름으로 아이템을 고를 때 정작 원하는 것이 빠지지 않는가.
-
-    2026-08-18 랩 실측: `cpu` 로 찾으면 17개가 걸리는데 정렬이 가나다순이라 앞 5개가
-    guest·idle·interrupt·iowait·nice 로 채워지고 **`CPU utilization` 이 한 번도 안
-    들어온다.** 사람이 "CPU 사용률 어때" 를 물으면 봇은 idle 시간을 보고 답한다.
-    잘렸다는 말도 없었다.
-    """
+    """이름으로 아이템을 고를 때 정작 원하는 것이 빠지지 않는가."""
     from ..ask import tools as asktools
 
     names = ["CPU guest nice time", "CPU guest time", "CPU idle time",
@@ -924,15 +805,7 @@ def _item_rank_checks() -> int:
 
 
 def _panel_window_checks() -> int:
-    """사람이 보던 구간이 도구까지 가는가.
-
-    화면은 `from`·`to` 를 이미 넘겨 준다. 그런데 도구는 모델이 그 값을 인자로 **다시 적어
-    넣기를** 기다린다. 모델이 안 적으면 조용히 기본 창(최근 1시간)으로 떨어진다.
-    2026-08-18 실측: 8월 11일~13일 패널을 보고 물었는데 최근 1시간만 조회하고 "과거 구간
-    조회가 불가능합니다" 라고 답했다. 붙은 그림도 최근 1시간이었다.
-
-    구간을 쥐고 있으면서 모델에게 받아 적으라고 시키지 않는다.
-    """
+    """사람이 보던 구간이 도구까지 가는가."""
     from ..ask import tools as asktools
 
     T0, T1 = 1786475892, 1786627941      # 2026-08-11 19:18 ~ 08-13 13:32
@@ -957,9 +830,7 @@ def _panel_window_checks() -> int:
                                        default_span=(T0, T1))
     assert cut and b - a == 3600, (a, b, cut)
 
-    # ③-a-2 **절대 구간은 인자 하나로 받는다.** 도구 네 개에 시작·끝 두 개씩이면 정의가
-    #        커져 API 가 "Schema is too complex for compilation" 으로 **모든 질의를**
-    #        거부한다(2026-08-19 랩 실측). 하나로 합치니 통과한다.
+    # 절대 구간은 인자 하나로 받는다 — 둘로 나누면 스키마가 커져 전부 거부된다
     for t in asktools.build_tool_specs({"[h]": {}}):
         props = t["input_schema"]["properties"]
         assert "from" not in props and "to" not in props, t["name"]
@@ -970,9 +841,7 @@ def _panel_window_checks() -> int:
     # 못 읽으면 지어내지 않고 알린다.
     assert "range" in asktools.bad_when({"range": "어제쯤"}), asktools.bad_when({"range": "어제쯤"})
 
-    # ③-b **모델이 스스로 창을 넣으면** 화면 구간이 안 쓰인다. 그 자체는 옳지만,
-    #      모델이 최근 창 결과를 받고 "과거는 조회 불가" 라고 단정한 일이 있었다
-    #      (2026-08-18 실측). 되부르는 법을 결과에 적는다.
+    # 모델이 스스로 창을 넣었을 때 되부르는 법을 결과에 적는다
     note = asktools.span_note(1787000000 - 3600, 1787000000, default)
     assert "시간 인자를 모두 비우고" in note, note
     assert not asktools.span_note(T0, T1, default)      # 같은 구간이면 안 붙인다
@@ -991,9 +860,7 @@ def _panel_window_checks() -> int:
     assert "앞부분은 안 들어왔다" in capped["note"], capped
     assert not (asktools.note_if_capped({"logs": [], "fetched": 3}).get("note"))
 
-    # ③-d **화면 없이 글만 붙여 넣는 경우.** 패널 맥락이 아예 안 오고 도구는 최근 창을
-    #      본다. 2026-08-18 실측(게이트웨이 로그 `ask panel keys=[]`): 답은 8월 11~13일을
-    #      말하는데 붙은 그림은 최근 1시간의 남의 대시보드 패널이었다.
+    # 화면 없이 글만 붙여 넣는 경우 — 패널 맥락이 아예 안 온다
     q = ('지금 대시보드 "KINX 통합 관제" 의 "인증 활동" 패널을 보고 있습니다 '
          "(구간 2026-08-11T19:18:12.679Z ~ 2026-08-13T13:32:21.164Z).")
     assert asktools.span_in_text(q) == (T0, T1), asktools.span_in_text(q)
@@ -1004,9 +871,7 @@ def _panel_window_checks() -> int:
     a, b, cut = asktools.window_bounds({}, now=1787000000)
     assert b == 1787000000, (a, b)
 
-    # ⑤ **실경로로 확인한다.** 위 넷은 함수를 직접 부르는 검사라, `run_ask` 가 화면
-    #    구간을 컨텍스트에 안 넣으면 전부 통과하면서 실제로는 최근 1시간이 그려진다.
-    #    2026-08-18 에 패널 번호 수정이 중복 대입에 묻혀 죽었던 것과 같은 모양이다.
+    # 실경로로 확인한다 — 함수를 직접 부르는 검사는 배선이 빠져도 통과한다
     import asyncio
 
     from .. import ask
@@ -1035,12 +900,7 @@ def _panel_window_checks() -> int:
 
 
 def _cap_answer_checks() -> int:
-    """상한에 닿았을 때 사람이 답을 받는가.
-
-    2026-08-18 랩 실측: 라운드를 다 쓴 질의의 회신이 "레벨을 더 낮춰서 전체 보안
-    이벤트를 확인하겠습니다." 한 줄이었다. 조회를 열 번 했는데 그 결과가 사람에게
-    하나도 안 갔다. 상한에 닿으면 조회 도구를 빼고 한 번 더 불러 답을 받는다.
-    """
+    """상한에 닿았을 때 사람이 답을 받는가."""
     import asyncio
 
     from .. import ask
@@ -1082,8 +942,7 @@ def _cap_answer_checks() -> int:
     r2 = asyncio.run(ask.run_ask("이 구간 어땠어", table=table, model_fn=dead))
     assert "상한" in r2["text"] and "security_alerts" in r2["text"], r2["text"]
 
-    # 결과가 안 붙은 도구 요청은 걷어 내고 보낸다. 그대로 보내면 Anthropic 이 400 으로
-    # 거부하고 마무리 호출이 통째로 실패한다(2026-08-18 랩 실측).
+    # 결과가 안 붙은 도구 요청은 걷어 낸다 — 그대로 보내면 400 이다
     hang = [{"role": "user", "content": "질문"},
             {"role": "assistant", "content": [{"type": "tool_use", "id": "x",
                                                "name": "security_alerts", "input": {}}]}]
@@ -1102,16 +961,7 @@ def _cap_answer_checks() -> int:
 
 
 def _usage_metadata_checks() -> int:
-    """추적 화면에 토큰 수와 비용이 뜨는가.
-
-    우리 모델 자리는 직접 만든 것이라 응답을 프레임워크 메시지로 옮길 때 토큰 수를
-    같이 실어야 한다. `response_metadata` 에만 넣으면 랭스미스가 못 읽어 **추적은 뜨는데
-    토큰과 비용 칸이 빈다**(2026-08-19 확인). 비용을 보려고 켠 것이므로 그러면 켠 뜻이
-    없다.
-
-    수치는 랭체인 규약을 따른다 — 입력 토큰에 캐시 읽기·쓰기를 포함하고, 그 내역을
-    input_token_details 에 나눠 적는다. 그래야 다른 모델과 나란히 볼 수 있다.
-    """
+    """추적 화면에 토큰 수와 비용이 뜨는가."""
     from ..ask import graph
 
     if not graph.available():
@@ -1122,8 +972,7 @@ def _usage_metadata_checks() -> int:
         "usage": {"input_tokens": 326, "output_tokens": 12,
                   "cache_read_input_tokens": 8803, "cache_creation_input_tokens": 0},
     })
-    # **모델 이름이 없으면 개수는 떠도 단가를 모른다.** 토큰만 싣고 끝내면 비용 칸이
-    # 비고, 그러면 비용을 보려고 켠 뜻이 없다.
+    # 모델 이름이 없으면 개수는 떠도 단가를 몰라 비용 칸이 빈다
     rm = getattr(msg, "response_metadata", None) or {}
     assert rm.get("ls_model_name") == "claude-haiku-4-5-20251001", rm
     assert rm.get("ls_provider") == "anthropic", rm
@@ -1136,9 +985,7 @@ def _usage_metadata_checks() -> int:
     # 사용량이 안 실려 온 응답에서도 터지지 않는다.
     assert graph.to_ai_message({"content": []}) is not None
 
-    # **모델 이름은 run 의 메타데이터로 가야 한다.** 메시지에만 적으면 화면이 못 읽어
-    # 비용이 안 잡힌다. 기본 구현은 클래스 이름에서 공급자를 뽑고(GatewayChat →
-    # gateway) 모델 이름은 비워 둔다(2026-08-19 실측).
+    # 모델 이름은 run 메타데이터로 가야 한다 — 기본 구현은 비워 둔다
     import os
 
     saved = os.environ.get("LLM_MODEL_INVESTIGATE")
@@ -1159,12 +1006,7 @@ def _usage_metadata_checks() -> int:
 
 
 def _tracing_checks() -> int:
-    """추적을 켜고 끄는 스위치가 실제로 동작하는가.
-
-    랭스미스는 **외부로 값이 한 벌 더 나가는 지점**이다. 기본은 꺼져 있어야 하고, 켜는
-    것은 운영자가 파일에 적을 때만이어야 한다. 라이브러리가 없거나 키가 없어도 질의는
-    그대로 돌아야 한다 — 선택 의존이다.
-    """
+    """추적을 켜고 끄는 스위치가 실제로 동작하는가."""
     import os
 
     from .. import tracing
@@ -1203,12 +1045,7 @@ def _tracing_checks() -> int:
 
 
 def _list_truncation_checks() -> int:
-    """목록이 잘렸을 때 그 사실을 말하는가.
-
-    보안 경보에는 총 건수를 실었는데(§A-3) 열린 문제와 호스트 목록에는 안 실려 있었다.
-    열린 문제는 소스당 50건에서 자르고 호스트 목록은 100개에서 자르는데 둘 다 말이 없다.
-    실환경 사내 Zabbix 는 Warning 노이즈로 열린 문제가 50건을 쉽게 넘는다.
-    """
+    """목록이 잘렸을 때 그 사실을 말하는가."""
     import asyncio
 
     from .. import ask
@@ -1225,9 +1062,7 @@ def _list_truncation_checks() -> int:
     out2 = ask.problems_result(rows[:3], None, total=3)
     assert not (out2.get("note") or ""), out2
 
-    # ①-b **총계를 세는 호출에 빈 값을 넣지 않는다.** Zabbix 는 `output: None` 을 거부해
-    #      조회 전체가 실패한다(2026-08-19 랩 실측: Invalid parameter "/output").
-    #      가짜 클라이언트는 아무거나 받으므로 인자 자체를 본다.
+    # 총계를 세는 호출에 빈 값을 넣지 않는다 — Zabbix 가 output: None 을 거부한다
     class _Spy:
         def __init__(self, source=""):
             self.calls = []
@@ -1265,15 +1100,7 @@ def _list_truncation_checks() -> int:
 
 
 def _table_cache_checks() -> int:
-    """질문마다 대상 표를 새로 만들지 않는가.
-
-    `build_table` 은 허용된 감시 서버마다 `host.get` 을 인터페이스까지 붙여 전부 받는다.
-    실환경은 사내 321대 + MSP 145대라 첫 모델 호출 전에 그 왕복이 매번 들어갔다
-    (2026-08-19 감사 E-6, 세 갈래 감사가 같은 결론).
-
-    **낡은 표를 오래 들고 있지는 않는다.** 이름 표와 달리 이쪽이 낡으면 없는 호스트를
-    있다고 답한다. 그래서 짧은 시한만 두고, 조회가 실패하면 직전 값을 유지하지 않는다.
-    """
+    """질문마다 대상 표를 새로 만들지 않는가."""
     import asyncio
     import os
 
@@ -1336,15 +1163,7 @@ def _table_cache_checks() -> int:
 
 
 def _tool_timeout_checks() -> int:
-    """느린 조회 하나가 질의 전체를 잡아먹지 않는가.
-
-    도구 호출에 시한이 없었다. `list_panels` 는 검색 1회에 대시보드 상세 최대 50회를
-    순차로 도는데 콜당 5초라 최악 255초다. 마감 검사는 라운드 사이에서만 도므로 사람은
-    몇 분을 기다린 끝에 "상한에 닿아 멈췄다" 를 받는다(2026-08-19 감사 E-1).
-
-    시한을 넘긴 조회는 **다른 조회 실패와 같은 형태**로 돌려준다. 새 형태를 만들면 모델이
-    그것만 다르게 읽는다.
-    """
+    """느린 조회 하나가 질의 전체를 잡아먹지 않는가."""
     import asyncio
     import os
 
@@ -1378,15 +1197,7 @@ def _tool_timeout_checks() -> int:
 
 
 def _metric_batch_checks() -> int:
-    """지표를 아이템마다 따로 물어보지 않는가.
-
-    상한이 8개라 `host.get`·`item.get` 까지 최대 10왕복이고 콜당 5초라 최악 50초다. Zabbix
-    는 `itemids` 에 배열을 받으므로 값 유형으로 묶으면 이력은 최대 두 번, 추세는 한 번이다
-    (2026-08-19 감사 E-7).
-
-    검사는 호출 횟수를 센다. 결과가 아이템별로 제대로 갈리는지도 함께 본다 — 묶어 받으면
-    한 덩어리로 오므로 그 자리를 틀리면 남의 값이 붙는다.
-    """
+    """지표를 아이템마다 따로 물어보지 않는가."""
     import asyncio
 
     from .. import ask
@@ -1440,12 +1251,7 @@ def _metric_batch_checks() -> int:
 
 
 def _no_evidence_checks() -> int:
-    """조회가 한 건도 성공하지 않았는데 "없습니다" 로 답하지 않는가.
-
-    2026-08-19 랩 실측이다. 모델이 인자를 깨뜨려 보냈고 도구가 거부했는데, 모델은 그
-    거부를 읽고도 "해당 시간대 로그가 없습니다" 로 답을 닫았다. 사람에게는 조회가 된
-    것처럼 보인다. 판정은 코드가 한다 — 성공한 조회가 하나도 없으면 그 사실을 답에 붙인다.
-    """
+    """조회가 한 건도 성공하지 않았는데 "없습니다" 로 답하지 않는가."""
     import asyncio
 
     from .. import ask
@@ -1497,12 +1303,7 @@ def _no_evidence_checks() -> int:
 
 
 def _now_context_checks() -> int:
-    """모델이 지금이 언제인지 아는가.
-
-    2026-08-19 랩 실측: "어제 오후 3시부터 4시 사이 로그" 를 물었더니 봇이 조회를 한 번도
-    안 하고 "어제가 몇 월 며칠인지 알려 달라" 고 되물었다. 오늘 날짜를 아무도 안 알려
-    줬기 때문이다. 사람은 늘 상대 시각으로 말한다.
-    """
+    """모델이 지금이 언제인지 아는가."""
     import asyncio
 
     from .. import ask
@@ -1531,15 +1332,7 @@ def _now_context_checks() -> int:
 
 
 def _event_loop_checks() -> int:
-    """느린 저장소가 다른 요청까지 세우지 않는가.
-
-    `/ask` 는 `async def` 인데 그 안에서 Redis 와 SQLite 를 `await` 없이 불렀다. Redis
-    클라이언트는 동기이고 시한이 2초라, 저장소가 늦으면 호출마다 이벤트 루프가 서고
-    한 요청에 세 번이므로 6초다. 그동안 웹훅 수신도 다른 질의도 인시던트 타이머 마감도
-    전부 멈춘다(2026-08-19 감사 E-5).
-
-    검사는 저장소를 일부러 늦추고, 그 사이 다른 코루틴이 도는지 본다.
-    """
+    """느린 저장소가 다른 요청까지 세우지 않는가."""
     import asyncio
     import time
 
@@ -1572,13 +1365,7 @@ def _event_loop_checks() -> int:
 
 
 def _panel_status_checks() -> int:
-    """패널 조회가 실패했을 때 "없다" 로 나가지 않는가.
-
-    Zabbix·Loki·Wazuh·판정 이력 네 축은 조회 실패와 신호 없음을 상태로 구분해 싣는다(§12).
-    Grafana 축만 그 계약이 없어, 주소 미설정도 예외도 빈 목록이 되고 도구는 "그 조건에 맞는
-    패널이 없다" 를 돌려줬다. 사람은 화면에서 그 패널을 보고 있는데 봇이 없다고 답한다
-    (2026-08-19 감사 A-2).
-    """
+    """패널 조회가 실패했을 때 "없다" 로 나가지 않는가."""
     import asyncio
 
     from .. import ask
@@ -1627,17 +1414,7 @@ def _panel_status_checks() -> int:
 
 
 def _session_isolation_checks() -> int:
-    """한 사람의 멈춤이 남의 질문을 끊지 않는가.
-
-    화면이 새 대화의 첫 턴에 세션 이름을 `'ui'` 로 고정해 보냈다. 게이트웨이는 그 값을
-    그대로 열쇠로 썼으므로 **모든 사람이 같은 세션**이었다. 두 사람이 각자 첫 질문을 던진
-    상태에서 한 사람이 멈춤을 누르면 다른 사람의 조회가 함께 멈춘다. 마스킹 역치환 표도
-    그 열쇠로 나뉘어 앞사람이 쓰던 토큰이 뒷사람 화면에서 실명으로 풀릴 수 있었다
-    (2026-08-19 감사, 네 갈래 감사가 같은 결론).
-
-    그리고 취소 표시가 청소되지 않았다. 답이 끝난 뒤 도착한 멈춤이 남아 다음 질문을
-    시작하자마자 죽였다.
-    """
+    """한 사람의 멈춤이 남의 질문을 끊지 않는가."""
     import asyncio
 
     from .. import ask
@@ -1653,8 +1430,7 @@ def _session_isolation_checks() -> int:
     assert ask.cancelled(b, started=0.0) is False, "남의 세션이 함께 멈췄다"
     assert ask.cancelled(a, started=0.0) is True
 
-    # ③ **끝난 뒤 도착한 멈춤은 다음 질문을 죽이지 않는다.** 요청 시작보다 앞선 취소는
-    #    이미 지난 것이다.
+    # 끝난 뒤 도착한 멈춤은 다음 질문을 죽이지 않는다
     ask.forget_all()
     ask.cancel(a)
     later = ask._now() + 10
@@ -1695,13 +1471,7 @@ def _session_isolation_checks() -> int:
 
 
 def _prewarm_checks() -> int:
-    """기동 예열이 다른 호출과 같은 출구를 지나는가.
-
-    예열은 기동 때마다 최대 2회 상류를 부른다. `egress.call_raw` 를 안 거치면 동시 수
-    상한·시간당 상한·토큰 계수 밖에서 도는 호출이 생긴다(2026-08-19 감사 B-5).
-    단일 출구 검사는 공급자 주소 정규식으로 파일을 훑어서, `llm.py` 를 경유하는 이
-    우회를 구조적으로 못 본다.
-    """
+    """기동 예열이 다른 호출과 같은 출구를 지나는가."""
     from .. import ask, egress
 
     saved = egress.call_raw
@@ -1733,14 +1503,7 @@ def _prewarm_checks() -> int:
 
 
 def _log_cap_checks() -> int:
-    """로그가 잘렸을 때 그 사실이 **실경로로** 결과에 붙는가.
-
-    통지는 있었는데 임계값이 서로 달라 한 번도 발화하지 않았다. 조회는 늘 60줄로 나가는데
-    통지는 300줄을 채웠을 때만 붙었다(2026-08-19 감사 A-1). 검사가 못 잡은 이유는
-    `note_if_capped` 에 300을 직접 넣어 불렀기 때문이다. 조립기만 부르고 배선을 안 지나갔다.
-
-    그래서 이 검사는 도구를 실제로 돌린다.
-    """
+    """로그가 잘렸을 때 그 사실이 **실경로로** 결과에 붙는가."""
     import asyncio
 
     from ..ask import tools as asktools
@@ -1759,8 +1522,7 @@ def _log_cap_checks() -> int:
     assert "앞부분은 안 들어왔다" in (out.get("note") or ""), out
     assert got["limit"] == asktools.LOG_LIMIT_DEFAULT, got
 
-    # 잘렸다는 안내를 받으면 모델이 더 달라고 할 수 있다. 안내만 하고 늘릴 길이 없으면
-    # 사람에게 "구간을 좁혀 다시 물어라" 밖에 못 준다.
+    # 잘렸다고 안내했으면 더 달라고 할 길이 있어야 한다
     out3 = asyncio.run(asktools.run_tool("host_logs", {"host": "[h-1]", "limit": 300}, ctx))
     assert got["limit"] == 300, got
     assert "앞부분은 안 들어왔다" in (out3.get("note") or ""), out3
@@ -1781,16 +1543,7 @@ def _log_cap_checks() -> int:
 
 
 def _empty_table_checks() -> int:
-    """이름 표가 비었을 때 안전한 쪽으로 실패하는가.
-
-    `_leaks` 는 아는 이름이 남았는지 보는데, 표가 비면 볼 이름이 없어 "누수 없음" 을
-    돌려줬다(`any([])`). 예외가 났을 때는 True 를 돌려 막으면서 표가 빈 경우만 통과시키던
-    셈이다. 판단 방향이 반대였다.
-
-    표가 비는 상황은 드물지만 있다. 재기동 직후 캐시 파일이 없고 첫 갱신이 전부 실패하면
-    그렇다. 그때 그룹명은 아무도 안 가린다. 프록시 경로는 같은 상황을 503 으로 막는다
-    (`proxy.blocked_when_empty`). 질의 경로에는 그 게이트가 없었다.
-    """
+    """이름 표가 비었을 때 안전한 쪽으로 실패하는가."""
     import asyncio
     import os
 
@@ -1802,8 +1555,7 @@ def _empty_table_checks() -> int:
         os.environ.pop("PROXY_ALLOW_UNMASKED", None)
         # 앞선 검사가 남긴 세션 토큰이 합쳐지면 마스커가 이름을 들고 있게 된다.
         ask.forget_all()
-        # ① 표가 비면 "가릴 수 없다" 로 답한다. 안전한 쪽은 막는 쪽이다.
-        #    `_leaks` 로는 이것을 알 수 없다 — 볼 이름이 없어 통과한다.
+        # 표가 비면 "가릴 수 없다"로 답한다 — _leaks 는 볼 이름이 없어 통과한다
         assert masking._leaks("아무 문장") is False
         assert masking.cannot_mask() is True
 
@@ -1815,8 +1567,7 @@ def _empty_table_checks() -> int:
         assert r["stopped"] == "rejected", r
         assert "이름" in r["error"], r
 
-        # ②-b 대상 표에서 이름을 등록했으면 그 이름들은 가려지므로 질의는 나간다.
-        #     전역 표가 비었다고 무조건 막으면 정상 조회까지 멈춘다.
+        # 대상 표에 이름이 있으면 나간다 — 전역 표가 비었다고 무조건 막지 않는다
         table = {ask.proxy.token_for("host", "web-01"):
                  {"host": "web-01", "source": "s", "logs": "", "security": ""}}
         called = {}
@@ -1842,15 +1593,7 @@ def _empty_table_checks() -> int:
 
 
 def _query_masking_checks() -> int:
-    """질의 도구 결과에 실명이 남아 모델로 가지 않는가.
-
-    알림 경로는 화이트리스트(`masking.build_llm_context`)가 지킨다. 질의 경로는 조회 결과를
-    그대로 직렬화해 보내므로 배선을 한 곳만 빠뜨려도 원문이 나간다. 2026-08-19 감사에서
-    지표와 열린 문제 두 도구가 마스커를 안 거치는 것이 확인됐다.
-
-    아픈 자리는 인증서 감시다. 아이템 키가 `web.certificate.get[<도메인>,443]` 형태라
-    "인증서 며칠 남았어" 한 마디에 고객 도메인이 통째로 나간다.
-    """
+    """질의 도구 결과에 실명이 남아 모델로 가지 않는가."""
     import asyncio
     import json as _js
 
@@ -1890,8 +1633,7 @@ def _query_masking_checks() -> int:
             seen["blob"] = str(messages[-1])
             return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
 
-        # 조회 자체를 대신하되 **마스커는 배선이 준 것을 쓴다.** 검사가 자기 마스커를
-        # 쓰면 배선이 빠져도 통과한다(2026-08-19 에 그렇게 한 번 놓쳤다).
+        # 마스커는 배선이 준 것을 쓴다 — 자기 마스커를 쓰면 배선이 빠져도 통과한다
         saved_fp = ask.fetch_problems
         try:
             async def spy(ent, masker=None):
@@ -1913,11 +1655,7 @@ def _query_masking_checks() -> int:
 
 
 def _ask_dispatch_checks() -> int:
-    """도구를 실제로 부를 때 무엇을 막는가.
-
-    모델이 도구 이름과 인자를 정한다. 그 값이 어떻든 **거부는 예외가 아니라 도구
-    결과로 돌려준다** — 예외로 끝내면 모델이 스스로 고칠 기회가 없다.
-    """
+    """도구를 실제로 부를 때 무엇을 막는가."""
     import asyncio
     import json
 
@@ -1939,13 +1677,11 @@ def _ask_dispatch_checks() -> int:
     assert r.get("error"), r
     assert "delete_host" in str(r), r
 
-    # ①-b **모델은 형식을 바꿔 쓴다.** 대괄호를 떼고 넣어도 같은 대상으로 본다
-    #      (2026-08-18 랩 실측: host-aaa 로 넣어 '알 수 없는 대상' 으로 튕겼다).
+    # 모델은 대괄호를 떼고 넣기도 한다 — 같은 대상으로 본다
     r = asyncio.run(asktools.run_tool("host_logs", {"host": "host-aaa"}, ctx))
     assert not r.get("error"), r
 
-    # ①-c **대상을 찾는 규칙은 도구마다 다르면 안 된다.** 대괄호 완화를 한 곳에만
-    #      넣었더니 past_judgments·open_problems 가 같은 값을 거부했다(2026-08-18 실측).
+    # 대상을 찾는 규칙은 도구마다 같아야 한다
     async def _j(host, days):
         return {"judgments": [], "status": "ok"}
 
@@ -1957,8 +1693,7 @@ def _ask_dispatch_checks() -> int:
         r = asyncio.run(asktools.run_tool(tool_name, {"host": "host-aaa"}, ctx2))
         assert not r.get("error"), (tool_name, r)
 
-    # ①-d **일수는 분 상한에 걸리면 안 된다.** days 를 분 상한(1440)에 통과시켜
-    #      30일을 넣어도 1일이 됐다. 기록이 있는데 "없다"고 답했다(2026-08-18 실측).
+    # 일수는 분 상한에 걸리면 안 된다 — 30일이 1일이 됐다
     got_days = []
 
     async def _j2(host, days):
@@ -2062,8 +1797,7 @@ def _ask_table_checks() -> int:
             async def call(self, client, method, params):
                 raise RuntimeError("zabbix down")
 
-        # 캐시를 비우고 본다. 짧은 시한 안에서는 직전 표가 그대로 쓰이는 것이 맞고
-        # (도구가 status 로 실패를 밝힌다), 여기서 보려는 것은 캐시가 없을 때다.
+        # 캐시를 비우고 본다 — 여기서 보려는 것은 캐시가 없을 때다
         ask.forget_tables()
         assert asyncio.run(ask.build_table(client_factory=_Dead)) == {}
         return 9
@@ -2112,8 +1846,7 @@ def _ask_loop_checks() -> int:
         assert r["text"] == "web-01 이 원인이다", r
         assert [t["tool"] for t in r["trace"]] == ["list_hosts"], r["trace"]
 
-        # ①-b **답을 도구로 받는다.** 산문으로 받으면 손잡이가 글자로 남고 구간이
-        #      지어내진다(2026-08-18 실측).
+        # 답을 도구로 받는다 — 산문으로 받으면 표시가 글자로 남고 구간이 지어내진다
         def answers(system, messages, tools):
             return {"stop_reason": "tool_use", "content": [
                 {"type": "tool_use", "id": "t1", "name": "answer",
@@ -2125,8 +1858,7 @@ def _ask_loop_checks() -> int:
         assert "지연 0초" in r["text"], r["text"]
         assert r["stopped"] == "end_turn", r["stopped"]
 
-        # ①-c **없는 그림 손잡이는 되돌려 고치게 한다.** 예외로 끝내면 사람은 답 대신
-        #      오류를 본다.
+        # 없는 그림 표시는 되돌려 고치게 한다 — 예외로 끝내면 사람은 오류를 본다
         seen = {"n": 0}
 
         def bad_then_good(system, messages, tools):
@@ -2179,8 +1911,7 @@ def _ask_loop_checks() -> int:
                                     model_fn=lambda *a: called.append(1) or _text("x")))
         assert r.get("error") and not called, r
 
-        # ⑥ **표를 먼저 만들고 질문을 가린다.** 순서가 거꾸로면 이름 표에 없는
-        #    호스트가 질문에서 안 가려진 채 나간다. 랩에서 실제로 그랬다(2026-08-18).
+        # 표를 먼저 만들고 질문을 가린다 — 순서가 거꾸로면 안 가려진 채 나간다
         seen_q = []
 
         def capture(system, messages, tools):
@@ -2197,9 +1928,7 @@ def _ask_loop_checks() -> int:
         assert found["n"] == 1, found
         assert "web-01" not in json.dumps(found, ensure_ascii=False), found
 
-        # ⑧ **줄여 쓴 이름도 같은 토큰으로 가린다.** 사람은 도메인 접미사를 빼고
-        #    친다. 안 가리면 실명 조각이 그대로 나가고, 모델은 그 문자열을 도구
-        #    인자로 넣어 '알 수 없는 대상' 으로 튕긴다(2026-08-18 랩 실측).
+        # 줄여 쓴 이름도 같은 토큰으로 가린다
         long_tbl = {ask.proxy.token_for("host", "vm-p3-target-002.novalocal"):
                     {"host": "vm-p3-target-002.novalocal", "source": "zabbix-internal",
                      "logs": "vm-p3-target-002.novalocal",
@@ -2218,9 +1947,7 @@ def _ask_loop_checks() -> int:
         got = asyncio.run(asktools.run_tool("list_hosts", {}, {"table": long_tbl}))
         assert "metrics" in got["hosts"][0]["axes"], got
 
-        # ⑩ **일부만 적은 이름도 대상으로 푼다.** 사람은 vm-p3-target-002.novalocal 을
-        #    target-002 로 줄여 말한다. 못 풀면 모델이 '등록되지 않은 호스트' 라고
-        #    답하고 대화가 막힌다(2026-08-18 랩 실측).
+        # 일부만 적은 이름도 대상으로 푼다
         seen3 = []
 
         def cap3(system, messages, tools):
@@ -2237,9 +1964,7 @@ def _ask_loop_checks() -> int:
             "host": "vm-b.novalocal", "source": "zabbix-internal", "logs": "", "security": ""}
         assert ask.resolve_mentions("vm 상태", two) == "vm 상태"
 
-        # ⑪ **이력은 창으로 자른다.** 다 보내면 턴이 쌓일수록 비용과 지연이 늘고
-        #    상한에 닿으면 최신 질문이 밀린다. 오래된 것부터 버리고, 버린 사실을
-        #    모델에게 알린다 — 조용히 버리면 모델이 앞 대화를 기억한다고 착각한다.
+        # 이력은 창으로 자르고, 버린 사실을 모델에게 알린다
         long_hist = []
         for i in range(40):
             long_hist.append({"role": "user", "content": "질문 %d %s" % (i, "가" * 400)})
@@ -2266,9 +1991,7 @@ def _ask_loop_checks() -> int:
                                 table=long_tbl, model_fn=cap4))
         assert not any("앞선 대화" in str(m.get("content")) for m in seen4[0]), seen4[0]
 
-        # ⑫ **패널 그림은 손잡이만 모델에 준다.** 주소에는 대시보드 식별자와
-        #    var-host 실명이 들어가므로 그대로 실으면 마스킹이 무너진다. 그림은
-        #    화면이 받아 그리고, 모델은 손잡이로만 가리킨다.
+        # 패널 그림은 표시만 준다 — 주소에 대시보드 식별자와 실명이 들어 있다
         shots = []
 
         def cap5(system, messages, tools):
@@ -2292,8 +2015,7 @@ def _ask_loop_checks() -> int:
         assert "/render/" not in blob, "이미지 주소가 모델에 갔다"
         assert "vm-p3-target-002" not in blob, "실명이 모델에 갔다"
 
-        # ⑬ **같은 조회를 두 번 하지 않는다.** 오늘 list_hosts 를 세 번 부르며
-        #    라운드를 태웠다. 두 번째부터는 실행하지 않고 이미 불렀다고 돌려준다.
+        # 같은 조회를 두 번 하지 않는다
         dup = []
 
         def cap6(system, messages, tools):
@@ -2316,9 +2038,7 @@ def _ask_loop_checks() -> int:
         # ⑮ 프롬프트가 범위를 못 박는가 — 관측과 무관한 질문에는 답을 아낀다
         assert "관측" in ask.ASK_SYSTEM and "범위" in ask.ASK_SYSTEM, "범위 규칙이 없다"
 
-        # ⑯ **과거 판정의 분석 문장을 읽는다.** 시각·유형만 주면 "예전에도 있었다"
-        #    까지밖에 못 말한다. 무엇이라고 판단했는지가 값이다. 다만 본문에는 실명이
-        #    섞이므로 마스킹 뒤 누수 검사를 통과할 때만 싣는다(prior 와 같은 규칙).
+        # 과거 판정의 분석 문장을 싣되 마스킹 누수 검사를 통과할 때만 (prior 와 같은 규칙)
         # 누수 판정은 이름 표를 실시간으로 본다. 이 검사만 표를 채워 둔다.
         nametable._terms = {"vm-p3-target-002.novalocal": "host"}
         mk_all = ask.proxy.build_masker()
@@ -2347,8 +2067,7 @@ def _ask_loop_checks() -> int:
             ask.FACTS_FILE = saved_path
             ask.load_facts.cache_clear()
 
-        # ⑱ **실제 토큰 수로 센다.** 호출 횟수만 세면 짧은 질문과 긴 조사가 같은
-        #    한 건이다. 응답에 실려 오는 값으로 사후 정산한다.
+        # 실제 토큰 수로 센다 — 호출 횟수만 세면 짧은 질문과 긴 조사가 같다
         import os as _os
         import shutil as _sh
         import tempfile as _tf
@@ -2377,8 +2096,7 @@ def _ask_loop_checks() -> int:
 
         # ⑲ **멈추면 그때까지 본 것으로 끝낸다.** 사람이 끊었는데 계속 돌면 비용만 든다.
         def keeps_going(system, messages, tools):
-            # 첫 라운드 뒤 사람이 멈춤 단추를 눌렀다. 열쇠에 신원이 들어가므로 화면이
-            # 보내는 이름만으로는 남의 세션을 멈출 수 없다(§C-1).
+            # 열쇠에 신원이 들어가므로 화면이 보내는 이름만으로는 남의 세션을 못 멈춘다
             ask.cancel(ask.session_key("sess-x"))
             return {"stop_reason": "tool_use", "content": [
                 {"type": "tool_use", "id": "c1", "name": "list_hosts", "input": {}}]}
@@ -2389,9 +2107,7 @@ def _ask_loop_checks() -> int:
         assert len(r["trace"]) <= 1, r["trace"]
         assert r["text"], "멈춰도 사람에게 할 말은 있어야 한다"
 
-        # ⑳ **보던 패널은 맥락으로만 알린다.** 무조건 붙이면 이어지는 질문마다 같은
-        #    그림이 다시 그려진다. 붙일지는 모델이 정하되, 무엇을 보고 있는지는
-        #    알려 줘야 고를 수 있다.
+        # 보던 패널은 맥락으로만 알린다 — 무조건 붙이면 질문마다 다시 그려진다
         ctx_seen = []
 
         def cap_ctx(system, messages, tools):
@@ -2408,9 +2124,7 @@ def _ask_loop_checks() -> int:
         # 지시문이 언제 붙일지 말해 줘야 모델이 고른다
         assert "panel_image" in ask.ASK_SYSTEM, "그림 지침이 없다"
 
-        # ㉑ **이력도 가린다.** 화면은 사람이 읽는 글(실명으로 되돌린 것)을 이력으로
-        #    되보낸다. 그대로 실으면 앞 턴의 실명이 모델에 간다. 실제로 갔다
-        #    (2026-08-18 실측: 도구 인자에 실명이 찍혔다).
+        # 이력도 가린다 — 화면은 실명으로 되돌린 글을 이력으로 되보낸다
         nametable._terms = {"vm-p3-target-002.novalocal": "host"}
         seen6 = []
 
@@ -2425,9 +2139,7 @@ def _ask_loop_checks() -> int:
                       "content": "vm-p3-target-002.novalocal 은 정상입니다"}]))
         assert "vm-p3-target-002.novalocal" not in seen6[0],             "이력의 실명이 모델에 갔다: %s" % seen6[0][:200]
 
-        # ㉒ **한 기계의 세 이름을 모두 가린다.** Zabbix 는 node1, Loki·Wazuh 는 FQDN
-        #    으로 부른다. 패널이 넘기는 것은 축 이름이라 Zabbix 이름만 등록하면
-        #    안 가려진 채 나가고 대상도 못 찾는다(2026-08-18 실측).
+        # 한 기계의 세 이름을 모두 가린다 — 패널이 넘기는 것은 Zabbix 이름이다
         three = {ask.proxy.token_for("host", "node1"):
                  {"host": "node1", "source": "zabbix-internal",
                   "logs": "vm-target-001.novalocal",
@@ -2445,11 +2157,10 @@ def _ask_loop_checks() -> int:
         # 그리고 그 이름이 같은 대상으로 풀려야 도구를 부를 수 있다
         assert ask.proxy.token_for("host", "node1") in seen7[0], seen7[0]
 
-        # ㉓ **손잡이는 화면에 글자로 남기지 않는다.** 그림을 따로 그리므로 [img-1]
-        #    같은 문자열이 본문에 남으면 그냥 지저분한 글자다(2026-08-18 실측).
+        # 그림 표시는 화면에 글자로 남기지 않는다
         assert ask.strip_handles("아래 [img-6598] 를 보라") == "아래 를 보라"
         assert ask.strip_handles("img-6598 참고") == "참고"
-        # 비슷하지만 손잡이가 아닌 말은 안 건드린다
+        # 비슷하지만 표시가 아닌 말은 안 건드린다
         assert ask.strip_handles("image-6598 은 그대로") == "image-6598 은 그대로"
 
         # ㉔ 모델이 죽어도 예외를 위로 던지지 않는다
@@ -2468,14 +2179,7 @@ def _ask_loop_checks() -> int:
 
 
 def _graph_engine_checks() -> int:
-    """LangGraph 엔진이 기존 반복문과 **같은 계약**을 지키는가.
-
-    이관의 통과 조건이다. 프레임워크가 흐름만 맡고 도구·마스킹·상한은 우리 것이므로,
-    같은 가짜 모델을 주면 두 엔진의 답·추적·멈춘 이유가 같아야 한다. 다르면 그 차이가
-    곧 이관으로 잃은 것이다.
-
-    프레임워크가 안 깔린 곳에서는 건너뛴다 — 선택 의존이라 없다고 검사가 깨지면 안 된다.
-    """
+    """LangGraph 엔진이 기존 반복문과 **같은 계약**을 지키는가."""
     import asyncio
     import os
 
@@ -2517,9 +2221,7 @@ def _graph_engine_checks() -> int:
         assert [t["tool"] for t in a["trace"]] == [t["tool"] for t in b["trace"]], (a, b)
         assert a["stopped"] == b["stopped"] == "end_turn", (a["stopped"], b["stopped"])
 
-        # ①-b **답을 받으면 모델을 더 부르지 않는다.** 그래프가 도구 뒤에 무조건 모델로
-        #      돌아가 답 뒤에 한 번 더 불렀다(2026-08-19 감사 E-2). 질의마다 유료 호출
-        #      하나와 5~15초가 그냥 더 들었다.
+        # 답을 받으면 모델을 더 부르지 않는다 — 질의마다 호출 하나와 5~15초가 더 들었다
         def answering():
             n = {"i": 0}
 
@@ -2538,8 +2240,7 @@ def _graph_engine_checks() -> int:
             assert "web-01 하나뿐이다" in r["text"], (engine, r["text"])
             assert n["i"] == 2, (engine, n["i"])
 
-        # ② **라운드 상한이 그래프에서도 걸린다.** 프레임워크 자체 상한에 먼저 닿으면
-        #    사람은 이유 대신 예외를 본다.
+        # 라운드 상한이 그래프에서도 걸린다 — 프레임워크 상한이 먼저 닿으면 예외가 보인다
         def forever(system, messages, tools):
             return _tool_use("list_hosts", {})
 
@@ -2573,11 +2274,7 @@ def _graph_engine_checks() -> int:
 
 
 def _ask_user_checks() -> int:
-    """사용량이 사용자별로 세어지는가.
-
-    공유 토큰 하나로 들어오면 누가 얼마나 썼는지 알 수 없다. 파트·팀원별 관리가
-    필요해지는 순간 이 계수기가 근거가 된다.
-    """
+    """사용량이 사용자별로 세어지는가."""
     import os
     import shutil
     import tempfile
@@ -2616,8 +2313,7 @@ def _ask_user_checks() -> int:
         assert ask.user_budget_ok("kim", now=now)[0]
     finally:
         ask.MAX_PER_USER_HOUR = saved
-        # **열어 둔 채 끝내지 않는다.** store.init() 은 이미 열려 있으면 아무것도
-        # 안 하므로, 뒤 검사가 store.PATH 를 바꿔도 무시되고 남의 파일에 쓴다.
+        # 열어 둔 채 끝내지 않는다 — store.init() 은 이미 열려 있으면 아무것도 안 한다
         store.close()
         store.PATH = saved_path
         shutil.rmtree(d, ignore_errors=True)
@@ -2646,8 +2342,7 @@ def _convo_checks() -> int:
         assert convo.load(cid, "kim") == [], "남의 대화가 열렸다"
         assert len(convo.load(cid, "hong")) == 2
 
-        # **그림도 함께 남긴다.** 답 본문만 저장하면 새로고침한 순간 화면에 붙어 있던
-        # 패널 그림이 사라진다(2026-08-18 실측). 주소만 남기므로 부피는 작다.
+        # 그림도 함께 남긴다 — 답 본문만 저장하면 새로고침에 패널 그림이 사라진다
         imgs = [{"id": "img-1234", "title": "복제 지연",
                  "url": "/render/d-solo/abc?panelId=7"}]
         convo.append(cid, "hong", "assistant", "답 2", images=imgs)

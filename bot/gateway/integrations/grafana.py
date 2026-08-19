@@ -55,12 +55,7 @@ def status() -> dict:
 
 
 def annotate(text: str, event_ts: float, tags=()) -> int:
-    """조직 수준 주석을 남기고 식별자를 돌려준다. 실패하면 None.
-
-    dashboardUID 를 안 넘기면 모든 대시보드에서 보인다. 시각은 밀리초이고, 분석 시각이
-    아니라 사건 발생 시각을 쓴다 — 디바운스와 분석 시간만큼 밀리면 지표 스파이크 옆에
-    있지 않아 쓸모가 없다.
-    """
+    """조직 수준 주석을 남기고 식별자를 돌려준다. 실패하면 None."""
     base = _base()
     if not base:
         return None
@@ -94,11 +89,7 @@ DASH_WORKERS = 6
 
 
 def _flatten(panels):
-    """행(row) 안에 접힌 패널까지 펼친다.
-
-    Grafana 는 접힌 row 의 자식 패널을 `panel["panels"]` 에 중첩해 넣는다. 최상위만
-    보면 사람이 펼쳐 보던 패널을 "없다" 고 답한다.
-    """
+    """행(row) 안에 접힌 패널까지 펼친다."""
     out = []
     for p in (panels or []):
         out.append(p)
@@ -117,15 +108,7 @@ QUERY_MAX = 200
 
 
 def _panel_query(p: dict) -> tuple:
-    """패널이 무엇을 조회하는지. 반환 `(데이터 종류, 질의문 요약)`.
-
-    제목만으로는 두 패널이 같은 값을 보는지 알 수 없다. 사람이 "저 대시보드 패널도 같은
-    값이냐" 고 물으면 제목을 보고 짐작하게 되고, 짐작은 틀린다(2026-08-19 실측: 제목만
-    보고 "한쪽은 실패만 센다" 고 답했다).
-
-    질의문 자체를 실어 주면 짐작할 일이 없다. 대시보드마다 조회 방식이 달라 필드 이름이
-    다르므로 아는 것만 골라 읽고, 못 읽으면 빈 문자열로 둔다.
-    """
+    """패널이 무엇을 조회하는지. 반환 `(데이터 종류, 질의문 요약)`."""
     src = ((p.get("datasource") or {}).get("type")
            if isinstance(p.get("datasource"), dict) else p.get("datasource")) or ""
     tg = (p.get("targets") or [{}])[0] or {}
@@ -144,13 +127,7 @@ def _panel_query(p: dict) -> tuple:
 
 
 def list_panels(dash_match: str = "", limit: int = 40) -> list:
-    """패널 목록. `[{uid, panel_id, dashboard, title}]`. 못 읽으면 빈 목록.
-
-    **제목으로 찾지 않고 번호로 그리기 위한 목록이다.** 제목 검색은 이름이 비슷한 옆
-    패널을 집는다. 목록을 주고 그중 하나를 번호로 가리키게 하면 그 종류의 실수가
-    구조적으로 사라진다(2026-08-18 실측: 제목으로 찾다가 남의 대시보드 패널을 붙였고,
-    이름이 안 맞자 "그 대시보드에는 없다" 고 답했다).
-    """
+    """패널 목록. `[{uid, panel_id, dashboard, title}]`. 못 읽으면 빈 목록."""
     base, want = _base(), str(dash_match or "").strip().lower()
     if not base:
         return []
@@ -163,9 +140,7 @@ def list_panels(dash_match: str = "", limit: int = 40) -> list:
             boards = [d for d in r.json()
                       if d.get("uid") and (not want
                                            or want in str(d.get("title") or "").lower())]
-            # **대시보드 상세를 순차로 돌지 않는다.** 랩에 열 개 남짓이지만 실환경은
-            # 더 많고, 콜당 5초라 최악이 분 단위였다(2026-08-19 감사 E-1). 지목한
-            # 대시보드가 있으면 그 안에서만 찾으므로 대개 한두 개다.
+            # 대시보드 상세를 순차로 돌지 않는다 — 콜당 5초라 최악이 분 단위였다
             boards = boards[:DASH_MAX]
 
             def fetch(d):
@@ -201,11 +176,7 @@ def list_panels(dash_match: str = "", limit: int = 40) -> list:
 
 
 def panel_url(uid: str, panel_id, host: str, start: int, end: int) -> str:
-    """브라우저가 그림을 받아 갈 주소.
-
-    **이 주소는 모델에 주지 않는다.** 대시보드 식별자와 호스트 실명이 들어 있다.
-    화면이 사용자 세션으로 직접 받아 그린다.
-    """
+    """브라우저가 그림을 받아 갈 주소."""
     from urllib.parse import urlencode
     q = urlencode({"panelId": panel_id, "var-host": host, "orgId": 1,
                    "from": int(start) * 1000, "to": int(end) * 1000,

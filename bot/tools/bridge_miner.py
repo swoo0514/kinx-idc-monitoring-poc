@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""브리지 후보 마이닝 — 이력에서 "같이 나타나는 축 쌍"을 찾아 추천한다.
-
-왜: gateway/incident.py 의 BRIDGE_GROUPS 는 사람이 지정한 인과 쌍이고, 초기값은 우리
-데모 시나리오에서 왔다. 그 큐레이션 의존을 데이터로 검증·확장하기 위한 도구다.
-자동 적용하지 않는다 — 출력은 "검토하라"는 목록이다(판정은 사람, 후보 발굴은 데이터).
-
-읽기 전용이다. Zabbix 는 event.get / trigger.get, Wazuh 는 인덱서 _search 만 쓴다.
-실환경에도 그대로 돌릴 수 있다.
-
-사용법·해석은 bot/BRIDGE_MINER_GUIDE.md.
-"""
+"""브리지 후보 마이닝 — 이력에서 "같이 나타나는 축 쌍"을 찾아 추천한다."""
 
 import argparse
 import asyncio
@@ -26,8 +16,7 @@ from datetime import datetime, timezone
 # `bot/` 을 경로에 넣는다. 이 파일이 bot/tools/ 로 내려갔으므로 부모다.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 한국어 Windows 콘솔은 기본 cp949 라 '—' 에서 죽는다. 조회가 끝난 뒤 출력에서 터져 원인이
-# 눈에 안 띈다 — docs/03-pitfalls/build-traps.md.
+# 한국어 Windows 콘솔은 기본 cp949 라 '—' 에서 죽는다 — docs/03-pitfalls/build-traps.md
 for _s in (sys.stdout, sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace")
@@ -58,11 +47,7 @@ def axis_key(e: dict, axis: str) -> str:
 
 
 def _windows(events: list, window_s: int, scope: str):
-    """겹치지 않는 시간창을 만들어 (그룹키, 시작시각, 이벤트목록) 으로 돌려준다.
-
-    mine 은 축 집합만 필요해 따로 세지만, 쌍 상세 분석은 창 안의 **원본 이벤트**가 필요하다.
-    잘라내는 규칙은 동일해야 하므로 여기 한 번만 구현한다.
-    """
+    """겹치지 않는 시간창을 만들어 (그룹키, 시작시각, 이벤트목록) 으로 돌려준다."""
     groups = defaultdict(list)
     for e in events:
         groups["*" if scope == "global" else e["host"]].append(e)
@@ -94,14 +79,7 @@ def resolve_axis_value(events: list, axis: str, needle: str) -> str:
 
 def report_pair(events: list, window_s: int, scope: str, axis: str,
                 a_val: str, b_val: str, top: int = 8, samples: int = 6):
-    """쌍 하나의 공동 발생을 원본 이벤트 수준에서 펼친다.
-
-    왜 필요한가 — 지표만으로는 세 가지가 갈리지 않는다.
-      (1) 같은 링크의 양단 — 한 사건이 양쪽에서 잡힌 것. **병합** 대상
-      (2) 공통 원인(전원·상면·상류) — 서로 다른 트리거가 함께 남. **SPOF 리스크**
-      (3) 우연 — 흔한 축끼리 겹친 것. 버림
-    구분하려면 "그때 무슨 알림이었나"와 "누가 먼저였나"를 봐야 한다.
-    """
+    """쌍 하나의 공동 발생을 원본 이벤트 수준에서 펼친다."""
     hits = []
     for _gkey, start, win in _windows(events, window_s, scope):
         keys = {axis_key(e, axis) for e in win}
@@ -146,9 +124,7 @@ def report_pair(events: list, window_s: int, scope: str, axis: str,
     med = lags[len(lags) // 2]
     print("  간격 중앙값 %+ds (양수면 B 가 늦다), 범위 %+ds ~ %+ds" % (med, lags[0], lags[-1]))
 
-    # 시차가 한 값에 몰려 있으면 인과가 아니라 관측 시점 차이다.
-    # 인과 사슬은 부하·전파에 따라 시차가 흩어지지만, 폴링 주기가 어긋난 두 장비는
-    # 같은 사건을 항상 같은 만큼 늦게 본다.
+    # 시차가 한 값에 몰려 있으면 인과가 아니라 관측 시점 차이다
     near = sum(1 for x in lags if abs(x - med) <= 30) / len(lags)
     print("  중앙값 ±30s 안에 %.0f%% 가 몰려 있다" % (100 * near))
 
@@ -158,8 +134,7 @@ def report_pair(events: list, window_s: int, scope: str, axis: str,
               % med)
         print("     (같은 사건을 한쪽이 늘 늦게 관측하는 형태). 아이템 갱신 주기를 대조해 확인한다.")
     elif abs(med) <= 5:
-        # 시차가 초 단위면 방향 비율이 아무리 치우쳐도 인과가 아니다. 같은 순간에 난 것을
-        # 밀리초 지터가 갈라놓은 것뿐이다. 방향 규칙보다 먼저 걸러야 오판하지 않는다.
+        # 시차가 초 단위면 방향 비율과 무관하게 인과가 아니다 — 방향 규칙보다 먼저 거른다
         print("  => 시차가 초 단위다(중앙값 %+ds). 선후 비율이 치우쳐도 **인과가 아니다**." % med)
         print("     같은 사건의 양면이거나 상류 공통 원인이다. 양측 트리거 유형이 같으면 병합한다.")
     elif tot and max(a_first, b_first) / tot >= 0.7:
@@ -198,11 +173,7 @@ def report_pair(events: list, window_s: int, scope: str, axis: str,
 
 
 async def diag_zabbix(days: int):
-    """어느 파라미터에서 API 가 깨지는지 계단식으로 짚는다.
-
-    500 은 본문에 사유가 없어 추측으로 좁히면 시간만 버린다. 가벼운 것부터 하나씩 얹어
-    **처음 실패하는 지점**을 찾는다. 실환경에 부담을 주지 않도록 전부 limit 을 작게 둔다.
-    """
+    """어느 파라미터에서 API 가 깨지는지 계단식으로 짚는다."""
     import httpx
     since = int(datetime.now(timezone.utc).timestamp()) - days * 86400
     zbx = collector.ZabbixClient()
@@ -266,11 +237,7 @@ async def fetch_zabbix(days: int) -> list:
     zbx = collector.ZabbixClient()
 
     async def paged(client, params, label, chunk_days=10):
-        """기간을 쪼개 나눠 받는다.
-
-        90일치를 한 번에 요청하면 응답 크기 때문에 서버가 500 을 낸다. 한 조각이
-        실패해도 나머지는 살리되, 그 기간이 '사건 없음'으로 오독되지 않게 반드시 남긴다.
-        """
+        """기간을 쪼개 나눠 받는다."""
         out, gaps = [], []
         step = chunk_days * 86400
         for start in range(since, int(datetime.now(timezone.utc).timestamp()), step):
@@ -290,8 +257,7 @@ async def fetch_zabbix(days: int) -> list:
 
     async with httpx.AsyncClient(verify=False) as client:
         events = await paged(client, {
-            # objectid = 트리거 ID. 해소 시각을 짝짓는 데 쓴다. r_eventid 를 안 쓰는
-            # 이유(대량 조회 응답 크기)는 --diag 진단 결과 — RECON 가이드 참조.
+            # objectid = 트리거 ID. r_eventid 를 안 쓰는 이유(응답 크기)는 RECON 가이드
             "output": ["eventid", "name", "clock", "severity", "objectid"],
             "selectHosts": ["host"],
             "selectTags": "extend",
@@ -301,9 +267,7 @@ async def fetch_zabbix(days: int) -> list:
             "limit": 200000,
         }, "problem")
 
-        # 왜 해소 시각이 필요한가 — 발생 시각만 보면 **문제가 열려 있는 동안 일어난 일**이
-        # 안 보인다. 디스크가 사흘 전부터 차 있고 오늘 서비스가 죽으면 두 시작 시각은
-        # 사흘 떨어져 있어 어떤 시간창·시차로도 잡히지 않는다. 구간 겹침으로 봐야 잡힌다.
+        # 해소 시각이 필요한 이유 — 발생 시각만 보면 문제가 열려 있는 동안 일어난 일이 안 보인다
         oks = await paged(client, {
             "output": ["eventid", "clock", "objectid"],
             "value": 0,          # OK(해소) 이벤트
@@ -341,8 +305,7 @@ async def fetch_zabbix(days: int) -> list:
         out.append({"host": host, "cls": incident.classify(name, tags=tags),
                     "ts": start, "name": name, "src": "zabbix",
                     "declared": declared,
-                    # 미해소·조회 범위 밖이면 0. "아직 열려 있다"와 "해소 시각을 모른다"는
-                    # 다르지만 둘 다 구간 겹침 계산에서는 제외해야 하므로 0 으로 묶는다.
+                    # 미해소·조회 범위 밖은 0 — 구간 겹침 계산에서 제외해야 하는 점은 같다
                     "end_ts": end})
     print("[zabbix] 이벤트 %d건 → 분류 완료" % len(out), file=sys.stderr)
     return out
@@ -385,8 +348,7 @@ def fetch_wazuh(days: int) -> list:
                 epoch = int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
             except ValueError:
                 continue
-            # groups 를 남긴다 — Zabbix 의 declared 와 같은 역할. 없으면 --load 재분류가
-            # 이름만 보고 판단해 Wazuh 분류 품질이 실제보다 나쁘게 나온다.
+            # groups 를 남긴다 — 없으면 --load 재분류가 이름만 보고 판단한다
             out.append({"host": host, "cls": cls, "ts": epoch, "name": name, "src": "wazuh",
                         "groups": rule.get("groups"), "rule_id": rule.get("id")})
     print("[wazuh] 알림 %d건 → 분류 완료" % len(out), file=sys.stderr)
@@ -395,41 +357,13 @@ def fetch_wazuh(days: int) -> list:
 
 def mine(events: list, window_s: int, min_pairs: int, min_lift: float,
          axis: str = "cls", min_axis: int = 1, scope: str = "host") -> dict:
-    """호스트별 시간창 안에서 함께 나온 축 쌍의 연관 지표를 계산한다.
-
-    lift = P(A와 B가 같은 창에) / (P(A) x P(B))
-    독립이면 1. 1보다 크면 우연보다 자주 함께 나온다는 뜻이다.
-
-    axis 로 집계 입도를 고른다.
-      cls  — 사건 유형 8종. 축이 적어 조합이 28개뿐이라 신호가 접힌다.
-      name — 트리거명. 축이 수백 개로 늘어 network 89.5% 내부 구조까지 보인다.
-    같은 이름의 트리거가 호스트마다 있으므로 name 축은 호스트를 가로질러 묶인다.
-    그것이 패턴 발굴에서 원하는 성질이다(특정 호스트 사정이 아니라 반복되는 조합).
-
-    scope 로 시간창을 어떻게 자를지 고른다.
-      host   — 호스트별로 따로 자른다. 같은 장비 안에서 함께 나는 것만 보인다.
-      global — 전 호스트를 한 타임라인에 놓고 자른다. **호스트를 가로지르는 관계**가 보인다.
-
-    global 이 필요한 이유 — 진단에서 확인된 가장 큰 구조가 호스트를 가로지른다. 사설 DNS
-    1대가 감시 미등록이라 **29대에서 파생 알림이 나고 근원 알림은 0건**이었다. host 로
-    자르면 그 관계는 서로 다른 창으로 흩어져 **구조적으로 관측되지 않는다.**
-    `--by host --scope global` 이 "어느 장비가 죽을 때 어느 장비들이 따라 우는가"에 답한다.
-
-    min_axis 는 등장 창 수가 이 미만인 축을 쌍 계산에서 뺀다. name 축에서 조합 폭증을
-    막는 장치이며, 등장 자체가 희소한 축은 어차피 통계가 서지 않는다.
-
-    lift 외에 leverage 와 zhangs 를 함께 낸다 — 희귀 조합에서 lift 가 부풀려지는 것을
-    실측으로 확인했기 때문이다(`disk_space + service_down` 이 표본 확대에 따라
-    5.53 -> 3.87 -> 1.22 로 수렴). 두 지표는 그 왜곡을 지표 자체가 보정한다.
-    정의는 연관 규칙 분석의 표준을 따른다(mlxtend association_rules 와 동일 식).
-    """
+    """호스트별 시간창 안에서 함께 나온 축 쌍의 연관 지표를 계산한다."""
     def key(e):
         return axis_key(e, axis)
 
     groups = defaultdict(list)
     for e in events:
-        # scope=global 이면 전 호스트를 한 타임라인에 놓는다. 그래야 호스트를 가로지르는
-        # 관계(한 대가 죽고 여러 대가 따라 우는 형태)가 같은 창에 들어온다.
+        # scope=global 은 전 호스트를 한 타임라인에 — 호스트를 가로지르는 관계를 보려면 필요하다
         groups["*" if scope == "global" else e["host"]].append((e["ts"], key(e)))
 
     windows = []              # 각 창에 등장한 축 집합
@@ -531,12 +465,7 @@ def apply_exclusions(events: list, name_pats: list, host_pats: list) -> list:
 
 
 def report_scope(events: list):
-    """측정 범위 — 어느 소스가 데이터에 있었는지를 결과보다 먼저 밝힌다.
-
-    이것이 없으면 "브리지 후보 0건"이 **"관계가 없다"로 오독된다.** 실제로는 축 자체가
-    데이터에 없어 **측정 대상이 아니었던 것**일 수 있다. 게이트웨이가 조회 실패와 신호
-    없음을 구분하는 것(G1)과 같은 원칙을 마이닝 결과에도 적용한다.
-    """
+    """측정 범위 — 어느 소스가 데이터에 있었는지를 결과보다 먼저 밝힌다."""
     by_src = Counter(e.get("src") or "?" for e in events)
     hosts = {s: len({e["host"] for e in events if (e.get("src") or "?") == s}) for s in by_src}
     print()
@@ -556,13 +485,8 @@ def report_scope(events: list):
         print("  => **단일 소스 측정이다.** 교차 소스 쌍은 결과에 나올 수 없다.")
         return
 
-    # 두 소스에 데이터가 있어도 **호스트명이 안 맞으면** 교차 조합이 구조적으로 0건이다.
-    # 세 시스템이 같은 장비를 다르게 부르고 공유 키가 없기 때문이다(Zabbix `node1` /
-    # Wazuh FQDN). 이걸 안 밝히면 0건이 "관계 없음"으로 읽힌다 — 조회 실패와 신호 없음을
-    # 가르는 것(G1)과 같은 형태의 오독이다.
-    #
-    # 사이트 지식이 필요 없는 검사다. 각 소스의 호스트명 집합이 겹치는지만 본다.
-    # 실제 번역은 HOST_LABEL_MAP(사이트 값)이고, 근본 해결은 배포 시 FQDN 정규화다.
+    # 두 소스에 데이터가 있어도 호스트명이 안 맞으면 교차 조합이 구조적으로 0건이다
+    # 사이트 지식 없이 각 소스의 호스트명 집합이 겹치는지만 본다
     sets = {s: {e["host"] for e in events if (e.get("src") or "?") == s} for s in present}
     common = set.intersection(*sets.values())
     smaller = min(len(v) for v in sets.values()) or 1
@@ -580,11 +504,7 @@ def report_scope(events: list):
 
 
 def lag_counts(events: list, axis: str, lag_max: int, nbins: int):
-    """알림 하나하나를 기준점으로 삼아, 이후 시차 구간별로 다른 알림이 따라오는지 센다.
-
-    고정 창의 경계 손실을 없앤다. 한 기준점에 대해 같은 축은 처음 따라온 것만 세어
-    값이 "A 중 B 가 따라온 비율"로 고정되게 한다. 방식 비교는 BRIDGE_MINER_GUIDE.
-    """
+    """알림 하나하나를 기준점으로 삼아, 이후 시차 구간별로 다른 알림이 따라오는지 센다."""
     width = lag_max / nbins
     seq = sorted(events, key=lambda e: e["ts"])
     keys = [axis_key(e, axis) for e in seq]
@@ -606,15 +526,7 @@ def lag_counts(events: list, axis: str, lag_max: int, nbins: int):
 
 
 def overlap_counts(events: list, axis: str, min_open_s: int = 0):
-    """열려 있던 문제 위에서 다른 문제가 발생한 횟수를 센다.
-
-    시차 방식으로도 못 잡는 형태가 있다 — 만성 문제가 며칠째 열려 있는 상태에서 다른
-    장애가 터지는 경우다. 두 **시작 시각**은 며칠 떨어져 있으므로 시차를 아무리 넓혀도
-    걸리지 않는다. 봐야 하는 것은 시작 시각의 근접이 아니라 **구간의 겹침**이다.
-
-    end_ts 가 0 인 이벤트(미해소 또는 복구 이벤트 미확인)는 셈에서 제외한다. 열린 채로
-    두면 그 뒤 모든 이벤트가 겹친 것으로 세어져 결과가 통째로 망가진다.
-    """
+    """열려 있던 문제 위에서 다른 문제가 발생한 횟수를 센다."""
     opens = [e for e in events if e.get("end_ts") and e["end_ts"] - e["ts"] >= min_open_s]
     if not opens:
         return None
@@ -627,8 +539,7 @@ def overlap_counts(events: list, axis: str, min_open_s: int = 0):
     n_axis = Counter(axis_key(e, axis) for e in opens)
     for base in opens:
         a = axis_key(base, axis)
-        # 이분 탐색으로 구간의 시작·끝 위치를 바로 잡는다. 매번 앞에서부터 훑으면
-        # 만성 건(최장 40일) 하나가 전체를 다시 훑어 규모가 제곱으로 커진다.
+        # 이분 탐색으로 구간 위치를 잡는다 — 앞에서부터 훑으면 규모가 제곱으로 커진다
         lo = bisect.bisect_right(times, base["ts"])
         hi = bisect.bisect_left(times, base["end_ts"])
         seen = set()
@@ -640,19 +551,14 @@ def overlap_counts(events: list, axis: str, min_open_s: int = 0):
                 days[(a, b)][_iso(times[i])[:10]] += 1
     return {"pairs": pairs, "n_axis": n_axis,
             "days": {k: len(v) for k, v in days.items()},
-            # 최대 하루가 차지하는 비중. 일수만으로는 '며칠에 걸쳤지만 하루에 몰린'
-            # 형태가 안 걸러진다. 발생 빈도를 벌하지 않는 것이 이 지표의 요점이다.
+            # 최대 하루가 차지하는 비중 — 일수만으로는 며칠에 걸쳤지만 하루에 몰린 형태가 안 걸러진다
             "max_day_share": {k: max(v.values()) / sum(v.values()) for k, v in days.items()},
             "with_end": len(opens), "total": len(events)}
 
 
 def permute_overlap(events: list, observed: dict, axis: str, rounds: int,
                     seed: int = 7, min_open_s: int = 0) -> dict:
-    """구간 겹침의 비교 기준. 길이와 종류는 그대로 두고 위치만 무작위로 옮긴다.
-
-    재는 것은 "이 문제가 오래 열리는가"가 아니라 "그 위에 나는 것이 특정 종류에
-    쏠리는가"다. 종류를 섞으면 길이와 종류가 따로 놀아 판정이 성립하지 않는다.
-    """
+    """구간 겹침의 비교 기준. 길이와 종류는 그대로 두고 위치만 무작위로 옮긴다."""
     rng = random.Random(seed)
     starts = sorted(events, key=lambda e: e["ts"])
     times = [e["ts"] for e in starts]
@@ -681,16 +587,9 @@ def permute_overlap(events: list, observed: dict, axis: str, rounds: int,
 
 
 def emit_open_link_rules(res: dict, picked: list, path: str, measured: str):
-    """게이트웨이가 읽을 연계 규칙 파일을 낸다 — 측정과 운영을 잇는 고리.
-
-    수치를 코드에 박아 두면 환경이 바뀌어도 아무도 모른다. 그 환경에서 측정한 것만
-    그 환경에 적용되도록, 도구가 파일을 내고 게이트웨이가 그 파일을 읽는다.
-    (게이트웨이: OPEN_LINK_RULES_FILE)
-    """
+    """게이트웨이가 읽을 연계 규칙 파일을 낸다 — 측정과 운영을 잇는 고리."""
     pairs, n_axis, dayc = res["pairs"], res["n_axis"], res.get("days", {})
-    # other 는 분류 실패 묶음이다. 그 안에 무엇이 들었는지 모르므로 규칙으로 쓸 수 없다.
-    # 통계적으로 유의해도 마찬가지다 — "분류 안 되는 무언가가 열려 있으면"은 지시가 아니다.
-    # 리포트에는 남기고(무엇을 분류해야 하는지 알려주므로) 규칙 파일에서만 뺀다.
+    # other 는 분류 실패 묶음이라 규칙으로 쓸 수 없다 — 리포트에만 남기고 규칙 파일에서 뺀다
     dropped = [k for k in picked if "other" in k]
     picked = [k for k in picked if "other" not in k]
     if dropped:
@@ -790,8 +689,7 @@ def permute_profile(events: list, observed: dict, axis: str, lag_max: int, nbins
         shuffled = [dict(e, **{field: v}) for e, v in zip(events, vals)]
         c, _na = lag_counts(shuffled, axis, lag_max, nbins)
         for k, obs in observed.items():
-            # 셔플에서 그 쌍이 한 번도 이어지지 않으면 후속 0 이다. 부재를 건너뛰면
-            # "셔플이 관측값에 못 미쳤다"로 세어져 유의 판정이 된다(고정 창에서 겪은 결함).
+            # 셔플에 그 쌍이 없으면 후속 0 — 부재를 건너뛰면 유의 판정이 된다
             if (sum(c[k]) if k in c else 0) >= obs:
                 ge[k] += 1
     return {"rounds": rounds, "ge": dict(ge)}
@@ -843,17 +741,7 @@ def report_profile(counts: dict, n_axis: Counter, observed: dict, perm: dict,
 
 def permute(events: list, observed: dict, window_s: int, min_pairs: int, min_lift: float,
             axis: str, min_axis: int, scope: str, rounds: int, seed: int = 7) -> dict:
-    """알림 종류만 섞고 시각·빈도·하루 주기는 그대로 둬서 비교 기준을 만든다.
-
-    한 번의 셔플 루프에서 두 가지를 함께 얻는다.
-      ceilings — 회차별 leverage 최대값. 전 쌍을 통틀어 우연이 낼 수 있는 상한.
-      ge       — 쌍별로 '셔플이 관측값 이상을 낸 횟수'. 쌍별 p값의 재료.
-
-    둘의 쓰임이 다르다. 최대값 기준은 검정 대상 쌍이 늘수록 함께 높아져 **기간을 늘릴수록
-    오히려 둔감해진다**(실측: 60일 0.0068 -> 90일 0.0103, 유의 판정은 늘지 않음).
-    진짜 관계의 leverage 는 확률이라 기간이 늘어도 커지지 않으므로, 최대값 기준만 쓰면
-    데이터를 늘릴수록 손해다. 쌍별 p값에 FDR 을 적용하면 이 문제가 없다.
-    """
+    """알림 종류만 섞고 시각·빈도·하루 주기는 그대로 둬서 비교 기준을 만든다."""
     rng = random.Random(seed)
     field = "host" if axis == "host" else "name"
     strata = defaultdict(list)
@@ -881,10 +769,7 @@ def permute(events: list, observed: dict, window_s: int, min_pairs: int, min_lif
                 seen.add(k)
                 if p["leverage"] >= observed[k]:
                     ge[k] += 1
-        # 셔플에서 한 번도 함께 나오지 않은 쌍은 결과 목록에 없다. 그 부재를 그냥 넘기면
-        # "셔플이 관측값에 못 미쳤다"로 세어져 유의 판정이 된다. 실제로는 동시 발생 0 이므로
-        # leverage = -P(A)P(B) 이고, 관측값이 그보다 낮으면(즉 관측이 더 음수면) 셔플이 이긴다.
-        # 이 처리가 없으면 **음의 상관 쌍이 후보로 올라온다**(실측으로 확인).
+        # 함께 나오지 않은 쌍의 부재를 넘기면 음의 상관 쌍이 후보로 올라온다
         n2, s2 = r["windows"], r["singles"]
         for k, obs_lev in observed.items():
             if k in seen or not n2:
@@ -896,12 +781,7 @@ def permute(events: list, observed: dict, window_s: int, min_pairs: int, min_lif
 
 
 def fdr_pass(pvals: dict, q: float) -> list:
-    """Benjamini-Hochberg 절차. p 오름차순으로 p <= q*i/m 을 만족하는 최대 i 까지 채택한다.
-
-    최대값 기준(family-wise)은 "한 건도 틀리면 안 된다"는 통제라 쌍이 수백 개면 사실상
-    아무것도 통과하지 못한다. FDR 은 "채택분 중 오탐 비율을 q 이하로" 통제하므로
-    검토 후보를 뽑는 용도에 맞다. 사람이 확인할 목록을 만드는 것이지 자동 적용이 아니다.
-    """
+    """Benjamini-Hochberg 절차. p 오름차순으로 p <= q*i/m 을 만족하는 최대 i 까지 채택한다."""
     ordered = sorted(pvals.items(), key=lambda kv: kv[1])
     m, cut = len(ordered), 0
     for i, (_k, p) in enumerate(ordered, 1):
@@ -928,8 +808,7 @@ def report_fdr(res: dict, perm: dict, q: float, top: int = 25):
     print("  최대값 기준과의 차이 — 최대값은 전 쌍을 통틀어 한 번도 안 틀리는 선을 긋는다.")
     print("  쌍이 수백 개면 그 선이 지나치게 높아 leverage 가 작은 실제 관계가 전부 탈락한다.")
 
-    # 셔플이 적으면 p 가 해상도 바닥에 깔려 BH 문턱을 못 내려간다. 그 상태의 "0쌍"은
-    # 관계가 없다는 뜻이 아니라 **측정이 성립하지 않았다**는 뜻이다. 둘을 구분해 알린다.
+    # 셔플이 적으면 p 가 해상도 바닥에 깔린다 — 그때의 "0쌍"은 측정이 성립하지 않은 것이다
     if at_floor and floor > q * at_floor / m:
         need = int(m / (q * at_floor))
         print()
@@ -953,11 +832,7 @@ def report_fdr(res: dict, perm: dict, q: float, top: int = 25):
 
 
 def _cliques(pairs: list, min_conf: float = 0.8, min_days: int = 5, min_together: int = 5):
-    """양방향 조건부확률이 모두 높고 여러 날에 걸친 쌍 — '늘 같이 뜨는' 조합.
-
-    발생이 드물면 관측·기대 빈도 차이가 작아 leverage 로는 구조적으로 누락된다.
-    min_days: 하루에 몰린 10회는 한 번의 사건을 여러 번 센 것이다.
-    """
+    """양방향 조건부확률이 모두 높고 여러 날에 걸친 쌍 — '늘 같이 뜨는' 조합."""
     return [p for p in pairs
             if p["together"] >= min_together and p["days"] >= min_days
             and min(p["p_b_given_a"], p["p_a_given_b"]) >= min_conf]
@@ -1089,12 +964,7 @@ def report(res: dict, existing: list, min_pairs: int, min_lift: float, top: int 
 
 
 def report_declared_tags(events: list):
-    """실환경에 이미 붙어 있는 class 태그 값 현황.
-
-    "팀이 태그를 붙이면 코드 수정 없이 분류가 정확해진다"를 주장하려면 세 가지를 알아야 한다 —
-    지금 몇 %에 태그가 있는가, 어떤 값을 쓰는가, 그중 우리가 모르는 값은 무엇인가.
-    모르는 값은 우리 매핑에 추가하면 되므로 **가장 값싼 개선 대상**이다.
-    """
+    """실환경에 이미 붙어 있는 class 태그 값 현황."""
     known = incident._KNOWN_CLASSES
     tagged = [e for e in events if e.get("declared")]
     print()
@@ -1109,11 +979,7 @@ def report_declared_tags(events: list):
 
 
 def report_unclassified(events: list, top: int = 15):
-    """other 로 떨어진 알림명을 빈도순으로. 여기 나온 것이 태그 부여 1순위다.
-
-    가이드가 규정한 대로 other 가 크면 답은 키워드를 늘리는 것이 아니라 소스에 태그를 붙이는
-    것이므로, "무엇에 붙일지" 목록이 곧 처방이 된다.
-    """
+    """other 로 떨어진 알림명을 빈도순으로. 여기 나온 것이 태그 부여 1순위다."""
     others = [e for e in events if e["cls"] == "other"]
     if not others:
         print("\n[ 미분류(other) 없음 ]")
@@ -1121,8 +987,7 @@ def report_unclassified(events: list, top: int = 15):
     print()
     print("[ 미분류(other) 상위 알림명 — 태그 부여 1순위 ]  총 %d/%d건 (%.1f%%)"
           % (len(others), len(events), 100 * len(others) / len(events)))
-    # Wazuh 이벤트는 rule.groups 로 분류하므로, 미분류일 때 필요한 것은 이름이 아니라
-    # **어떤 groups 가 매핑에 없는지**다. 그것을 안 보여주면 무엇을 고칠지 알 수 없다.
+    # 미분류일 때 필요한 것은 이름이 아니라 어떤 groups 가 매핑에 없는지다
     by_name = defaultdict(lambda: {"n": 0, "groups": Counter(), "src": ""})
     for e in others:
         d = by_name[e["name"]]
@@ -1210,9 +1075,7 @@ def main():
                   % (path, len(got), saved.get("fetched_at", "?"), saved.get("days", "?")),
                   file=sys.stderr)
 
-        # 측정 창이 어긋난 파일을 합치면 "그 기간엔 신호가 없었다"가 되어 결과가 왜곡된다.
-        # 리포 규칙(서로 다른 측정 기간의 수치를 섞지 않는다)을 코드로 강제하지는 않되,
-        # 어긋난 사실은 반드시 드러낸다.
+        # 측정 창이 어긋난 파일을 합치면 결과가 왜곡된다 — 어긋난 사실은 반드시 드러낸다
         if len(spans) > 1:
             lo = max(sp[4] for sp in spans)
             hi = min(sp[5] for sp in spans)
@@ -1224,8 +1087,7 @@ def main():
                       " 있으므로 그 구간의 교차 조합은 **없는 것이 아니라 측정 불가**다."
                       % (gap / 86400), file=sys.stderr)
 
-        # 저장된 cls 를 쓰지 않고 다시 분류한다 — 분류기는 코드, 덤프는 데이터다.
-        # 얼려 두면 분류기를 고쳐도 재수집 전까지 반영되지 않는다.
+        # 저장된 cls 를 쓰지 않고 다시 분류한다 — 분류기는 코드, 덤프는 데이터다
         rec = 0
         for e in events:
             tags = ([{"tag": incident.CLASS_TAG, "value": e["declared"]}]
@@ -1246,9 +1108,7 @@ def main():
                   file=sys.stderr)
     else:
         events = []
-        # 소스 하나가 안 닿았다고 전체를 죽이지 않는다. Zabbix 90일 조회를 끝낸 뒤
-        # Wazuh 타임아웃으로 수집분을 통째로 잃는 일이 실제로 발생했다.
-        # 다만 실패를 조용히 넘기면 "그 소스에 신호가 없었다"로 오독되므로 크게 남긴다.
+        # 소스 하나가 안 닿았다고 전체를 죽이지 않는다 — 다만 실패는 크게 남긴다
         failed = []
         for want, fn in (("zabbix", lambda: asyncio.run(fetch_zabbix(a.days))),
                          ("wazuh", lambda: fetch_wazuh(a.days))):
@@ -1275,8 +1135,7 @@ def main():
         with open(a.dump, "w", encoding="utf-8") as f:
             json.dump({"fetched_at": _iso(datetime.now(timezone.utc).timestamp()),
                        "days": a.days, "source": a.source,
-                       # 어느 소스가 실패했는지 파일에 남긴다. 안 남기면 나중에 --load 로
-                       # 읽었을 때 "그 소스에 신호가 없었다"와 구분되지 않는다.
+                       # 어느 소스가 실패했는지 파일에 남긴다 — 안 남기면 "신호가 없었다"와 구분되지 않는다
                        "failed_sources": failed,
                        "events": events},
                       f, ensure_ascii=False)
@@ -1339,8 +1198,7 @@ def main():
         report_scope(events)
         report(res, incident.BRIDGE_GROUPS, a.min_pairs, a.min_lift, top=a.top)
         if a.null:
-            # 음의 상관(우연보다 덜 붙는 쌍)은 브리지 후보가 아니다. 검정 대상에서 빼면
-            # 다중 검정 부담도 함께 줄어 문턱이 내려간다.
+            # 음의 상관은 브리지 후보가 아니다 — 빼면 다중 검정 부담도 줄어든다
             observed = {tuple(p["pair"]): p["leverage"]
                         for p in res["pairs"] if p["leverage"] > 0}
             perm = permute(events, observed, a.window, a.min_pairs, a.min_lift,

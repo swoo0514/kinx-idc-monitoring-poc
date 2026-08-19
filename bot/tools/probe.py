@@ -1,13 +1,4 @@
-"""랩 진단 — 호스트 식별자 3중 불일치(Zabbix/Loki/Wazuh)를 드러내고 다리 후보를 찾는다.
-
-사용:
-  python3 probe.py problems            # 발화 중 이벤트 목록 (event_id trigger_id host name)
-  python3 probe.py map <trigger_id>    # 그 트리거 호스트의 Zabbix 이름·표시명·인터페이스 dns/ip
-                                       #  + Loki host 라벨값 전체 + 각 후보로 Loki 조회 시 로그 수
-  python3 probe.py names [limit]       # Zabbix 호스트 전체를 Loki·Wazuh 이름과 대조 (어긋난 호스트 목록)
-  python3 probe.py registry [source]   # 호스트 명부 초안 출력 (손으로 쓰지 않기 위한 것)
-환경변수: ZABBIX_URL·ZABBIX_TOKEN(필수), LOKI_URL(선택).
-"""
+"""랩 진단 — 호스트 식별자 3중 불일치(Zabbix/Loki/Wazuh)를 드러내고 다리 후보를 찾는다."""
 
 import os
 import sys
@@ -24,8 +15,7 @@ import time
 
 import httpx
 
-# 한국어 Windows 콘솔은 기본 cp949 라 '—' 에서 죽는다. 조회 전에 터져 원인이 안 보인다 —
-# docs/03-pitfalls/build-traps.md. bridge_miner.py 와 같은 처리다.
+# 한국어 Windows 콘솔은 기본 cp949 라 '—' 에서 죽는다 — bridge_miner.py 와 같은 처리
 for _s in (sys.stdout, sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace")
@@ -63,12 +53,7 @@ async def _loki_count(host_label):
 
 
 async def loki_host_values(lookback_s: int = None):
-    """host 라벨의 값 목록.
-
-    Loki 는 start 를 안 주면 최근 6시간만 본다. 수집기는 7일을 보므로 여기서도 같은
-    창을 넘긴다. 창이 다르면 잠깐 로그가 끊긴 호스트가 진단에서만 사라져, 있지도 않은
-    이름 불일치를 쫓게 된다.
-    """
+    """host 라벨의 값 목록."""
     url = os.environ.get("LOKI_URL", "").rstrip("/")
     if not url:
         return []
@@ -150,11 +135,7 @@ async def loki_probe(label, hours):
 
 
 async def openlink(host_name: str):
-    """열린 문제 연계 경로 점검 — 장애 주입 전에 조회부터 되는지 본다.
-
-    확인하는 것: (1) 호스트명 -> hostid 해석 (2) problem.get 응답
-    (3) 연계 규칙 매칭 (4) 최소 경과 필터. 어디서 끊기는지가 바로 드러난다.
-    """
+    """열린 문제 연계 경로 점검 — 장애 주입 전에 조회부터 되는지 본다."""
     import httpx
 
     from gateway.alerts import collector, incident
@@ -207,12 +188,7 @@ async def openlink(host_name: str):
 
 
 async def context(event_id: str, trigger_id: str):
-    """실제 알림 1건으로 인시던트 컨텍스트를 조립해 본다 — LLM·장애 주입 없이.
-
-    probe openlink 는 조회 함수만 본다. 이 명령은 그 위에서 collect_incident_context 가
-    열린 문제를 실제로 컨텍스트에 싣는지, 그리고 **마스킹을 거쳐 나가는지**까지 확인한다.
-    나가는 형태를 그대로 보여주므로 그 출력은 외부에 붙여도 안전하다.
-    """
+    """실제 알림 1건으로 인시던트 컨텍스트를 조립해 본다 — LLM·장애 주입 없이."""
     import time as _t
 
     from gateway import masking
@@ -257,12 +233,7 @@ async def zbx_event(zbx, event_id):
 
 
 async def names(limit: int = 500):
-    """Zabbix 호스트 이름이 Loki·Wazuh 에도 그대로 있는지 전수로 대조한다.
-
-    수집기는 사건이 났을 때 그 호스트 하나만 확인한다. 배포 직후나 이름 규칙을 바꾼
-    뒤에는 어긋난 호스트를 미리 알아야 하므로 여기서 한 번에 본다. 판정 기준은
-    수집기와 같다 — Loki 는 라벨 값 일치, Wazuh 는 agent.name 부분 일치.
-    """
+    """Zabbix 호스트 이름이 Loki·Wazuh 에도 그대로 있는지 전수로 대조한다."""
     from gateway.alerts import collector
 
     z = collector.ZabbixClient()
@@ -272,8 +243,7 @@ async def names(limit: int = 500):
     zbx = sorted({h["host"] for h in hosts})
     print("Zabbix 호스트 %d개" % len(zbx))
 
-    # 두 설정은 .env 를 고쳐도 셸을 다시 읽지 않으면 프로세스에 안 들어온다.
-    # 안 먹은 채로 결과를 보면 없는 불일치를 쫓게 되므로 먼저 찍는다.
+    # 두 설정은 .env 를 고쳐도 셸을 다시 읽지 않으면 안 들어온다 — 먼저 찍는다
     print("HOST_LABEL_MAP: %s" % (os.environ.get("HOST_LABEL_MAP") or "(비어 있음)"))
     for v in ("LOGS_EXEMPT_HOSTS", "SECURITY_EXEMPT_HOSTS", "LOG_AXIS_EXEMPT_HOSTS"):
         print("%s: %s" % (v, os.environ.get(v) or "(비어 있음)"))
@@ -335,12 +305,7 @@ async def names(limit: int = 500):
 
 
 async def gen_registry(source: str = "zabbix-internal", limit: int = 500):
-    """호스트 명부 초안을 만든다. 손으로 쓰지 않기 위한 것이다.
-
-    names 와 같은 재료(Zabbix 호스트 목록·Loki 라벨 값·Wazuh 등록 여부)를 쓰되, 결과를
-    사람이 고쳐 쓸 수 있는 형태로 낸다. 그대로 쓰지 말고 **읽고 고친 뒤** 저장한다 —
-    이름이 안 맞는 호스트는 여기서도 안 맞은 채로 나온다.
-    """
+    """호스트 명부 초안을 만든다. 손으로 쓰지 않기 위한 것이다."""
     from gateway.alerts import collector
 
     z = collector.ZabbixClient()
@@ -390,12 +355,7 @@ async def gen_registry(source: str = "zabbix-internal", limit: int = 500):
 
 
 def nametable_report():
-    """전역 이름 표를 만들고 위험 항목·정확도 수치를 낸다.
-
-    실환경 진단용이다. **이름은 출력하지 않고 개수만 낸다** — 결과를 문서에 남겨야 하는데
-    호스트명은 리포에 남기지 않는 것이 이 프로젝트 원칙이다. 위험 항목만 사람이 판단할 수
-    있게 이름을 보이고, 그건 화면에서만 본다.
-    """
+    """전역 이름 표를 만들고 위험 항목·정확도 수치를 낸다."""
     from gateway import masking, nametable
 
     # 진단은 디스크에 표를 남기지 않는다 — 실환경 호스트명이 파일로 남으면 안 된다.

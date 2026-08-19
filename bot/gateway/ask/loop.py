@@ -1,8 +1,4 @@
-"""질의 반복문 — 모델이 고르고 코드가 실행한다(§27-1).
-
-원본은 한 파일(`ask.py`, 1,289줄)이었다. 2026-08-19 에 옮기기만 했고
-기능은 바꾸지 않았다.
-"""
+"""질의 반복문 — 모델이 고르고 코드가 실행한다(§27-1)."""
 
 import logging
 import time
@@ -24,12 +20,7 @@ log = logging.getLogger("gateway.ask")
 
 
 def _pkg():
-    """이 패키지 자신. 밖에서 갈아 끼운 이름을 **부를 때** 읽으려고 쓴다.
-
-    파일 맨 위에서 이름을 가져오면 그 순간의 값이 굳는다. 검사와 운영 도구가
-    `ask.fetch_problems = ...` 처럼 바꿔 끼우므로, 부르는 시점에 패키지에서 읽어야
-    그 교체가 반영된다.
-    """
+    """이 패키지 자신. 밖에서 갈아 끼운 이름을 **부를 때** 읽으려고 쓴다."""
     import sys
 
     return sys.modules[__package__]
@@ -52,9 +43,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     now = int(time.time()) if now is None else now
     mk = session_masker(sid or "-")
 
-    # **표를 먼저 만든다.** 표를 만들면서 호스트 이름이 마스커에 등록되므로, 그 뒤에
-    # 질문을 가려야 표에만 있고 이름 표에는 없는 호스트가 질문에서 안 새어 나간다.
-    # 반대 순서로 뒀다가 랩에서 실제로 실명이 나갔다(2026-08-18).
+    # 표를 먼저 만든다 — 표를 만들며 이름이 등록되므로 그 뒤에 질문을 가려야 한다
     if table is None:
         # **패키지에서 읽는다.** 밖에서 갈아 끼운 것이 여기서도 보여야 한다.
         from . import build_table as _build_table
@@ -67,8 +56,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         return {"text": "", "trace": [], "rounds": 0, "images": [], "stopped": "no_targets",
                 "error": "조회할 수 있는 대상이 없다. 감시 서버 연결과 허용 영역을 확인하라"}
 
-    # 이름 조각을 먼저 토큰으로 바꾼다. 마스커는 등록된 이름만 보므로 줄여 쓴 말을
-    # 못 잡는다. 여기서 풀어 두면 모델이 곧바로 도구를 부를 수 있다.
+    # 이름 조각을 먼저 토큰으로 바꾼다 — 마스커는 등록된 이름만 보므로 줄임말을 못 잡는다
     question = resolve_mentions(question, table)
     clean = sanitize_question(question, mk)
     if not clean["ok"]:
@@ -84,8 +72,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     pt = asktools.parse_when((panel or {}).get("to"))
     if pf is not None and pt is not None and pf < pt:
         panel_span = (pf, pt)
-    # 화면에서 열지 않고 질문 글만 붙여 넣는 일이 잦다. 그러면 패널 맥락이 아예 안 오고
-    # 도구는 최근 창을 본다. 사람이 글에 적어 놓은 구간을 읽어 쓴다(지어내지 않는다).
+    # 화면 없이 글만 붙여 넣는 경우 — 글에 적힌 구간을 읽어 쓴다(지어내지 않는다)
     if panel_span is None:
         panel_span = asktools.span_in_text(clean["text"])
 
@@ -97,21 +84,16 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b, mk),
         # **패키지에서 읽는다.** 밖에서 갈아 끼운 것이 여기서도 보여야 한다.
         "fetch_problems": lambda ent: _pkg().fetch_problems(ent, mk),
-        # 패널 손잡이는 이번 턴 안에서만 뜻이 있다. 모델은 pnl-3 만 보고 대시보드
-        # 식별자는 서버가 들고 있는다.
+        # 패널 표시는 이번 턴 안에서만 뜻이 있다 — 대시보드 식별자는 서버가 들고 있다
         "panel_refs": {},
         "fetch_panel": (panel_fn or (
             lambda ent, target, a, b: fetch_panel(ent, target, a, b, panel))),
         "list_panels": (lambda dash: fetch_panel_list(dash, mk)),
     }
 
-    images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
-    # 사람이 보고 있던 패널은 **맥락으로만** 알려 준다. 무조건 붙이면 이어지는
-    # 질문마다 같은 그림이 다시 그려진다. 붙일지는 모델이 정하고, 판단 기준은 지시문에
-    # 적었다.
-    # **지금이 언제인지 알려 준다.** 사람은 "어제 오후 3시" 처럼 상대 시각으로 말하는데,
-    # 모델이 오늘 날짜를 모르면 조회를 못 하고 되묻는다(2026-08-19 랩 실측). 서버 시각을
-    # 주면 모델이 계산해서 range 로 넘긴다.
+    images = []          # 화면이 그릴 그림. 모델에는 표시만 준다.
+    # 보던 패널은 맥락으로만 알린다 — 붙일지는 모델이 정한다
+    # 지금이 언제인지 알려 준다 — 모르면 상대 시각 질문에 조회를 못 하고 되묻는다
     viewing = "[지금] %s UTC%s" % (asktools.window_label(now, now).split(" → ")[0],
                                    chr(10))
     if panel and panel.get("uid"):
@@ -124,9 +106,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
                     ) % (mk.mask(str(panel.get("title") or "제목 없음")), span)
 
     hist, dropped = trim_history(history)
-    # **이력도 가린다.** 화면은 사람이 읽는 글(실명으로 되돌린 것)을 이력으로
-    # 되보낸다. 그대로 실으면 앞 턴의 실명이 모델에 가고, 모델은 그 이름을 도구
-    # 인자로 쓴다(2026-08-18 실측).
+    # 이력도 가린다 — 화면은 실명으로 되돌린 글을 이력으로 되보낸다
     messages = [{"role": m["role"], "content": mk.mask(m["content"])} for m in hist]
     if dropped:
         messages.insert(0, {"role": "user", "content": DROP_NOTE})
@@ -143,11 +123,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     ok_queries = {"n": 0}
 
     async def _exec_query(name, args, seen, idx):
-        """조회 도구 한 번. 반환 `(화면에 붙일 그림, 모델에 줄 결과, 직렬화한 글자)`.
-
-        **두 엔진이 이 함수를 함께 쓴다.** 중복 차단·그림 분리·마스킹이 한 곳에 있어야
-        엔진을 갈아 끼울 때 한쪽만 빠지지 않는다.
-        """
+        """조회 도구 한 번. 반환 `(화면에 붙일 그림, 모델에 줄 결과, 직렬화한 글자)`."""
         key = _json.dumps([name, args], ensure_ascii=False, sort_keys=True)
         if key in seen:
             out = {"error": "이미 같은 조회를 했다. 그 결과를 쓰고 다음으로 넘어가라",
@@ -157,9 +133,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
             out = await asktools.run_tool(name, args, ctx)
         image = None
         if isinstance(out, dict) and out.get("url"):
-            # **주소는 모델에 주지 않는다.** 대시보드 식별자와 호스트 실명이 들어 있다.
-            # 같은 패널을 두 번 찾아오면 그림은 한 장만 붙인다. 두 번 붙이면 상태 검사가
-            # 이상으로 보고 답이 통째로 버려진다(2026-08-18 실측: invalid_state).
+            # 주소는 모델에 주지 않는다 — 대시보드 식별자와 호스트 실명이 들어 있다
+            # 같은 패널을 두 번 찾아와도 그림은 한 장만 붙인다 — 두 장이면 상태 검사가 답을 버린다
             image = None if out.get("id") in made_images else out
             made_images.add(out.get("id"))
             out = {"image": out.get("id"), "title": mk.mask(out.get("title", "")),
@@ -252,8 +227,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     else:
         stopped = "rounds"
 
-    # **상한에 닿았어도 답은 준다.** 조회한 것이 있는데 마무리를 안 하면 사람에게
-    # 가는 글이 모델의 중간 생각이 된다.
+    # 상한에 닿았어도 답은 준다 — 마무리를 안 하면 모델의 중간 생각이 사람에게 간다
     if stopped in ("rounds", "deadline", "budget") and not final and trace:
         if await force_answer(system_prompt(), messages, specs, user,
                               model_fn, exec_tool, trace):
@@ -269,15 +243,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
 
 
 def prewarm() -> str:
-    """기동 뒤 첫 질의가 느린 것을 미리 치른다. 반환은 사람이 읽을 결과 한 줄.
-
-    2026-08-18 랩 실측으로 재기동 직후 첫 호출이 96초, 다음 호출은 6초였다. 접두사
-    캐시가 비어 있고 연결도 처음이라 그렇다. 사람이 기다릴 시간이 아니므로 기동 때
-    작은 호출로 대신 치른다.
-
-    실패해도 조용히 넘어간다. 예열이 안 되면 첫 질의가 느릴 뿐이고, 기동을 막을 일은
-    아니다.
-    """
+    """기동 뒤 첫 질의가 느린 것을 미리 치른다. 반환은 사람이 읽을 결과 한 줄."""
     import asyncio
 
     from .. import egress, llm
@@ -289,11 +255,9 @@ def prewarm() -> str:
             return "대상 표가 비어 예열을 건너뛴다"
         specs = asktools.build_tool_specs(table)
         last = ""
-        # 한 번 실패했다고 그만두면 예열이 안 된 채로 사람이 첫 질의를 받는다. 배경에서
-        # 도는 일이라 한 번 더 해도 사람이 기다리지 않는다.
+        # 한 번 실패했다고 그만두지 않는다 — 배경에서 도는 일이라 사람이 안 기다린다
         for _try in range(2):
-            # **같은 출구를 지난다.** 여기만 빠지면 기동 때마다 동시 수·시간당 상한·
-            # 토큰 계수 밖에서 도는 호출이 생긴다(2026-08-19 감사).
+            # 같은 출구를 지난다 — 빠지면 동시 수·시간당 상한·토큰 계수 밖에서 도는 호출이 생긴다
             res = egress.call_raw(
                 lambda: llm.claude_tools(system_prompt(),
                                          [{"role": "user", "content": "준비"}], specs,
@@ -308,13 +272,7 @@ def prewarm() -> str:
 
 
 def drop_dangling(msgs: list) -> list:
-    """결과가 안 붙은 도구 요청을 끝에서 걷어 낸다.
-
-    상한에 걸려 멈추면 마지막 남는 것이 **모델이 부르려던 도구 요청**이다. 그 요청은
-    실행되지 않았으므로 결과 블록이 없고, 그대로 다시 보내면 Anthropic 이 400 으로
-    거부한다(2026-08-18 랩 실측: `tool_use ids were found without tool_result blocks`).
-    그러면 마무리 호출이 통째로 실패해 사람은 또 답을 못 받는다.
-    """
+    """결과가 안 붙은 도구 요청을 끝에서 걷어 낸다."""
     out = list(msgs or [])
     while out:
         m = out[-1]
@@ -329,15 +287,7 @@ def drop_dangling(msgs: list) -> list:
 
 async def force_answer(system: str, msgs: list, specs: list, user: str,
                        model_fn, exec_tool, trace: list) -> bool:
-    """상한에 닿았으면 **한 번만 더** 불러 답을 받는다. 반환은 답을 받았는가.
-
-    안 하면 사람이 받는 글이 모델의 중간 생각이다. 2026-08-18 랩 실측으로 라운드를 다
-    쓴 질의의 회신이 "레벨을 더 낮춰서 전체 보안 이벤트를 확인하겠습니다." 한 줄이었다.
-    조회는 열 번 했는데 그 결과가 사람에게 하나도 안 갔다.
-
-    이 호출에는 **answer 도구만 준다.** 조회 도구를 남겨 두면 모델이 상한을 넘겨 또
-    조회하려 든다.
-    """
+    """상한에 닿았으면 **한 번만 더** 불러 답을 받는다. 반환은 답을 받았는가."""
     import asyncio
 
     from .. import egress, llm

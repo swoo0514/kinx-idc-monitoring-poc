@@ -1,23 +1,5 @@
 #!/usr/bin/env python3
-"""MSP 월간 리포트 집계 — Keep 알림 이력에서 봇만 계산할 수 있는 값을 뽑아 Zabbix 로 보낸다.
-
-왜 이 스크립트가 있나. 팀은 Zabbix Scheduled report 를 이미 운용 중이다. 그래서 새 리포트
-도구를 만들지 않는다. 대신 그 리포트가 그리는 대시보드에 **Zabbix 가 자체적으로는 낼 수 없는
-값**을 넣는다.
-
-  Zabbix 가 낼 수 있는 것 : 알림 수, 심각도 분포, 가용성
-  Zabbix 가 못 내는 것    : 알림 N건 -> 사건 M건(병합), 만성/신규 판정, 조치 후보 이력
-
-뒤쪽은 게이트웨이가 계산해 Keep 에 쌓아둔 값이다. 이 스크립트는 그것을 월 단위로 접어
-Zabbix trapper 아이템으로 밀어 넣는다. 발송 파이프는 손대지 않는다.
-
-  Keep API  ->  집계  ->  Zabbix trapper  ->  대시보드  ->  Scheduled report(기존)
-
-읽기: Keep 은 GET /alerts (읽기 전용). 쓰기: Zabbix trapper 뿐이며 랩 전용이다.
-sender 프로토콜은 공식 스펙(헤더 "ZBXD\\x01" + little-endian uint64 길이 + JSON).
-
-사용법·전략은 ansible/DEPLOY_GUIDE.md "MSP 월간 리포트".
-"""
+"""MSP 월간 리포트 집계 — Keep 알림 이력에서 봇만 계산할 수 있는 값을 뽑아 Zabbix 로 보낸다."""
 
 import argparse
 import json
@@ -38,12 +20,10 @@ for _s in (sys.stdout, sys.stderr):
 
 BOT_SOURCE = "kinx-bot"
 HOLMES_SOURCE = "holmesgpt"
-# 리포트 승인 초안이 자기 자신을 오염시키지 않도록 별도 source 로 넣고 집계에서 뺀다.
-# 이 값이 없으면 초안이 원시 알림 1건 + playbook 있으니 자동 조치 후보 1건으로도 세어진다.
+# 승인 초안이 자기 자신을 오염시키지 않도록 별도 source 로 넣고 집계에서 뺀다
 REPORT_SOURCE = "kinx-report"
 
-# 접두로 판정한다 — "재발(90일 3회) — 자동화 후보" 처럼 접미사가 붙고, 판정이 아닌 값이
-# 들어간 옛 레코드("단일", "2건 병합")도 섞여 있다.
+# 접두로 판정한다 — 접미사가 붙거나 판정이 아닌 값이 들어간 옛 레코드가 섞여 있다
 VERDICTS = ("만성", "재발", "신규")
 
 
@@ -57,13 +37,11 @@ def verdict_of(a: dict) -> str:
 
 PENDING = "검토 대기 — 승인 후 게시됩니다"
 
-# "없음"을 명시적으로 보낸다 — 0 은 "전부 실패"로 읽히고, 안 보내면 지난 집계 값이 그대로
-# 남는다. 근거는 DEPLOY_GUIDE "MSP 월간 리포트".
+# "없음"을 명시적으로 보낸다 — 0 은 "전부 실패"로 읽히고 안 보내면 지난 값이 남는다
 NOT_MEASURED = -1
 NOT_MEASURED_TEXT = "미산출 — 이 범위에서 집계된 데이터 없음"
 
-# 봇 분석은 번호 절로 강제돼 있다("**2) 추정 원인**", 때로 "**② …**").
-# 새 LLM 호출 없이 이미 만들어진 분석에서 절만 잘라 쓴다(Day8 결의 ⑥ "데모 C 출력 재활용만").
+# 봇 분석은 번호 절로 강제돼 있다 — 새 호출 없이 이미 만들어진 분석에서 절만 잘라 쓴다
 _SEC = {
     "cause": re.compile(r"\*\*\s*(?:2\)|②)[^\n]*\*\*(.*?)(?=\*\*\s*(?:3\)|③)|\Z)", re.S),
     "action": re.compile(r"\*\*\s*(?:4\)|④)[^\n]*\*\*(.*?)(?=\*\*\s*(?:5\)|⑤)|\Z)", re.S),
@@ -71,11 +49,7 @@ _SEC = {
 
 
 def _first_line(block: str, limit: int = 150) -> str:
-    """절에서 첫 실질 줄만. 마크다운 강조·불릿 기호를 걷어낸다.
-
-    길이로 거르지 않는다 — "발신지 차단." 같은 짧은 권고가 오히려 핵심이다.
-    거르는 것은 글자가 없는 장식 줄(---, ###)뿐이다.
-    """
+    """절에서 첫 실질 줄만. 마크다운 강조·불릿 기호를 걷어낸다."""
     for ln in (block or "").splitlines():
         s = ln.strip().lstrip("-*•# ").replace("**", "").replace("`", "").strip()
         if len(s) >= 2 and re.search(r"\w", s):
@@ -122,11 +96,7 @@ def _wz_search(index: str, body: dict) -> dict:
 
 
 def _terms(index: str, query: dict, field: str) -> Counter:
-    """terms 집계. 매핑이 text 면 field.keyword 로 한 번 더 시도한다.
-
-    실패 시 원인을 그대로 올린다 — 삼켜버리면 "집계 실패" 만 남아 인덱스가 없는 것인지
-    필드명이 틀린 것인지 알 수 없다(2026-07-31 실제로 쿼리 중첩 버그를 이걸로 놓칠 뻔했다).
-    """
+    """terms 집계. 매핑이 text 면 field.keyword 로 한 번 더 시도한다."""
     last = None
     for f in (field, field + ".keyword"):
         try:
@@ -139,21 +109,13 @@ def _terms(index: str, query: dict, field: str) -> Counter:
 
 
 def security_posture(agent_filter: str, days: int) -> dict:
-    """SCA 준수율 · 파일 무결성 · 취약점 재고. 상태를 반드시 함께 반환한다.
-
-    **조회에 실패했을 때 0 을 내면 안 된다.** 고객 문서에서 "취약점 0건"은 안전 신호로
-    읽히므로, 조회 실패를 정상으로 오독시키는 것은 침묵보다 나쁘다. G1(조회 실패 != 신호
-    없음)을 리포트에 적용한 것이고, 여기서는 그 오독의 대상이 고객이라 더 엄격하다.
-    """
+    """SCA 준수율 · 파일 무결성 · 취약점 재고. 상태를 반드시 함께 반환한다."""
     if not os.environ.get("WAZUH_INDEXER_URL"):
         return {"status": "disabled"}
-    # 접두 일치로 잡는다. 양쪽 와일드카드(`*db*`)로 두면 다른 고객의 취약점·파일 변경
-    # 수치가 이 고객 리포트 숫자에 합산된다. 고객 호스트는 접두를 공유하도록 이름을
-    # 짓는 것이 온보딩 규칙이므로(`customer-b-*`), 접두면 충분하다.
+    # 접두 일치로 잡는다 — 양쪽 와일드카드면 다른 고객 수치가 이 리포트에 합산된다
     who = [{"prefix": {"agent.name": agent_filter}}] if agent_filter else []
     win = {"range": {"@timestamp": {"gte": "now-%dd" % days}}}
-    # 절마다 따로 잡는다 — 취약점 인덱스 하나가 없다고 SCA·FIM 결과까지 버리면
-    # "보안 절 전체 조회 불가" 가 되어 있는 것도 못 보게 된다.
+    # 절마다 따로 잡는다 — 인덱스 하나가 없다고 SCA·FIM 결과까지 버리면 안 된다
     out = {"status": "ok", "errors": []}
 
     try:
@@ -185,8 +147,7 @@ def security_posture(agent_filter: str, days: int) -> dict:
         idx = "wazuh-states-vulnerabilities-*"
         base = {"bool": {"must": who}} if who else {"match_all": {}}
         out["vuln"] = _terms(idx, base, "vulnerability.severity")
-        # 재고 총계만 실으면 읽는 사람이 쓸 수 없다(랩 3대에 14,177건). 두 가지를 더한다 —
-        # 이번 달 새로 탐지된 것(무엇이 늘었나)과 패키지 상위(무엇을 고치면 대부분 사라지나).
+        # 재고 총계만 실으면 읽는 사람이 쓸 수 없다 — 이번 달 신규와 패키지 상위를 더한다
         new_q = {"bool": {"must": who + [{"range": {"vulnerability.detected_at":
                                                     {"gte": "now-%dd" % days}}}]}}
         out["vuln_new"] = _terms(idx, new_q, "vulnerability.severity")
@@ -204,8 +165,7 @@ def posture_items(p: dict) -> dict:
     if p.get("status") != "ok":
         why = {"disabled": "보안 연동 미설정 — 이 절은 집계 대상이 아님",
                "unavailable": "조회 불가 — 이 절의 수치는 집계되지 않음"}.get(p.get("status"), "상태 미상")
-        # 상태를 말하는 데서 끝내지 않고, 숫자·문장 항목 모두 "없음" 을 보낸다.
-        # 안 보내면 조회 불가 옆에 지난 집계의 값이 그대로 남아 정상으로 읽힌다.
+        # 숫자·문장 항목 모두 "없음"을 보낸다 — 안 보내면 지난 집계 값이 그대로 남는다
         return {"report.security_status": why, "report.compliance": NOT_MEASURED,
                 "report.fim": NOT_MEASURED_TEXT, "report.vuln": NOT_MEASURED_TEXT,
                 "report.vuln_top": NOT_MEASURED_TEXT}
@@ -226,8 +186,7 @@ def posture_items(p: dict) -> dict:
         if not total:
             out["report.vuln"] = "취약점 재고 없음"
         elif n_new >= total * 0.95:
-            # 에이전트를 이번 기간에 처음 붙이면 재고 전량이 "이번 달 탐지" 로 잡힌다.
-            # 그대로 내면 이번 달에 취약점 1.4만 건이 새로 생긴 것처럼 읽힌다 — 기준선이라고 밝힌다.
+            # 처음 붙인 기간이면 재고 전량이 "이번 달 탐지"로 잡힌다 — 기준선이라고 밝힌다
             out["report.vuln"] = ("최초 스캔 기준선 — 재고 %d건 (%s). 신규 증분은 다음 기간부터 유효"
                                   % (total, sev_line(p["vuln"])))
         else:
@@ -277,11 +236,7 @@ def _ts(a: dict) -> datetime:
 
 
 def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
-    """봇 알림만 사건으로 센다. Zabbix 가 직접 넣은 원시 알림은 사건이 아니다.
-
-    분모를 섞지 않는 것이 중요하다 — "알림"은 사건에 병합된 원시 알림 수(alert_count)와
-    분석을 생략한 저심각도 기록의 합이고, "사건"은 봇이 확정한 인시던트 수다.
-    """
+    """봇 알림만 사건으로 센다. Zabbix 가 직접 넣은 원시 알림은 사건이 아니다."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
     win = [a for a in alerts if _ts(a) >= since]
     if host_filter:
@@ -292,8 +247,7 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
 
     win = [a for a in win if REPORT_SOURCE not in src(a)]
 
-    # 원시 알림(감시 시스템이 낸 것)과 사건(봇이 확정한 것)은 별개 레코드라 겹쳐 세지 않는다.
-    # 심층조사는 기존 사건에 붙은 것이라 어느 쪽도 아니다.
+    # 원시 알림과 사건은 별개 레코드라 겹쳐 세지 않는다
     incidents = [a for a in win if BOT_SOURCE in src(a)]
     raw = [a for a in win if BOT_SOURCE not in src(a) and HOLMES_SOURCE not in src(a)]
     holmes = [a for a in win if HOLMES_SOURCE in src(a)]
@@ -305,8 +259,7 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
     judged = sum(verdicts[k] for k in VERDICTS)
     sev = Counter(str(a.get("severity") or "?") for a in incidents)
 
-    # 초동 대응 = 원시 알림 발생 -> 봇 사건 게시. 같은 호스트에서 사건 직전의 원시 알림을
-    # 짝지어 잰다. 정확한 인과 짝은 아니므로 "중앙값" 으로만 쓰고 개별 값은 내지 않는다.
+    # 초동 대응 = 원시 알림 → 봇 사건 게시. 정확한 인과 짝이 아니므로 중앙값으로만 쓴다
     gaps = []
     for inc in incidents:
         t_inc = _ts(inc)
@@ -329,8 +282,7 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
     repeat = Counter(a.get("name") or "(이름 없음)" for a in incidents
                      if verdict_of(a) in ("만성", "재발"))
 
-    # 근거 커버리지 — DEPLOY_GUIDE "MSP 월간 리포트".
-    # sources 필드가 없는 옛 레코드는 세지 않는다 — 모르는 것을 확보로 세면 과장이 된다.
+    # 근거 커버리지 — sources 가 없는 옛 레코드는 세지 않는다(모르는 것을 확보로 세면 과장)
     with_src = [a for a in incidents if a.get("sources")]
     ev_logs = sum(1 for a in with_src if "logs:ok" in str(a.get("sources")))
     ev_sec = sum(1 for a in with_src if "security:ok" in str(a.get("sources")))
@@ -359,8 +311,7 @@ def aggregate(alerts: list, days: int, host_filter: str = "") -> dict:
         "_holmes": len(holmes),
         "_merged": len(merged),
         "_folded": sum(int(a.get("alert_count") or 1) for a in merged),
-        # 판정이 붙은 사건 비율. Wazuh 알림은 trigger_id 가 없어 선판정이 안 붙는다(G11).
-        # 이 값이 낮으면 만성/신규 수치를 전체로 읽으면 안 된다 — 커버리지를 함께 본다.
+        # 판정이 붙은 사건 비율 — 낮으면 만성/신규 수치를 전체로 읽으면 안 된다 (G11)
         "_judged": judged,
         "_window_alerts": len(win),
         "_gaps": len(gaps),
@@ -406,12 +357,7 @@ def draft_path(target: str) -> str:
 
 
 def save_draft(target: str, draft: str) -> str:
-    """승인한 문장과 실제로 나가는 문장이 같아야 한다.
-
-    승인 시 집계를 다시 돌리면 LLM 이 새 서사를 만들어 **사람이 읽고 승인한 것과 다른 글**이
-    고객에게 간다. 그래서 초안을 파일로 굳혀 두고, 승인은 그 파일을 게시한다(--from-draft).
-    숫자는 결정적이므로 그때 다시 계산해도 된다 — 달라지는 것은 서사뿐이다.
-    """
+    """승인한 문장과 실제로 나가는 문장이 같아야 한다."""
     p = draft_path(target)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "w", encoding="utf-8") as f:
@@ -429,11 +375,7 @@ def load_draft(target: str) -> str:
 
 
 def _push_draft(target: str, draft: str, extra: dict = None) -> None:
-    """요약 초안을 Keep 승인 큐에 올린다 — 데모 B 의 조치 후보와 같은 자리, 같은 UI.
-
-    playbook 필드에 report_approve 를 실어 Keep 워크플로가 분기할 수 있게 한다.
-    실패해도 전체 흐름을 막지 않는다(집계·숫자 전송은 별개다).
-    """
+    """요약 초안을 Keep 승인 큐에 올린다 — 데모 B 의 조치 후보와 같은 자리, 같은 UI."""
     # `bot/` 을 경로에 넣는다. 이 파일이 bot/tools/ 로 내려갔으므로 부모다.
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     try:
@@ -514,8 +456,7 @@ def selftest() -> None:
     ck(all(not k.startswith("_") for k in r if k.startswith("report.")) and
        any(k.startswith("_") for k in r), "내부 필드 규약 위반")
 
-    # 보안 절 — 조회 실패는 절대 숫자를 만들면 안 된다. 고객 문서에서 "취약점 0건" 은
-    # 안전 신호로 읽히므로, 실패를 정상으로 오독시키는 것은 침묵보다 나쁘다.
+    # 보안 절 — 조회 실패로 절대 숫자를 만들면 안 된다. "취약점 0건"은 안전 신호로 읽힌다
     for st in ("unavailable", "disabled"):
         p = posture_items({"status": st})
         # 숫자를 만들지 않되, 항목 자체는 보낸다 — 안 보내면 지난 집계 값이 그대로 남는다.
@@ -547,13 +488,11 @@ def selftest() -> None:
     p0 = posture_items({"status": "ok", "compliance": None, "scanned": 0,
                         "fim_all": 0, "fim_promoted": 0, "vuln": Counter()})
     ck(p0["report.compliance"] == NOT_MEASURED, "점검 결과 없음을 준수율 0 으로 냈다")
-    # 실측 결함(2026-08-04) 회귀 — 고객 범위에 취약점이 없으면 상위 패키지도 낼 수 없다.
-    # 이 값을 안 보내면 범위 미지정 실행의 랩 전체 통계가 고객 리포트에 그대로 남는다.
+    # 고객 범위에 취약점이 없으면 상위 패키지도 낼 수 없다 — 안 보내면 랩 전체 통계가 남는다
     ck(p0["report.vuln_top"] == NOT_MEASURED_TEXT,
        "재고 0인데 상위 패키지를 안 보냈다 — 다른 호스트의 옛 값이 남는다")
 
-    # 한 절이 실패해도 나머지는 살아야 한다. 취약점 인덱스 하나 때문에 SCA·FIM 을
-    # 통째로 버리던 실측 결함(2026-07-31)의 회귀 검사.
+    # 한 절이 실패해도 나머지는 살아야 한다 — 2026-07-31 결함의 회귀 검사
     pp = posture_items({"status": "ok", "compliance": 52.4, "scanned": 4,
                         "fim_all": 107, "fim_promoted": 3, "errors": ["취약점: 인덱스 없음"]})
     ck("report.compliance" in pp and "report.fim" in pp, "한 절 실패로 나머지가 버려졌다")
@@ -611,11 +550,7 @@ def main():
         return
     if not a.keep_url:
         sys.exit("[!] --keep-url 또는 환경변수 KEEP_URL 이 필요하다")
-    # 범위 게이트 — 기본값을 거부로 둔다. 화면상 아무 문제가 없어 보이는 종류의 사고다.
-    #
-    # 이 게이트는 원래 발송 직전에 있었다. 그런데 그보다 앞에 외부 LLM 호출이 있어서,
-    # 범위 없이 실행하면 "안 보냈다"고 종료하기 전에 전 고객 집계가 이미 밖으로 나갔다.
-    # 게이트는 밖으로 나가는 첫 지점보다 앞이어야 한다.
+    # 범위 게이트 — 기본값을 거부로 둔다. 밖으로 나가는 첫 지점보다 앞이어야 한다
     if not (a.host_filter or a.agent_filter) and not a.allow_unscoped:
         sys.exit("[!] 범위가 지정되지 않았다 — --host-filter 없이 돌리면 다른 고객·사내 "
                  "호스트가 이 고객 리포트에 실리고, 외부 분석에도 그대로 나간다.\n"
@@ -675,8 +610,7 @@ def main():
     if a.draft_to_keep:
         tgt = a.target or "(미지정)"
         print("[draft] %s" % save_draft(tgt, draft))
-        # 워크플로가 실행에 필요한 값을 알림에서 읽는다 — 워크플로에 고객·수신자를
-        # 하드코딩하지 않기 위해서다(데모 B 가 host·service 를 그렇게 받는다).
+        # 워크플로가 실행에 필요한 값을 알림에서 읽는다 — 고객·수신자를 하드코딩하지 않는다
         _push_draft(tgt, draft, extra={
             "customer": a.customer_group or _guess_group(tgt),
             "host_filter": a.host_filter, "recipient": a.recipient})
@@ -689,8 +623,7 @@ def main():
             res["report.insight"] = saved.split("\n\n[월간 종합 분석]\n", 1)[1]
         print("\n[승인됨] 저장된 초안을 그대로 싣는다 (%s)" % draft_path(a.target or ""))
     elif a.approve:
-        # 사람이 위 초안을 읽고 승인한 경우에만 서사가 실린다. 고객에게 나가는 문서이므로
-        # 시스템 변경(Ansible 조치)과 같은 등급으로 다룬다 — 읽기=자동/쓰기=승인.
+        # 사람이 초안을 읽고 승인한 경우에만 서사가 실린다 — 읽기=자동 / 쓰기=승인
         res["report.summary"] = res["_summary_draft"]
         if insight:
             res["report.insight"] = insight

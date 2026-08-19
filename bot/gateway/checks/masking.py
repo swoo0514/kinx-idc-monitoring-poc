@@ -1,8 +1,4 @@
-"""이름 가림과 반출 경계 검사.
-
-원본은 `selftest.py` 한 파일(6,801줄)이었다. 2026-08-19 에 영역별로
-나눴고 검사 내용은 그대로다.
-"""
+"""이름 가림과 반출 경계 검사."""
 
 import logging
 import asyncio
@@ -21,15 +17,7 @@ log = logging.getLogger("gateway.selftest")
 
 
 def _nametable_checks() -> int:
-    """전역 이름 표 — 경계 일치·대소문자·긴 것 우선.
-
-    지금 마스킹은 그 사건의 호스트 정보에서 이름을 뽑아 등록한다. 그래서 사건 당사자가
-    아닌 호스트명은 안 가려진다. 로그 한 줄에 다른 서버 이름이 섞이면 원문 그대로 나간다.
-
-    표로 잡되 두 가지를 지켜야 한다. 등록되지 않은 더 긴 문자열 안에서는 바뀌면 안 되고
-    (db01 이 mydb01 안에서), 대소문자가 달라도 잡아야 한다(DB01). 선례는 Presidio 의
-    금지 목록 인식기로, 경계 lookaround 와 대소문자 무시를 쓴다.
-    """
+    """전역 이름 표 — 경계 일치·대소문자·긴 것 우선."""
     import json
 
     from .. import masking
@@ -74,8 +62,7 @@ def _nametable_checks() -> int:
     finally:
         nametable._terms, nametable._by_source = saved
 
-    # 위험 판정이 실제로 위험한 것을 집는가. 치환은 대소문자를 무시하므로 판정도
-    # 그래야 한다 — Test 는 일반 문장의 test 를 바꾸는데 위험으로 안 잡혔다.
+    # 치환이 대소문자를 무시하므로 위험 판정도 그래야 한다
     saved2 = dict(nametable._terms)
     try:
         nametable._terms = {"Test": "group", "kdhtest": "host", "임시": "group"}
@@ -94,15 +81,7 @@ def _nametable_checks() -> int:
 
 
 def _registry_fill_checks() -> int:
-    """명부가 이름의 주인 노릇을 하는가.
-
-    지금은 세 시스템의 이름을 **살아 있는 조회로 추측**한다. 인터페이스 목록을 훑어 점이
-    든 첫 dns 를 고른다. 추측이라 틀릴 수 있고 조회가 실패하면 빈다. 그 세 이름이
-    확정되는 순간은 따로 있다 — Ansible 이 세 에이전트에 같은 FQDN 을 심는 때다.
-
-    읽는 쪽(`_resolve_label` → `registry.label`)은 이미 있다. 여기서는 **명부가 인터페이스
-    추측을 실제로 이기는지**와 **중복 항목이 조용히 사라지지 않는지**를 잠근다.
-    """
+    """명부가 이름의 주인 노릇을 하는가."""
     import logging
 
     from .. import registry
@@ -120,9 +99,7 @@ def _registry_fill_checks() -> int:
         assert collector._resolve_label("node1", host_obj, "zabbix-internal",
                                         "security") == "vm-target-001.novalocal"
 
-        # ①-b **추측이 갈릴 때는 조용히 넘어가지 않는다.** FQDN 이 둘이면 어느 쪽이 그
-        #      축의 이름인지 고를 근거가 없다. 관리망 쪽이 먼저 오면 로그가 0줄이 되고
-        #      사람은 "로그 없음" 으로 읽는다.
+        # 추측이 갈릴 때는 조용히 넘어가지 않는다 — FQDN 이 둘이면 고를 근거가 없다
         two = {"interfaces": [{"dns": "node1.mgmt.local"}, {"dns": "node1.svc.local"}]}
         seen = []
         saved_warn = collector.log.warning
@@ -146,9 +123,7 @@ def _registry_fill_checks() -> int:
         registry._ENTRIES = [{"name": "node1", "source": "zabbix-internal"}]
         assert registry.duplicates() == []
 
-        # ④ **명부 파일을 실제로 적재해 본다.** `_ENTRIES` 를 직접 넣는 검사만 있으면
-        #    적재 경로가 한 번도 안 지나간다. 2026-08-18 에 그 안에서 이름 오류가 났는데
-        #    검사는 전부 통과했다.
+        # 명부 파일을 실제로 적재해 본다 — 직접 넣는 검사만 있으면 적재 경로가 안 지나간다
         import os
         import tempfile
         d = tempfile.mkdtemp(prefix="reg-")
@@ -168,8 +143,7 @@ def _registry_fill_checks() -> int:
             registry.PATH = saved_path
             registry._load()
 
-        # ⑤ **불러오는 순간에 적재가 성공하는가.** 모듈을 새로 불러야 보인다. 위 검사는
-        #    이미 불러온 모듈에서 `_load()` 를 다시 부르므로 임포트 시점 오류를 못 본다.
+        # 불러오는 순간의 적재 — 이미 불러온 모듈에서 _load() 를 부르면 임포트 오류를 못 본다
         import subprocess
         import sys as _sys
         code = ("import os,sys;os.environ['HOST_REGISTRY_FILE']=%r;"
@@ -188,12 +162,7 @@ def _registry_fill_checks() -> int:
 
 
 def _proxy_gate_checks() -> int:
-    """마스킹을 보장 못 할 때 무엇이 나가는가.
-
-    지금은 **호출자가 스스로 적은** `metadata.user_id` 가 "msp" 로 시작할 때만 막았다.
-    고객사 도구가 `customer-msp-01` 로 적으면 통과하고, 사내 사용자 `mspark` 는 막히며,
-    같은 앱의 질의 경로는 "호출자가 신고한 값은 쓰지 않는다" 를 지킨다. 원칙이 갈렸다.
-    """
+    """마스킹을 보장 못 할 때 무엇이 나가는가."""
     import os
 
     from .. import proxy
@@ -224,12 +193,7 @@ def _proxy_gate_checks() -> int:
 
 
 def _model_kind_wiring_checks() -> int:
-    """용도별 모델 등급이 **호출부까지** 배선돼 있는가.
-
-    매핑에는 `"triage": "LLM_MODEL_INVESTIGATE"` 가 있는데 호출부가 용도를 안 넘겨
-    기본 모델로 떨어졌다(2026-08-19 감사 F-5). 함수 단위 단언만 있으면 이런 누락이
-    통과한다 — 매핑은 맞고 호출부만 틀렸기 때문이다. 그래서 호출부를 지나며 본다.
-    """
+    """용도별 모델 등급이 **호출부까지** 배선돼 있는가."""
     import os
 
     from .. import egress, llm
@@ -261,14 +225,7 @@ def _model_kind_wiring_checks() -> int:
 
 
 def _nametable_freshness_checks() -> int:
-    """이름 표가 얼어붙은 것을 밖에서 볼 수 있는가.
-
-    갱신 스레드는 예외를 삼키고 계속 돌며, 전건 실패가 이어져도 직전 표를 그대로 쓴다.
-    조회 토큰이 만료되면 표가 그 시점에 멈추고 로그에만 오류가 쌓인다. 그 사이 온보딩한
-    호스트는 표에 영영 없고, 질의 경로가 그 이름을 원문으로 내보낸다. **아무 지표도
-    안 움직여 발견 계기가 없다**(2026-08-19 감사 E-9). 감시자를 감시한다는 이 프로젝트의
-    진단이 게이트웨이 자신에게 그대로 되돌아온 자리다.
-    """
+    """이름 표가 얼어붙은 것을 밖에서 볼 수 있는가."""
     import time
 
     from .. import app as gw
@@ -305,15 +262,7 @@ def _nametable_freshness_checks() -> int:
 
 
 def _token_scope_checks() -> int:
-    """질의용 토큰으로 웹훅과 LLM 중계를 부를 수 없는가.
-
-    화면은 Grafana 데이터소스 프록시를 거쳐 게이트웨이를 부른다. 그 프록시는 선언된
-    경로의 **하위 경로를 전부 통과시킨다.** 2026-08-19 랩 실측으로 Viewer 권한 계정이
-    `/webhook/zabbix` 를 부르면 핸들러까지 닿았고(422), `/v1/messages` 는 회사 키로
-    실제 답을 받았다(200). 토큰이 하나뿐이라 용도를 가릴 수 없었다.
-
-    질의용 토큰은 `/ask*` 만 연다. 웹훅과 중계는 게이트웨이 토큰만 받는다.
-    """
+    """질의용 토큰으로 웹훅과 LLM 중계를 부를 수 없는가."""
     import os
 
     from .. import app as gw
@@ -345,21 +294,13 @@ def _token_scope_checks() -> int:
 
 
 def _repo_secret_checks() -> int:
-    """리포에 실환경 주소가 커밋돼 있지 않은가.
-
-    2026-08-19 감사에서 대시보드 JSON 한 곳에 실환경 공인 IP 가 다시 들어가 있는 것이
-    확인됐다. Day6 에 자리표시자로 바꿔 둔 것이 대시보드를 다시 내보내면서 되돌아왔고
-    `.bak` 만 남아 있었다. **되돌리는 것만으로는 같은 사고가 재현되므로** 검사를 세운다.
-
-    사설 대역(10./192.168./172.16~31.)은 랩 구성이라 통과시킨다. 공인 IP 만 본다.
-    """
+    """리포에 실환경 주소가 커밋돼 있지 않은가."""
     import io as _io
     import os
     import re
     import subprocess
 
-    # gateway/selftest.py → gateway → bot → 리포 뿌리. 뿌리를 잘못 세면 bot 안만 훑고
-    # 대시보드 JSON 이 검사 대상에서 통째로 빠진다.
+    # 뿌리를 잘못 세면 bot 안만 훑고 대시보드 JSON 이 검사 대상에서 통째로 빠진다
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if not os.path.isdir(os.path.join(root, ".git")):
         root = os.path.dirname(root)
@@ -371,12 +312,7 @@ def _repo_secret_checks() -> int:
     ip = re.compile(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b")
 
     def allowed(a, b, c):
-        """랩 사설 대역과 **문서용 예시 대역**은 통과시킨다.
-
-        예시 대역은 RFC 5737 이 문서에 쓰라고 비워 둔 것이라 이 리포가 자리표시자로
-        쓰고 있다(192.0.2.0/24 · 198.51.100.0/24 · 203.0.113.0/24). 이것까지 막으면
-        검사가 늘 빨개져 아무도 안 본다.
-        """
+        """랩 사설 대역과 **문서용 예시 대역**은 통과시킨다."""
         return (a in (0, 10, 127) or a >= 224
                 or (a == 192 and b == 168)
                 or (a == 172 and 16 <= b <= 31)
@@ -474,13 +410,7 @@ def _proxy_mask_checks() -> int:
 
 
 def _tenant_scope_checks() -> int:
-    """보안 조회가 남의 호스트까지 긁어오지 않는가.
-
-    양쪽 와일드카드로 이름을 맞추면 `db01` 조회가 `customer-b-db01` 의 경보까지
-    가져온다. 그 항목은 이번 사건 호스트만 등록된 마스커를 거치므로 **다른 고객의
-    파일 경로·규칙 설명이 원문 그대로** 외부로 나가고, Slack 카드에는 이 호스트의
-    침해 신호처럼 보인다.
-    """
+    """보안 조회가 남의 호스트까지 긁어오지 않는가."""
     import asyncio
     import json
     import os
@@ -504,8 +434,7 @@ def _tenant_scope_checks() -> int:
             return False
 
         async def post(self, url, **kw):
-            # 조회가 두 번 간다(본 조회 + 이름 확인). 덮어쓰면 한쪽만 보게 되므로
-            # 전부 모은다.
+            # 조회가 두 번 간다(본 조회 + 이름 확인) — 덮어쓰면 한쪽만 보므로 전부 모은다
             sent.setdefault("bodies", []).append(kw.get("json"))
             return _Resp()
 

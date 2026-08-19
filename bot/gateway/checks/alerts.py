@@ -1,8 +1,4 @@
-"""알림 경로 검사 — 심각도·병합·수집·조치.
-
-원본은 `selftest.py` 한 파일(6,801줄)이었다. 2026-08-19 에 영역별로
-나눴고 검사 내용은 그대로다.
-"""
+"""알림 경로 검사 — 심각도·병합·수집·조치."""
 
 import logging
 import asyncio
@@ -24,13 +20,7 @@ log = logging.getLogger("gateway.selftest")
 
 
 def _source_status_checks() -> int:
-    """G1 — "조회 실패"와 "신호 없음"의 구분이 수집기·게이트·마스킹·카드까지 전파되는지.
-
-    이 구분이 없으면 Wazuh 인덱서 장애가 "침해 흔적 없음"으로 둔갑하고(프롬프트가 그렇게
-    해석하라고 지시한다), 게이트는 교차 신호 0으로 보아 LLM을 스킵한다. 즉 관측 백엔드가
-    죽을수록 봇이 조용해지고 자신만만해진다. 아래는 그 경로가 막혀 있는지 확인한다.
-    외부 호출 0 — 미배선·라벨 미해석 경로만 검증한다.
-    """
+    """G1 — "조회 실패"와 "신호 없음"의 구분이 수집기·게이트·마스킹·카드까지 전파되는지."""
     import asyncio
     import os
 
@@ -38,8 +28,7 @@ def _source_status_checks() -> int:
     from ..alerts import collector, incident
     from ..integrations import slack
 
-    # 축 면제·명부도 같이 지운다. 우선순위가 명부 → 축별 변수 → 옛 변수 순이라
-    # 위쪽이 살아 있으면 아래 검사가 통째로 무너진다.
+    # 축 면제·명부도 같이 지운다 — 우선순위가 위쪽부터라 남으면 아래 검사가 무너진다
     saved = {k: os.environ.pop(k, None) for k in
              ("LOKI_URL", "WAZUH_INDEXER_URL", "LOGS_EXEMPT_HOSTS",
               "SECURITY_EXEMPT_HOSTS", "LOG_AXIS_EXEMPT_HOSTS", "HOST_REGISTRY_FILE")}
@@ -50,8 +39,7 @@ def _source_status_checks() -> int:
         os.environ["LOKI_URL"] = "http://127.0.0.1:1"
         assert asyncio.run(collector._loki_logs("", 0))[:2] == ([], collector.SOURCE_UNAVAILABLE)
 
-        # 로그 축이 없는 것이 정상인 호스트는 조회하지 않는다 — 인증서·리포트용 가상 호스트를
-        # 이름 불일치로 보면 알림마다 분석이 돌고 상한을 먼저 소진한다.
+        # 로그 축이 없는 것이 정상인 가상 호스트는 조회하지 않는다
         os.environ["LOG_AXIS_EXEMPT_HOSTS"] = "cert-*,report-*"
         try:
             assert collector.axis_exempt("cert-example.com", "logs") is True
@@ -77,8 +65,7 @@ def _source_status_checks() -> int:
         finally:
             os.environ.pop("LOG_AXIS_EXEMPT_HOSTS", None)
 
-        # dns 칸에 컨테이너 이름이 들어 있으면 쓰지 않는다 — 여러 호스트가 같은 이름을
-        # 가질 수 있어 남의 로그를 이 호스트 것으로 읽는다 (랩 실측: zabbix-agent2·snmpsim)
+        # dns 칸에 컨테이너 이름이 있으면 쓰지 않는다 — 여러 호스트가 같은 이름을 가진다
         assert collector._resolve_label("lab-db", {"interfaces": [{"dns": "zabbix-agent2"}]}) \
             == "lab-db"
         assert collector._resolve_label("n2", {"interfaces": [{"dns": "n2.example.com"}]}) \
@@ -137,8 +124,7 @@ def _source_status_checks() -> int:
     fired, why = incident.should_triage(single, un_ctx)
     assert fired is True and "이름 불일치" in why, why
 
-    # 절단은 조회한 쪽이 알려 준다. 받는 쪽이 개수로 추측하면, 조회 측이 현재
-    # 이벤트를 목록에서 빼는 순간 199 가 되어 200 과 비교하는 판정이 영원히 안 걸린다.
+    # 절단은 조회한 쪽이 알려 준다 — 받는 쪽이 개수로 추측하면 영원히 안 걸린다
     many = [1000.0 - i for i in range(199)]
     assert prejudge.judge(many, now=1000.0, listed_truncated=True)["count_truncated"] is True
     assert prejudge.judge(many, now=1000.0, listed_truncated=False)["count_truncated"] is False
@@ -146,8 +132,7 @@ def _source_status_checks() -> int:
     assert prejudge.judge(many, now=1000.0, total_count=5000,
                           listed_truncated=True)["count_truncated"] is False
 
-    # 사유별 수치는 통제가 아니라 관측이다. 게이트는 몇 번이 오든 판단을 바꾸지
-    # 않고, 대신 무엇 때문에 돌았는지를 센다. 부하 보호는 호출 지점이 맡는다.
+    # 사유별 수치는 통제가 아니라 관측 — 게이트는 몇 번이 오든 판단을 바꾸지 않는다
     for q in incident._fires.values():
         q.clear()
     fired_n = sum(1 for _ in range(40)
@@ -172,8 +157,7 @@ def _source_status_checks() -> int:
     assert fired is True and "처음 보는 문제" in why, why
     assert incident.should_triage(single, chronic_ctx, now=1000.0)[0] is False, "만성은 스킵이어야"
 
-    # 사유는 섞이지 않아야 한다. 섞이면 "관측 소스가 죽었다"와 "새 트리거를 대량으로
-    # 붙였다"가 한 숫자로 합쳐져, 수치가 올라도 무엇을 고쳐야 할지 알 수 없다.
+    # 사유는 섞이지 않아야 한다 — 섞이면 무엇을 고쳐야 할지 알 수 없다
     for q in incident._fires.values():
         q.clear()
     for _ in range(7):
@@ -206,8 +190,7 @@ def _source_status_checks() -> int:
     # 프롬프트와 코드의 동기 — 상태를 안 보는 프롬프트로 되돌아가면 실패
     assert "sources.security" in llm.TRIAGE_SYSTEM, "프롬프트가 조회 상태를 안 본다"
     assert "sources.open_problems" in llm.TRIAGE_SYSTEM, "프롬프트가 열린 문제 상태를 안 본다"
-    # 축을 늘리면 프롬프트도 같이 늘어야 한다. 안 그러면 그 축이 실패했을 때 모델이
-    # 빈 값을 "이상 없음"으로 읽는다.
+    # 축을 늘리면 프롬프트도 같이 늘어야 한다 — 안 그러면 빈 값이 "이상 없음"이 된다
     assert "sources.metrics" in llm.TRIAGE_SYSTEM, "프롬프트가 지표 축 상태를 안 본다"
     assert "collect_failed" in llm.TRIAGE_SYSTEM, "프롬프트가 알림별 수집 실패를 안 본다"
     # 화이트리스트가 실제로 통과시키는지 — 목록에 없으면 프롬프트에 안 실린다
@@ -259,10 +242,7 @@ def _class_map_checks() -> int:
         # 파일에 없으면 키워드 폴백
         assert m.classify("Interface eth0(): Link down") == "network"
 
-        # ── 배선 검사 — 함수가 맞게 도는 것과 그 함수가 불리는 것은 다른 문제다 ──
-        # 위 검사들은 classify 를 직접 부른다. 실제로는 웹훅이 rule_id 를 안 넘겨서
-        # 파일의 wazuh 절이 통째로 죽어 있었는데, 파일 로드 로그는 정상이라 설정한
-        # 사람은 적용됐다고 믿었다. 그래서 웹훅이 넘기는지를 따로 본다.
+        # 배선 검사 — 함수가 맞게 도는 것과 그 함수가 불리는 것은 다른 문제다
         import shutil
         import tempfile
 
@@ -270,9 +250,7 @@ def _class_map_checks() -> int:
         from ..alerts import pending
 
         importlib.reload(app_mod)
-        # 이 검사는 실제 triage 경로를 태우므로 대기 파일에 쓴다. 배포된 서버에서
-        # 돌리면 운영 대기 목록에 검사 기록이 들어가고, 재기동 때 그것이 되살아나
-        # 없는 알림으로 사건이 열린다. 랩에서 실제로 그렇게 남아 있었다.
+        # 실제 triage 경로를 태우므로 대기 파일에 쓴다 — 운영 서버면 검사 기록이 되살아난다
         _tmpd = tempfile.mkdtemp(prefix="classmap-test-")
         _saved_pending = pending.PATH
         pending.PATH = os.path.join(_tmpd, "pending.jsonl")
@@ -308,12 +286,7 @@ def _class_map_checks() -> int:
 
 
 def _class_tag_checks() -> int:
-    """선언 태그 이름이 벤더 표준과 충돌하지 않는지.
-
-    실측(2026-08-10) — Zabbix 표준 템플릿 트리거가 `class=os`·`class=database` 를 달고
-    나온다. 우리가 같은 이름을 쓰면 한 트리거에 의미가 다른 두 값이 공존하고, 어느 쪽이
-    읽힐지가 태그 순서에 좌우된다.
-    """
+    """선언 태그 이름이 벤더 표준과 충돌하지 않는지."""
     from ..alerts import incident
 
     assert incident.CLASS_TAG != "class", "벤더 표준 태그 이름과 충돌한다"
@@ -331,21 +304,14 @@ def _class_tag_checks() -> int:
 
 
 def _site_keyword_checks() -> int:
-    """사이트 고유 키워드가 코드가 아니라 환경변수로 들어오는지.
-
-    왜 — 한 조직의 커스텀 트리거명("... not connect" 같은 관용구)을 범용 규칙에 섞으면
-    다른 환경에서는 뜻 없는 줄이 되고, 나중에 왜 있는지 아무도 모르게 된다. 범용 규칙에는
-    표준 템플릿·일반 용어만 두고 사이트 고유분은 밖에서 주입한다.
-    """
+    """사이트 고유 키워드가 코드가 아니라 환경변수로 들어오는지."""
     import importlib
     import os
 
     from ..alerts import incident as inc_mod
 
     saved = os.environ.get("SITE_CLASS_KEYWORDS")
-    # 배포 서버에는 이 값이 들어 있다. 지우지 않으면 그 서버에서만 실패하고, 설정
-    # 문제인지 코드 문제인지 구분할 수 없다. 몇 번 겪으면 "저 서버는 원래 빨간불"이
-    # 되고, 그때부터 진짜 회귀가 같은 빨간불에 섞여 안 보인다.
+    # 배포 서버에 든 값을 지우고 돌린다 — 안 그러면 설정 문제인지 코드 문제인지 모른다
     os.environ.pop("SITE_CLASS_KEYWORDS", None)
     inc_mod = importlib.reload(inc_mod)
     try:
@@ -372,12 +338,7 @@ def _site_keyword_checks() -> int:
 
 
 def _open_link_checks() -> int:
-    """열린 문제 연계 — 규칙 매칭·경과 필터·마스킹 누수·상태 계약.
-
-    왜 이 검사들인가: 실측상 게이트웨이 시간창 안에서는 서로 다른 클래스가 함께 나지 않아
-    (유형 혼합 0건) 브리지 그룹만으로는 발동하지 않는다. 이 경로가 그 공백을 메우므로
-    조용히 죽으면 알아채기 어렵다. 설계는 private/docs/open_problem_linkage_design.md.
-    """
+    """열린 문제 연계 — 규칙 매칭·경과 필터·마스킹 누수·상태 계약."""
     import importlib
     import os
 
@@ -385,9 +346,7 @@ def _open_link_checks() -> int:
     from ..alerts import incident
 
     n = 0
-    # 측정 파일이 없으면 연계 자체가 꺼져야 한다. 예전에는 예시값(비율 0.90)이 실렸는데,
-    # 시스템 프롬프트가 그 수치를 "실제로 측정된 값"이라고 모델에 알려 주므로 근거 없는
-    # 비율이 분석 근거로 게시됐다. 없는 근거보다 없는 문장이 낫다.
+    # 측정 파일이 없으면 연계를 끈다 — 예시값이 "측정된 값"으로 모델에 갔다
     saved_rules = os.environ.pop("OPEN_LINK_RULES_FILE", None)
     try:
         m0 = importlib.reload(incident)
@@ -399,12 +358,7 @@ def _open_link_checks() -> int:
             os.environ["OPEN_LINK_RULES_FILE"] = saved_rules
         incident = importlib.reload(incident)
 
-    # 규칙 매칭 — **값이 아니라 기제를 검사한다.** 특정 수치에 묶으면 측정 파일을 바꿀 때마다
-    # 테스트가 깨지고, 그 결합이야말로 이 설계가 없애려던 것이다.
-    #
-    # 규칙은 검사하는 동안만 우리가 아는 것으로 바꿔 끼운다. 배포된 서버에는 그 서버의
-    # 측정 결과가 실려 있어서(랩은 2건, 실환경은 재측정마다 달라진다) 파일을 그대로 쓰면
-    # 코드가 멀쩡해도 테스트가 깨지고, 설정 탓인지 코드 탓인지 구분할 수 없다.
+    # 값이 아니라 기제를 검사한다 — 규칙은 검사하는 동안만 아는 것으로 바꿔 끼운다
     saved_rules, saved_measured = incident.OPEN_LINK_RULES, incident.OPEN_LINK_MEASURED
     incident.OPEN_LINK_RULES = {
         ("disk_space", "cpu_io_pressure"): {"rate": 0.96, "days": 13, "overlaps": 24},
@@ -468,8 +422,7 @@ def _open_link_masking_checks() -> int:
     assert masked["open_problems"][0]["stale"] is False
     n += 5
 
-    # 장기 미해소는 선행 원인이 아니라 방치 항목 — 지우지 않고 표시한다.
-    # 실측(2026-08-10 실환경): 3년 넘게 열린 문제가 있었고 90일 창 미해소는 전부 7일 이상이었다.
+    # 장기 미해소는 선행 원인이 아니라 방치 항목 — 지우지 않고 표시한다
     import asyncio
 
     from ..alerts import collector
@@ -486,9 +439,7 @@ def _open_link_masking_checks() -> int:
     out, st = asyncio.run(collector._open_problems(
         _FakeZbx(), None, "1", {"cpu_io_pressure"}, set(), now))
     assert st == "ok" and len(out) == 2, out
-    # 인시던트에 이미 그 유형이 있으면 선행이 아니라 같은 문제의 다른 임계 트리거다.
-    # 실측 2026-08-10: 복제 지연을 임계값만 달리 본 두 트리거가 각각 "이번 알림"과
-    # "선행 문제"로 잡혔다.
+    # 이미 그 유형이 있으면 선행이 아니라 같은 문제의 다른 임계 트리거다
     same, st2 = asyncio.run(collector._open_problems(
         _FakeZbx(), None, "1", {"cpu_io_pressure", "disk_space"}, set(), now))
     assert st2 == "ok" and same == [], "같은 유형이 선행 문제로 붙었다"
@@ -564,8 +515,7 @@ def _remediation_checks() -> int:
         assert triage._push_gated(inc, ctx, "단일 축·교차 신호 없음") == \
             {"ok": False, "skipped": True}
 
-        # 근거 축 기록 — 조회 실패와 신호 없음의 구분(G1)이 Keep 레코드까지 간다.
-        # 이게 비면 월간 리포트의 "로그를 근거로 판단한 사건 수"가 통째로 0이 된다.
+        # 근거 축 기록 — 비면 월간 리포트의 "로그를 근거로 판단한 사건 수"가 0이 된다
         assert triage._sources_note(
             {"sources": {"security": "ok", "logs": "unavailable"}}) == \
             "logs:unavailable,security:ok"
@@ -605,8 +555,7 @@ def _fastpath_checks() -> int:
             on_signal=on_signal, debounce_s=0.05, max_window_s=5,
             priority_debounce_s=0.02, max_alerts=20)
         mono = time.monotonic()
-        # 랩 실측처럼 거의 동시에 도착시킨다. 잠금이 없으면 두 번째 알림이 앵커가 빈 것을
-        # 보고 그냥 버려져 답글이 사라진다(2026-07-29 실측으로 발견).
+        # 거의 동시에 도착시킨다 — 잠금이 없으면 두 번째 알림의 답글이 사라진다
         await asyncio.gather(mgr.submit(_a("replication", t=mono)),
                              mgr.submit(_a("cpu_io_pressure", t=mono)))
         await asyncio.sleep(0.3)
@@ -658,8 +607,7 @@ def _holmes_gate_checks() -> int:
         assert holmes.should_investigate("SEV2", False, zbx, merged=False)[0] is False
         # MSP 는 원문이 나가므로 신규여도 금지 (테넌트 경계가 우선)
         assert holmes.should_investigate("SEV2", False, ["zabbix-msp"], verdict="신규")[0] is False
-        # 차단이 기본이어야 한다. 예전 플래그(HOLMES_MASKED)는 이름과 예시 파일 주석이
-        # "켜면 가려진다"로 읽히는데 실제로는 차단만 풀었고 기본값이 1이었다.
+        # 차단이 기본이어야 한다 — 옛 플래그는 이름과 달리 차단만 풀었고 기본값이 1이었다
         os.environ["HOLMES_MASKED"] = "1"
         try:
             assert holmes.should_investigate("SEV2", False, ["zabbix-msp"],
@@ -673,9 +621,7 @@ def _holmes_gate_checks() -> int:
                                              verdict="신규")[0] is True
         finally:
             os.environ.pop("HOLMES_ALLOW_MSP_RAW", None)
-        # 심층조사 질문에 원문 호스트명이 들어간다는 사실을 검사로 고정한다.
-        # 심층조사가 호스트명을 원문으로 보낸다는 사실을 검사로 고정한다. 마스킹이
-        # 붙으면 이 검사가 깨지고, 그때 위 차단 플래그를 없애야 한다는 신호가 된다.
+        # 심층조사가 호스트명을 원문으로 보낸다는 사실을 고정한다 — 마스킹이 붙으면 깨진다
         sent = {}
         real_post = holmes.httpx.post
 
@@ -692,9 +638,7 @@ def _holmes_gate_checks() -> int:
             os.environ.pop("HOLMES_URL", None)
         assert "cust-db01" in str(sent.get("ask", "")),             f"원문 전송 사실이 바뀌었다 — 차단 플래그를 재검토할 것: {sent}"
 
-        # 조사 질문이 "무슨 사건인지"를 담는가 (2026-07-31 회귀).
-        # 종래에는 "{n}건이 1개 사건 · {host}" 만 넘겨서, 에이전틱인 홈즈가 사건과 무관하게
-        # 그 순간 활성인 아무 문제를 조사했다(SSH 브루트포스 사건에 MySQL buffer pool 회신).
+        # 조사 질문이 "무슨 사건인지"를 담는가 — 안 담으면 무관한 문제를 조사한다
         q = holmes.build_question(
             ["sshd: brute force trying to get access to the system. Non existent user.",
              "Multiple authentication failures followed by a success."],
@@ -728,8 +672,7 @@ def _incident_checks() -> int:
     from .. import llm, masking
     from ..alerts import incident
 
-    # 분류 사례는 배포 서버의 선언 파일·사이트 관용구에 영향을 받는다. 그 서버에서만
-    # 결과가 갈리면 설정 문제인지 코드 문제인지 구분할 수 없다. 지우고 돌린다.
+    # 분류 사례는 배포 서버의 선언 파일에 영향받는다 — 지우고 돌린다
     _env_saved = {k: os.environ.pop(k, None)
                   for k in ("INCIDENT_CLASS_FILE", "SITE_CLASS_KEYWORDS")}
     incident = importlib.reload(incident)
@@ -739,8 +682,7 @@ def _incident_checks() -> int:
         got = incident.classify(name)
         assert got == expected, f"classify({name!r}) -> {got}, expected {expected}"
 
-    # memory_pressure 는 어떤 브리지에도 속하지 않는다 — 자원 경합(swap→iowait)과 OOM→서비스
-    # 정지 양쪽에 인과 후보가 걸치는데 그룹은 겹칠 수 없고, 실측 근거도 아직 없다(P0-3 판정).
+    # memory_pressure 는 어떤 브리지에도 안 든다 — 양쪽에 걸치는데 그룹은 겹칠 수 없다
     assert (incident.incident_key("zabbix-internal", "h1", "memory_pressure")
             != incident.incident_key("zabbix-internal", "h1", "cpu_io_pressure"))
     assert (incident.incident_key("zabbix-internal", "h1", "memory_pressure")
@@ -761,9 +703,8 @@ def _incident_checks() -> int:
     assert k_sec != k_repl
     assert incident.incident_key("zabbix-internal", "h2", "replication") != k_repl   # 호스트 다르면 분리
 
-    # 브리지 2번 그룹 — 디스크 포화 + 서비스 정지 = 한 사건 (데모 B), 1번 그룹과는 분리
-    # 감시 서버가 둘이면 호스트 이름이 겹칠 수 있다. 이름만으로 묶으면 남의 고객
-    # 알림이 한 사건이 된다 — 이름은 감시 서버 안에서만 유일하다.
+    # 브리지 2번 그룹 — 디스크 포화 + 서비스 정지 = 한 사건 (데모 B)
+    # 감시 서버가 둘이면 이름이 겹친다 — 이름은 감시 서버 안에서만 유일하다
     saved_realm = os.environ.get("INCIDENT_REALM_MAP")
     os.environ["INCIDENT_REALM_MAP"] = "zabbix-internal=internal,zabbix-msp=msp,wazuh=internal"
     try:
@@ -792,8 +733,7 @@ def _incident_checks() -> int:
             os.environ["INCIDENT_REALM_MAP"] = saved_realm
         importlib.reload(incident)
 
-    # 매핑을 안 적어도 소스가 다르면 갈라진다. 설정을 안 한 사람이 가장 위험한 상태가
-    # 되면 안 된다 — 모르면 나뉘는 쪽으로 틀려야 한다.
+    # 매핑을 안 적어도 소스가 다르면 갈라진다 — 모르면 나뉘는 쪽으로 틀려야 한다
     assert (incident.incident_key("zabbix-internal", "db01", "disk_space")
             != incident.incident_key("zabbix-msp", "db01", "disk_space"))
     # 같은 소스면 당연히 같다
@@ -903,22 +843,13 @@ def _incident_checks() -> int:
 
 
 def _idempotency_checks() -> int:
-    """중복 판정 — 여러 스레드가 동시에 들어와도 한 번만 통과해야 한다.
-
-    웹훅이 `async def` 가 아니라 동기 함수라 FastAPI 가 워커 스레드에서 돌린다. 즉 이
-    판정은 처음부터 멀티스레드에 노출돼 있었다. 확인과 등록 사이에 틈이 있으면 같은
-    이벤트가 둘 다 통과해 인시던트에 두 번 담기고, 그러면 병합으로 보여 발동 조건까지
-    바뀐다. 낡은 항목을 지우는 순회 중에 다른 스레드가 넣으면 예외도 난다.
-    """
+    """중복 판정 — 여러 스레드가 동시에 들어와도 한 번만 통과해야 한다."""
     import threading
     import time
 
     from .. import app as app_mod
 
-    # 확인과 등록 사이의 틈을 **강제로 벌린다.** 그냥 스레드를 여럿 던지면 CPython
-    # 에서는 틈이 너무 좁아 우연히 통과한다. 그러면 잠금을 안 걸어도 통과하는 검사가
-    # 되어, 검사가 아니라 운을 시험하는 것이 된다. 조회에 아주 짧은 지연을 넣어
-    # 논리 자체를 본다 — 잠금이 있으면 지연이 있어도 한 번만 통과해야 한다.
+    # 확인과 등록 사이의 틈을 강제로 벌린다 — 안 그러면 잠금 없이도 우연히 통과한다
     class _SlowSeen(dict):
         def __contains__(self, k):
             res = dict.__contains__(self, k)   # 판정을 먼저 하고
@@ -977,13 +908,7 @@ def _idempotency_checks() -> int:
 
 
 def _open_limit_checks() -> int:
-    """선행 문제 조회가 상한에 걸렸을 때 "없음" 으로 단언하지 않는가.
-
-    조회를 최근 순 100건으로 받는데, 폭주 중이면 그 100건이 전부 5분 미만이라 경과
-    필터에서 전멸한다. 그러면 빈 목록에 "조회 성공" 이 붙어, 세 시간째 미해소인 선행
-    문제가 "선행 문제 없음" 으로 단언된다. 선행 문제는 원래 **오래된** 것이므로
-    최근 순으로 받는 것 자체가 목적과 어긋난다.
-    """
+    """선행 문제 조회가 상한에 걸렸을 때 "없음" 으로 단언하지 않는가."""
     import asyncio
 
     from ..alerts import collector
@@ -1014,13 +939,7 @@ def _open_limit_checks() -> int:
 
 
 def _event_time_checks() -> int:
-    """로그·보안 조회 창을 **사건이 난 시각** 기준으로 잡는가.
-
-    알림에는 단조 시계 기준 `recv` 만 있고 벽시계 시각이 없었다. 재기동 후 대기
-    알림을 다시 넣으면 그 시각이 새로 찍히므로, 두 시간 전 사건인데 로그를 지금
-    기준 15분만 본다. 실제 장애 로그는 창 밖이라 빈 결과가 오고, 이름은 알려져
-    있으니 상태는 ok 다 — 모델은 "로그에 기록 없음"을 사실로 단언한다.
-    """
+    """로그·보안 조회 창을 **사건이 난 시각** 기준으로 잡는가."""
     import os
     import time as _t
 
@@ -1049,23 +968,18 @@ def _event_time_checks() -> int:
                               alerts=[_alert(now + 99999)], opened_at=0.0, last_at=0.0)
     assert collector.reference_time(future, now) == now
 
-    # 감시 서버가 돌려준 이벤트 시각이 가장 정확하고, 발송 설정과 무관하게 온다.
-    # 알림에 시각이 없어도 이 값으로 창을 맞춘다.
+    # 감시 서버가 돌려준 이벤트 시각이 가장 정확하고 발송 설정과 무관하게 온다
     assert collector.reference_time(no_clock, now, [now - 5400]) == now - 5400
     # 둘 다 있으면 이른 쪽을 쓴다 — 사건이 시작된 시점이 기준이다
     assert collector.reference_time(old_inc, now, [now - 9000]) == now - 9000
 
-    # **지금으로 떨어진 사실이 밖으로 드러나야 한다.** 2026-08-13 랩에서 사건 두 시간
-    # 뒤에 재분석을 돌렸는데 시각을 아무도 못 줘서 창이 조용히 "지금"이 됐고, 그 조용한
-    # 창에서 잡힌 6줄을 보고 모델이 "로그 축에는 이번 사건을 설명할 신호가 없다"고 썼다.
-    # 신호가 없던 것이 아니라 사건이 없던 시간대를 본 것이다.
+    # 지금으로 떨어진 사실이 드러나야 한다 — 사건 없는 시간대를 보고 "신호 없음"이 된다
     assert hasattr(collector, "reference_guessed"), \
         "창 기준을 지금으로 떨어뜨린 사실을 알릴 방법이 없다"
     assert collector.reference_guessed(no_clock, now, []) is True
     assert collector.reference_guessed(old_inc, now, []) is False
 
-    # 배선 — 웹훅이 받은 시각이 알림과 대기 기록까지 이어져야 한다. 한 군데만 끊겨도
-    # 재기동 뒤에는 값이 없어 지금 기준으로 떨어진다.
+    # 배선 — 웹훅이 받은 시각이 알림과 대기 기록까지 이어져야 한다
     import importlib
     import shutil
     import tempfile
@@ -1101,13 +1015,7 @@ def _event_time_checks() -> int:
 
 
 def _wrong_server_checks() -> int:
-    """명부를 못 읽었을 때 남의 감시 서버에 되묻지 않는가.
-
-    명부 로드가 실패하면 조용히 환경변수로 떨어진다. 그러면 MSP 알림의 이벤트·트리거
-    ID 를 사내 서버에 묻게 되는데, ID 는 서버마다 따로 증가하므로 (a) 없으면 빈 결과라
-    "90일 내 이력 없음 = 신규"로 확정되고 (b) 겹치면 사내 다른 호스트의 트리거명·지표·
-    이력이 그 고객 사건의 컨텍스트로 실린다. 어느 쪽도 예외가 아니라 상태는 전부 ok 다.
-    """
+    """명부를 못 읽었을 때 남의 감시 서버에 되묻지 않는가."""
     import importlib
     import os
 
@@ -1123,8 +1031,7 @@ def _wrong_server_checks() -> int:
     try:
         importlib.reload(registry)
         assert registry.status()["error"], "명부 로드 실패를 만들지 못했다"
-        # 명부를 못 읽었으면 소스를 지정한 조회는 **막아야** 한다. 조용히 기본 서버로
-        # 떨어지면 남의 서버에 묻는 것이 된다.
+        # 명부를 못 읽었으면 소스 지정 조회를 막는다 — 남의 서버에 묻게 된다
         try:
             c = collector.ZabbixClient(source="zabbix-msp")
             fell_back = c.api.startswith("http://내부")
@@ -1147,13 +1054,7 @@ def _wrong_server_checks() -> int:
 
 
 def _collect_failure_checks() -> int:
-    """Zabbix 수집이 전부 실패했을 때 그 사실이 밖으로 드러나는가.
-
-    수집은 `gather(return_exceptions=True)` 로 돌므로 전건 실패해도 예외가 안 난다.
-    그러면 폴백 컨텍스트도 안 만들어지고, 로그·보안은 따로 조회되어 ok 가 된다.
-    게이트는 그 두 축만 보므로 "교차 신호 없음(조회는 정상) — LLM 스킵" 으로 남는다.
-    Zabbix 가 죽어 있던 시간대의 사건이 전부 "봐줬는데 볼 게 없었다"로 기록된다.
-    """
+    """Zabbix 수집이 전부 실패했을 때 그 사실이 밖으로 드러나는가."""
     import asyncio
     import time as _t
 
@@ -1191,10 +1092,7 @@ def _collect_failure_checks() -> int:
     # 전송 화이트리스트에도 있어야 LLM 이 그 상태를 읽는다
     assert "metrics" in masking._STATUS_KEYS, masking._STATUS_KEYS
 
-    # **사유가 로그에 남아야 한다.** 2026-08-13 랩에서 Zabbix 수집이 전건 실패했는데
-    # 원인이 어디에도 안 남았다. JSON-RPC 는 오류도 HTTP 200 으로 돌려주므로 접근
-    # 로그에는 `200 OK` 만 열 줄 찍혔고, 실제 사유는 `API token expired.` 였다.
-    # 예외는 gather(return_exceptions=True) 에 담긴 채 버려졌다.
+    # 사유가 로그에 남아야 한다 — JSON-RPC 는 오류도 200 이라 접근 로그엔 성공만 찍힌다
     import logging as _lg
 
     class _Grab(_lg.Handler):
@@ -1216,8 +1114,7 @@ def _collect_failure_checks() -> int:
         "수집 실패 사유가 로그에 안 남는다 — 토큰 만료·권한 부족을 구분할 방법이 "
         "없다: %s" % joined)
 
-    # **사건이 나기 전에 알아야 한다.** 사후 경고만 있으면 토큰이 만료된 채로 며칠이
-    # 지나고, 그동안의 사건은 전부 "지표 미상"으로 기록된다. 기동 때 한 번 확인한다.
+    # 사건이 나기 전에 알아야 한다 — 기동 때 한 번 확인한다
     assert hasattr(collector, "zabbix_probe"), \
         "조회 토큰 점검이 없다 — 만료를 사건이 날 때에야 안다"
 
@@ -1317,13 +1214,7 @@ def _contract_checks() -> int:
 
 
 def _destructive_advice_checks() -> int:
-    """회신에 파괴적 복구 명령이 섞이면 사람에게 표시가 붙는가.
-
-    2026-08-13 랩에서 haiku 로 내린 뒤 복제 지연 사건 회신에 `RESET SLAVE; START SLAVE;`
-    가 권장 조치로 들어왔다. `RESET SLAVE` 는 복제 설정과 위치를 지운다. 같은 시나리오
-    에서 opus 는 "복제 리셋 금지"를 명시했었다. 즉 이 안전 제약이 모델 품질에 얹혀
-    있었다는 뜻이다. 판정과 안전은 코드가 진다는 원칙에 맞게 코드로 내린다.
-    """
+    """회신에 파괴적 복구 명령이 섞이면 사람에게 표시가 붙는가."""
     from .. import llm
 
     danger = ("복제를 되살리려면 `RESET SLAVE; START SLAVE;` 를 실행하십시오.",
@@ -1343,8 +1234,7 @@ def _destructive_advice_checks() -> int:
         assert not llm.destructive_ops(text), "정상 문장을 잡았다: %r" % text
         assert llm.mark_destructive(text) == text, text
 
-    # 프롬프트에도 금지가 적혀 있어야 한다. 코드 표시는 사후이고, 애초에 안 쓰게
-    # 만드는 것이 먼저다.
+    # 프롬프트에도 금지가 적혀 있어야 한다 — 코드 표시는 사후다
     assert "RESET SLAVE" in llm.TRIAGE_SYSTEM, "프롬프트에 금지 항목이 없다"
     return 15
 
@@ -1352,12 +1242,7 @@ def _destructive_advice_checks() -> int:
 
 
 def _truncation_checks() -> int:
-    """자른 것을 자랐다고 말하는가 (§1-1-8).
-
-    로그는 40줄에서 잘리고 줄도 글자 수로 잘리는데 상태는 늘 ok 다. 모델은 그 40줄에
-    없는 것을 없는 것으로 읽는다. 사건이 클수록 잘리는 비율이 높으니 하필 분석이 가장
-    필요할 때 가장 크게 틀린다.
-    """
+    """자른 것을 자랐다고 말하는가 (§1-1-8)."""
     import asyncio
     import json
     import os
@@ -1468,15 +1353,11 @@ def _truncation_checks() -> int:
         assert [r["line"] for r in recs] == ["이른 줄", "늦은 줄"], recs
         assert recs[0]["t"] < recs[1]["t"]
 
-        # ⑧ 전송 제동은 줄 수가 아니라 글자 수로 건다. 지연 실측(2026-08-13)에서
-        #    입력을 75배 늘려도 응답 시간이 2.2초밖에 안 늘어, 줄 수 상한이 지키던
-        #    것이 사실상 없었다. 줄 수 상한은 안전망으로만 남기고 조회 상한을 넘지
-        #    않게만 잠근다.
+        # 전송 제동은 줄 수가 아니라 글자 수로 건다 — 줄 수는 안전망으로만 남긴다
         assert collector.LOKI_FETCH_LIMIT >= collector.LOKI_SEND_LIMIT
         assert collector.LOKI_SEND_BYTES > 0
 
-        # ⑨ 표시를 쪼갠다. 한 불리언에 "창에 더 있었다"와 "조회가 상한에 닿았다"를
-        #    같이 실으면 오늘 고친 문제가 이름만 바꿔 재발한다.
+        # 표시를 쪼갠다 — 한 불리언에 두 사실을 실으면 같은 문제가 이름만 바꿔 재발한다
         collector.httpx = _Fake(["line %d" % i for i in range(120)])
         recs, _s, capped, _c = asyncio.run(collector._loki_logs("h1", 1700000000))
         assert len(recs) == 120 and capped is False, (len(recs), capped)
@@ -1485,8 +1366,7 @@ def _truncation_checks() -> int:
         recs, _s, capped, _c = asyncio.run(collector._loki_logs("h1", 1700000000))
         assert capped is True, capped
 
-        # ⑩ 바이트 예산 — 줄 수만으로는 부족하다. 300자 절단은 클라이언트에서 하므로
-        #    와이어에는 전장이 온다. 긴 줄이면 300줄이 수 MB 가 되고 파싱이 루프를 막는다.
+        # 바이트 예산 — 긴 줄이면 300줄이 수 MB 가 되고 파싱이 루프를 막는다
         collector.httpx = _Fake(["y" * 20000 for _ in range(200)])
         recs, _s, capped, _c = asyncio.run(collector._loki_logs("h1", 1700000000))
         assert capped is True and len(recs) < 200, (len(recs), capped)
@@ -1570,10 +1450,7 @@ def _log_select_checks() -> int:
     pre = [r for r in picked if "line" in r and r["t"] < 200]
     assert pre, "첫 오류 직전 줄이 하나도 안 남았다"
 
-    # ⑦-0 완전히 같은 줄이 같은 초에 여러 개여도 상한을 넘지 않는다.
-    #      값으로 같은지 보면 되찾을 때 같은 항목이 여러 번 붙는다. 실제로 300줄이
-    #      그대로 나갔다(2026-08-13 감사). 나노초를 초로 바꾸면서 해상도가 사라져
-    #      서로 다른 줄이 같은 시각이 되는 경로가 실재한다.
+    # 완전히 같은 줄이 같은 초에 여러 개여도 상한을 넘지 않는다
     dup = [_r(1.0, "INFO steady") for _ in range(100)]
     dup += [_r(500.0, "ERROR upstream refused connection") for _ in range(200)]
     picked = c.select_logs(dup)
@@ -1582,18 +1459,14 @@ def _log_select_checks() -> int:
     same = [r for r in body if "upstream refused" in r["line"]]
     assert len(same) <= c.SAME_SHAPE_MAX, "같은 형태가 %d줄" % len(same)
 
-    # ⑦-1 첫 오류 직전은 오류에 **가까운** 쪽을 고른다. 원인은 바로 앞에 있다.
-    #      몫 선별은 예산을 넘을 때만 도는 경로라, 검사도 예산을 좁혀 그 경로로 넣는다.
+    # 첫 오류 직전은 오류에 가까운 쪽을 고른다 — 몫 선별은 예산을 넘을 때만 돈다
     seq2 = [_r(i, "INFO steady %d" % i) for i in range(200)]
     seq2 += [_r(300 + i, "ERROR boom %d" % i) for i in range(20)]
     picked = c.select_logs(seq2, limit=40)
     pre = [r["t"] for r in picked if r.get("why") == "pre"]
     assert pre and max(pre) >= 190, "오류에서 먼 쪽만 골랐다: %s" % sorted(pre)[:3]
 
-    # ⑦-1a **접기가 먼저고 선별은 예산을 넘을 때만이다.** 랩 실측(2026-08-13):
-    #       평상시 15분 120줄이 접기만으로 12줄이 되어 몫 선별은 할 일이 없었다.
-    #       그런데 옛 코드는 40줄 상한 때문에 몫 선별이 늘 돌았고, 문서는 그 죽은
-    #       분기를 규칙인 것처럼 적고 있었다. 평상시 창에서 몫이 등장하면 실패다.
+    # 접기가 먼저고 선별은 예산을 넘을 때만 — 평상시 창에서 몫이 등장하면 실패다
     normal = [_r(i, "INFO request completed status=200 dur=%dms" % (i % 80))
               for i in range(120)]
     picked = c.select_logs(normal)
@@ -1611,9 +1484,7 @@ def _log_select_checks() -> int:
     # ⑦ 등급 미상이 오류 몫을 먹지 않는다
     assert c.log_level("something happened") == ""
 
-    # ⑦-1b 게이트웨이·감시 서버가 평상시 쓰는 낱말이 오류로 잡히면 안 된다.
-    #       alert·critical 은 이 환경의 일상 어휘라 맨낱말로 잡으면 자기 로그가
-    #       오류 자리를 먹는다 (2026-08-13 감사).
+    # alert·critical 은 이 환경의 일상 어휘라 맨낱말로 잡으면 자기 로그가 오류가 된다
     for benign in ("gateway: alert received eventid=12345 host=db01",
                    "zabbix_server: alert manager #1 started",
                    "config: cpu critical threshold = 90",
@@ -1642,8 +1513,7 @@ def _log_select_checks() -> int:
     assert c.log_shape("/etc/shadow changed") != c.log_shape("/tmp/junk changed")
     assert (c.log_shape("2026-08-13 10:00:01 pid=41 from 10.0.0.5 done")
             == c.log_shape("2026-08-13 11:22:33 pid=7 from 10.0.0.9 done"))
-    # 시각 형식이 ISO 만이 아니다. 랩 실측에서 슬래시 날짜 때문에 469줄이 408가지
-    # 모양으로 세어져 반복 접기가 통째로 동작하지 않았다.
+    # 시각 형식이 ISO 만이 아니다 — 슬래시 날짜 때문에 반복 접기가 통째로 죽었다
     for a, b in (("2026/08/13 01:58:33.666159 [Mysql] Cannot fetch data",
                   "2026/08/13 01:58:34.112233 [Mysql] Cannot fetch data"),
                  ("Aug 13 10:00:00 host sshd: session opened",
@@ -1661,10 +1531,8 @@ def _log_select_checks() -> int:
     assert c.log_shape("uid=0 session") != c.log_shape("uid=1000 session")
     assert c.log_shape("killed sig=9") != c.log_shape("killed sig=11")
 
-    # ⑦-3 생략 구간을 표시한다. 안 하면 모델이 떨어진 줄을 붙은 것으로 읽고
-    #      인접성에서 인과를 만든다. 줄 수와 시간 범위를 함께 낸다.
-    #      반복이 있어야 접기가 줄을 버리고 그 자리에 표시가 들어간다. 두 형태를
-    #      번갈아 넣어 생략 구간이 여러 곳에 생기게 한다.
+    # 생략 구간을 표시한다 — 안 하면 모델이 인접성에서 인과를 만든다
+    # 두 형태를 번갈아 넣어 생략 구간이 여러 곳에 생기게 한다
     many = [_r(i * 10, ("INFO step done in %dms" % i) if i % 2 else
                        ("INFO flush wrote %dKB" % i)) for i in range(200)]
     picked = c.select_logs(many)
@@ -1695,16 +1563,7 @@ def _log_select_checks() -> int:
 
 
 def _holmes_egress_checks() -> int:
-    """심층조사도 출구를 지나는가.
-
-    이 도구는 별도 프로세스라 자기 키로 나갔다. 그래서 (a) 호출량 지표에 안 잡혀
-    사용량이 실제보다 적게 보고되고 (b) 동시 호출 제한 밖이라 폭주 때 인시던트마다
-    최대 300초짜리 호출이 무제한으로 떠 공용 스레드를 다 차지한다.
-
-    호스트명은 가리지 못한다. 그 이름으로 감시 서버를 조회해야 도구가 일을 하기
-    때문이다. 반출 통제는 그 도구의 모델 호출을 우리 쪽으로 돌려야 가능하다.
-    여기서는 집계와 동시 제한까지만 본다.
-    """
+    """심층조사도 출구를 지나는가."""
     import os
     import threading
 
@@ -1753,15 +1612,7 @@ def _holmes_egress_checks() -> int:
 
 
 def _timer_close_checks() -> int:
-    """창이 닫힐 때 마감 처리가 끝까지 도는가.
-
-    마감은 타이머 태스크 안에서 돈다. 그 안에서 자기 타이머를 취소하면, 마감 처리가
-    처음 기다리는 지점에서 취소되어 조용히 죽는다. 알림은 대기 파일에 남고 카드도
-    안 올라가는데 오류 한 줄 없다.
-
-    기존 검사는 `on_close` 가 아무것도 안 기다려서 이 상황을 못 만들었다. 실제
-    경로는 수집·분석·게시를 전부 기다리므로 반드시 기다리는 것으로 검사한다.
-    """
+    """창이 닫힐 때 마감 처리가 끝까지 도는가."""
     import asyncio
     import time as _t
 
@@ -1791,13 +1642,7 @@ def _timer_close_checks() -> int:
 
 
 def _overflow_checks() -> int:
-    """창 안에 알림이 상한을 넘겼을 때 넘친 것이 어떻게 되는가.
-
-    넘친 알림은 어떤 사건에도 안 들어가므로, 사건이 끝날 때 대기 파일에서 지워지지
-    않는다(지우는 목록이 `inc.alerts` 이기 때문이다). 그러면 재기동마다 되살아나
-    이미 끝난 사건의 알림으로 새 사건이 열리고, 세 번 반복하면 버려진다. 웹훅은
-    200 을 줬고 파일에도 적혔는데 아무도 안 본 알림이 된다.
-    """
+    """창 안에 알림이 상한을 넘겼을 때 넘친 것이 어떻게 되는가."""
     import asyncio
     import os
     import shutil
@@ -1851,11 +1696,7 @@ def _overflow_checks() -> int:
 
 
 def _analyze_ref_checks() -> int:
-    """사람이 요청하는 분석 — 카드에 실은 재료로 사건이 되살아나는지.
-
-    이 왕복이 깨지면 Run Workflow 를 눌러도 아무 일이 없거나 엉뚱한 사건을 분석한다.
-    둘 다 눌러 본 사람은 알 수 없는 실패라 여기서 잠근다.
-    """
+    """사람이 요청하는 분석 — 카드에 실은 재료로 사건이 되살아나는지."""
     import os
     import sys
     import time

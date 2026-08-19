@@ -1,9 +1,4 @@
-"""HolmesGPT 온디맨드 심층조사 어댑터 — 서버 모드의 HTTP API 호출. 읽기 전용.
-
-발동 조건·질문 구성·결과 회수 경로는 bot/GATEWAY_GUIDE.md §10.
-환경변수는 bot/.env.example, 도입 판정은 docs/02-design/decisions/adr-002-holmesgpt.md.
-API 근거: holmesgpt.dev `/dev/reference/http-api/` (POST /api/chat → {analysis,...}).
-"""
+"""HolmesGPT 온디맨드 심층조사 어댑터 — 서버 모드의 HTTP API 호출. 읽기 전용."""
 
 import logging
 import os
@@ -18,17 +13,10 @@ log = logging.getLogger("gateway.holmes")
 
 def should_investigate(sev: str, degraded: bool, sources, merged: bool = False,
                        verdict: str = "") -> tuple:
-    """자동 발동 조건(승인 아님 — 읽기 전용이므로). 반환 (bool, reason).
-
-    **조건의 순서에 의미가 있다.** 위중·열화는 지식 여부와 무관하므로 만성 억제보다 앞이고,
-    MSP 테넌트 경계는 그보다도 앞이다. 근거는 가이드 §10.
-    """
+    """자동 발동 조건(승인 아님 — 읽기 전용이므로). 반환 (bool, reason)."""
     if os.environ.get("HOLMES_ENABLED", "") != "1":
         return False, "disabled"
-    # 이 플래그는 마스킹을 켜지 않는다. investigate() 는 호스트명을 원문으로 보낸다.
-    # 예전 이름은 HOLMES_MASKED 였는데, 이름과 예시 파일 주석이 "켜면 가려진다"로
-    # 읽혀서 그대로 두면 MSP 고객사 이름이 나간다. 실제 의미대로 이름을 바꾸고
-    # 기본을 차단으로 둔다. 마스킹이 붙으면 이 플래그 자체가 없어져야 한다.
+    # 이 플래그는 마스킹을 켜지 않는다 — investigate() 는 호스트명을 원문으로 보낸다
     allow_raw = os.environ.get("HOLMES_ALLOW_MSP_RAW", "") == "1"
     if severity.SOURCE_ZABBIX_MSP in (sources or []) and not allow_raw:
         return False, "msp-tenant(원문 전송이라 차단 — HOLMES_ALLOW_MSP_RAW)"
@@ -63,19 +51,7 @@ def build_question(alert_names, classes, window_s: float) -> str:
 
 
 class HolmesAdapter:
-    """심층조사 도구를 다른 LLM 어댑터와 같은 모양으로 감싼다.
-
-    이렇게 해야 출구(`egress.call`)를 그대로 지나간다. 예전에는 이 호출만 출구 밖이라
-    두 가지가 새고 있었다. 호출량 지표에 안 잡혀 사용량이 실제보다 적게 보고됐고,
-    동시 호출 제한 밖이라 폭주 때 인시던트마다 최대 300초짜리 호출이 무제한으로 떠
-    공용 스레드를 다 차지했다.
-
-    ⚠ 반출은 여기서 막지 못한다. 이 도구는 **받은 호스트명으로 감시 서버를 직접
-    조회하고 그 결과를 자기 키로 모델에 보낸다.** 우리가 보내는 문장을 가려 봐야
-    도구가 스스로 가져가는 자료는 그대로다. 게다가 이름을 가리면 조회 자체를 못 해
-    도구가 일을 못 한다. 통제하려면 그 도구의 모델 호출 주소를 우리 쪽으로 돌려야
-    한다 — 그때까지 고객사 대상은 차단을 유지한다(should_investigate).
-    """
+    """심층조사 도구를 다른 LLM 어댑터와 같은 모양으로 감싼다."""
 
     name = "holmes"
 
