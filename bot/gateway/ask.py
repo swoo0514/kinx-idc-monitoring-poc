@@ -1042,8 +1042,10 @@ async def fetch_panel_list(dash: str, masker: masking.Masker) -> list:
     from . import grafana
 
     items = await asyncio.to_thread(grafana.list_panels, dash)
+    # 질의문에는 호스트명이 그대로 들어 있는 일이 있다. 이름 표를 거쳐 내보낸다.
     return [dict(it, title=masker.mask(str(it.get("title") or "")),
-                 dashboard=masker.mask(str(it.get("dashboard") or "")))
+                 dashboard=masker.mask(str(it.get("dashboard") or "")),
+                 query=masker.mask(str(it.get("query") or "")))
             for it in items]
 
 

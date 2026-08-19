@@ -580,8 +580,14 @@ def panel_refs(items: list, refs: dict) -> list:
     for it in (items or [])[:PANEL_REF_MAX]:
         ref = "pnl-%d" % (len(refs) + 1)
         refs[ref] = (it.get("uid"), it.get("panel_id"), it.get("title") or "")
-        out.append({"ref": ref, "dashboard": it.get("dashboard") or "",
-                    "title": it.get("title") or ""})
+        row = {"ref": ref, "dashboard": it.get("dashboard") or "",
+               "title": it.get("title") or ""}
+        # 무엇을 조회하는 패널인지 함께 준다. 제목만 주면 두 패널이 같은 값을 보는지
+        # 짐작하게 되고, 짐작은 틀린다(2026-08-19 실측).
+        for key in ("source", "query"):
+            if it.get(key):
+                row[key] = it[key]
+        out.append(row)
     return out
 
 
@@ -812,8 +818,11 @@ async def _tool_list_panels(args: dict, ctx: dict) -> dict:
     if not items:
         return {"panels": [], "note": "그 조건에 맞는 패널이 없다. dashboard 를 비우고 "
                                       "전체 목록을 받아 보라"}
-    return {"panels": items, "n": len(items),
-            "note": "그림을 붙이려면 ref 를 panel_image 의 panel_ref 에 그대로 적어라"}
+    note = "그림을 붙이려면 ref 를 panel_image 의 panel_ref 에 그대로 적어라"
+    if len(raw) >= PANEL_REF_MAX:
+        note += (" 목록이 %d개에서 잘렸다. dashboard 를 적어 좁혀야 나머지가 보인다"
+                 % PANEL_REF_MAX)
+    return {"panels": items, "n": len(items), "note": note}
 
 
 _TOOLS = {

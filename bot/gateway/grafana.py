@@ -109,6 +109,36 @@ def _flatten(panels):
 PANEL_TYPES = ("timeseries", "graph", "table", "logs", "stat", "barchart", "piechart")
 
 
+QUERY_MAX = 200
+
+
+def _panel_query(p: dict) -> tuple:
+    """패널이 무엇을 조회하는지. 반환 `(데이터 종류, 질의문 요약)`.
+
+    제목만으로는 두 패널이 같은 값을 보는지 알 수 없다. 사람이 "저 대시보드 패널도 같은
+    값이냐" 고 물으면 제목을 보고 짐작하게 되고, 짐작은 틀린다(2026-08-19 실측: 제목만
+    보고 "한쪽은 실패만 센다" 고 답했다).
+
+    질의문 자체를 실어 주면 짐작할 일이 없다. 대시보드마다 조회 방식이 달라 필드 이름이
+    다르므로 아는 것만 골라 읽고, 못 읽으면 빈 문자열로 둔다.
+    """
+    src = ((p.get("datasource") or {}).get("type")
+           if isinstance(p.get("datasource"), dict) else p.get("datasource")) or ""
+    tg = (p.get("targets") or [{}])[0] or {}
+    q = ""
+    for key in ("query", "expr", "rawSql"):
+        if tg.get(key):
+            q = str(tg[key])
+            break
+    if not q and tg.get("item"):        # Zabbix 플러그인은 항목을 나눠서 담는다
+        parts = [str((tg.get(k) or {}).get("filter") or "")
+                 for k in ("group", "host", "item")]
+        q = " / ".join([x for x in parts if x])
+    if len(p.get("targets") or []) > 1:
+        q = (q + " (질의 %d개 중 첫째)" % len(p["targets"])).strip()
+    return str(src), q[:QUERY_MAX]
+
+
 def list_panels(dash_match: str = "", limit: int = 40) -> list:
     """패널 목록. `[{uid, panel_id, dashboard, title}]`. 못 읽으면 빈 목록.
 
@@ -138,8 +168,10 @@ def list_panels(dash_match: str = "", limit: int = 40) -> list:
                     title = str(p.get("title") or "")
                     if not title or p.get("type") not in PANEL_TYPES:
                         continue
+                    src, q = _panel_query(p)
                     out.append({"uid": d.get("uid"), "panel_id": p.get("id"),
-                                "dashboard": dash, "title": title})
+                                "dashboard": dash, "title": title,
+                                "source": src, "query": q})
                     if len(out) >= limit:
                         return out
     except Exception as e:

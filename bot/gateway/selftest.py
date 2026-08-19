@@ -1720,7 +1720,7 @@ def _store_checks() -> int:
         assert rows, "사건을 마감했는데 이력이 안 남았다"
         assert rows[0]["fingerprint"] == inc.fingerprint(), rows[0]
         assert rows[0]["gate_reason"], rows[0]
-        return 18
+        return 20
     finally:
         store.close()
         store.PATH = saved
@@ -3318,13 +3318,19 @@ def _ask_result_checks() -> int:
     assert asktools.panel_pick({"uid": "kinx-overview"}) == (None, None)
     assert asktools.panel_pick(None) == (None, None)
     # 손잡이는 이번 턴 안에서만 뜻이 있고, 대시보드 식별자는 모델에 안 간다.
+    import json as _js
     refs = {}
     shown = asktools.panel_refs(
-        [{"uid": "u-msp", "panel_id": 16, "dashboard": "MSP 리포트", "title": "인증 활동"}],
+        [{"uid": "u-msp", "panel_id": 16, "dashboard": "MSP 리포트", "title": "인증 활동",
+          "source": "grafana-opensearch-datasource",
+          "query": "rule.groups:authentication_failed"}],
         refs)
-    assert shown == [{"ref": "pnl-1", "dashboard": "MSP 리포트", "title": "인증 활동"}], shown
+    assert shown == [{"ref": "pnl-1", "dashboard": "MSP 리포트", "title": "인증 활동",
+                      "source": "grafana-opensearch-datasource",
+                      "query": "rule.groups:authentication_failed"}], shown
+    # 무엇을 조회하는 패널인지 함께 줘야 두 패널이 같은 값을 보는지 짐작하지 않는다.
+    assert "authentication_failed" in _js.dumps(shown, ensure_ascii=False)
     assert refs["pnl-1"] == ("u-msp", 16, "인증 활동"), refs
-    import json as _js
     assert "u-msp" not in _js.dumps(shown, ensure_ascii=False)
 
     # (3)-d-2 **`at` 을 없앤다.** 모델이 90일 추이를 물을 때 window_m 대신 at 을 고르고
@@ -3681,7 +3687,9 @@ def _panel_route_checks() -> int:
     def _spy(dash_match="", limit=40):
         calls.append(dash_match)
         return [{"uid": "u-msp", "panel_id": 16, "dashboard": "KINX MSP 월간 리포트",
-                 "title": "인증 활동 — web-01 로그인 실패"}]
+                 "title": "인증 활동 — web-01 로그인 실패",
+                 "source": "grafana-opensearch-datasource",
+                 "query": "rule.groups:authentication_failed AND agent.name:/web-01/"}]
 
     try:
         nametable._terms = {"web-01": "host"}
@@ -3749,8 +3757,9 @@ def _panel_route_checks() -> int:
         assert calls == ["월간 리포트"], calls
         # 목록에는 손잡이와 제목만 간다. 대시보드 식별자는 서버가 들고 있는다.
         assert "pnl-1" in seen["blob"] and "u-msp" not in seen["blob"], seen["blob"][:200]
-        # 이름 표를 거치므로 실명이 그대로 나가지 않는다.
+        # 이름 표를 거치므로 제목에도 질의문에도 실명이 그대로 나가지 않는다.
         assert "web-01" not in seen["blob"], seen["blob"][:200]
+        assert "authentication_failed" in seen["blob"], seen["blob"][:200]
         assert r3["images"] and "/render/d-solo/u-msp/" in r3["images"][0]["url"], r3["images"]
         assert "panelId=16" in r3["images"][0]["url"], r3["images"][0]["url"]
 
