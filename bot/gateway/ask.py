@@ -755,8 +755,17 @@ def prewarm() -> str:
         if not table:
             return "대상 표가 비어 예열을 건너뛴다"
         specs = asktools.build_tool_specs(table)
-        llm.claude_tools(system_prompt(), [{"role": "user", "content": "준비"}], specs)
-        return "질의 예열 완료 (대상 %d개)" % len(table)
+        last = ""
+        # 한 번 실패했다고 그만두면 예열이 안 된 채로 사람이 첫 질의를 받는다. 배경에서
+        # 도는 일이라 한 번 더 해도 사람이 기다리지 않는다.
+        for _try in range(2):
+            try:
+                llm.claude_tools(system_prompt(),
+                                 [{"role": "user", "content": "준비"}], specs)
+                return "질의 예열 완료 (대상 %d개)" % len(table)
+            except Exception as e:
+                last = str(e)
+        return "질의 예열 실패: %s" % last
     except Exception as e:
         return "질의 예열 실패: %s" % e
 
