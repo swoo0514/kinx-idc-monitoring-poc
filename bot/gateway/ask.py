@@ -373,6 +373,10 @@ DROP_NOTE = "(앞선 대화 일부는 길이 때문에 생략되었다. 필요�
 
 # 상한에 닿았을 때 마지막으로 한 번 더 부르며 붙이는 말. 조회는 못 하게 하고
 # 지금까지 본 것으로만 답하게 한다.
+# 예열 호출의 상한(초). 사람이 안 기다리므로 넉넉히 둔다. 도구 정의가 바뀐 뒤 첫
+# 호출은 캐시를 새로 쓰느라 느리고, 그 대가를 여기서 치르는 것이 목적이다.
+PREWARM_TIMEOUT_S = float(os.environ.get("ASK_PREWARM_TIMEOUT_S", "180"))
+
 CAP_NOTE = ("조회 상한에 닿았다. 더 조회할 수 없다. 지금까지 확인한 것만으로 answer 를 "
             "불러 답하라. 확인하지 못한 것은 확인하지 못했다고 쓴다.")
 
@@ -771,7 +775,8 @@ def prewarm() -> str:
         for _try in range(2):
             try:
                 llm.claude_tools(system_prompt(),
-                                 [{"role": "user", "content": "준비"}], specs)
+                                 [{"role": "user", "content": "준비"}], specs,
+                                 timeout_s=PREWARM_TIMEOUT_S)
                 return "질의 예열 완료 (대상 %d개)" % len(table)
             except Exception as e:
                 last = str(e)

@@ -421,7 +421,7 @@ def cached_system(system: str):
 
 
 def claude_tools(system: str, messages: list, tools: list,
-                 model: str = "") -> dict:
+                 model: str = "", timeout_s: float = 0) -> dict:
     """도구를 쓸 수 있는 호출. 반환은 응답 본문 그대로(content 블록·stop_reason).
 
     Ollama 로 폴백하지 않는다. 도구 호출에서 약하다는 것이 HolmesGPT 조사에서 이미
@@ -433,7 +433,10 @@ def claude_tools(system: str, messages: list, tools: list,
     # 100초)을 그대로 쓰면 한 번의 느린 응답이 질의 전체 마감(ASK_DEADLINE_S 기본 60초)을
     # 넘겨 버린다. 2026-08-18 랩 실측으로 한 호출이 96초 걸렸고, 사람은 조회를 한 번도
     # 못 한 채 "상한에 닿아 멈췄다" 를 받았다.
-    timeout = min(ad.timeout, float(os.environ.get("ASK_LLM_TIMEOUT_S", "30")))
+    # 예열처럼 사람이 안 기다리는 호출은 더 오래 기다려도 된다. 도구 정의가 바뀐 뒤
+    # 첫 호출은 캐시를 새로 쓰느라 느리다(2026-08-19 실측: 30초 넘김, 그다음은 3.8초).
+    timeout = float(timeout_s) or min(ad.timeout,
+                                      float(os.environ.get("ASK_LLM_TIMEOUT_S", "30")))
     client = anthropic.Anthropic(timeout=timeout, max_retries=0)
     resp = client.messages.create(model=ad.model, max_tokens=MAX_TOKENS,
                                   system=cached_system(system),
