@@ -32,7 +32,8 @@
     hb_names_stale: "3시간"
     hb_names_stale_s: "10800"
     # 하루 최대치의 몇 배 아래로 떨어지면 줄어든 것으로 볼지. 0.7 = 30% 감소.
-    hb_names_drop: "0.7"
+    # 따옴표를 붙이면 문자열이 되어 계산에 못 쓴다. 숫자로 둔다.
+    hb_names_drop: 0.7
     zbx_api: "http://{{ hostvars[inventory_hostname].ansible_host }}:{{ ansible_httpapi_port | default(8080) }}/api_jsonrpc.php"
     # 항목 목록을 한 곳에 둔다. 아래 이름 동기화와 생성이 같은 목록을 봐야
     # 한쪽만 고쳐 어긋나는 일이 없다.
