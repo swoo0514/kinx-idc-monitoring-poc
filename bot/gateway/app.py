@@ -1,6 +1,7 @@
 """데모 B·C 공용 알림 게이트웨이 (FastAPI). 실행·배선은 bot/GATEWAY_GUIDE.md."""
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import logging
@@ -173,6 +174,18 @@ _seen: dict = {}  # (source, event_id, event_value) -> monotonic. 프로덕션�
 _seen_lock = threading.Lock()
 
 
+async def _off_loop(fn, *a, **kw):
+    """이벤트 루프 밖에서 돌린다. 느린 저장소가 서버 전체를 세우지 않게.
+
+    `/ask` 는 비동기인데 그 안에서 Redis 와 SQLite 를 그대로 불렀다. Redis 클라이언트는
+    동기이고 시한이 2초라, 저장소가 늦으면 호출마다 루프가 서고 한 요청에 세 번이므로
+    6초다. 그동안 웹훅 수신도 다른 질의도 인시던트 타이머 마감도 함께 멈춘다
+    (2026-08-19 감사 E-5). SQLite 쪽은 더 나쁘다 — 알림이 몰려 워커가 전역 락을 잡고
+    있으면 루프가 그 락을 기다리며 통째로 정지한다.
+    """
+    return await asyncio.to_thread(functools.partial(fn, *a, **kw))
+
+
 def _as_bytes(v) -> bytes:
     return str(v or "").encode("utf-8", "ignore")
 
@@ -254,7 +267,12 @@ class WazuhEvent(BaseModel):
 @app.get("/healthz")
 def healthz():
     # 값은 참·거짓만 싣는다. 인증이 없는 경로라 경로·주소·오류 문구를 내보내지 않는다.
+    # 이름 표는 개수와 오류 여부까지 싣는다. 표가 얼어붙으면 질의 경로가 이름을 원문으로
+    # 내보내는데, 그 상태를 밖에서 볼 방법이 없었다(2026-08-19 감사 E-9).
+    _names = nametable.status()
     return {"ok": True, "version": app.version,
+            "names": int(_names.get("terms") or 0),
+            "names_error": bool(_names.get("error")),
             "store": store.status()["open"],
             "annotations": bool(_grafana_state.get("ok")),
             "zabbix": all(_zabbix_state.values()) if _zabbix_state else None,
@@ -283,12 +301,12 @@ async def ask_endpoint(req: AskRequest, request: Request,
     if not _ask_token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="unauthorized")
     user = ask.who(x_grafana_user)
-    ok, why = ask.user_budget_ok(user)
+    ok, why = await _off_loop(ask.user_budget_ok, user)
     if not ok:
         return JSONResponse(status_code=429, content={"error": why, "user": user})
     # **이력은 서버가 읽는다.** 화면이 보낸 것을 그대로 믿으면 남의 대화도 실린다.
-    cid = req.convo_id or convo.create(user, req.question)
-    stored = convo.load(cid, user)
+    cid = req.convo_id or await _off_loop(convo.create, user, req.question)
+    stored = await _off_loop(convo.load, cid, user)
     hist = [{"role": m["role"], "content": m["content"]} for m in stored] or req.history
     # 화면이 무엇을 넘겼는지 남긴다. 구간이 안 오면 도구가 최근 창으로 떨어지는데,
     # 회신만 보면 그것이 화면 탓인지 게이트웨이 탓인지 가릴 수 없다(2026-08-18).
@@ -297,10 +315,11 @@ async def ask_endpoint(req: AskRequest, request: Request,
              (req.panel or {}).get("from"), (req.panel or {}).get("to"))
     res = await ask.run_ask(req.question, history=hist,
                             sid=req.session or cid or user, user=user, panel=req.panel)
-    convo.append(cid, user, "user", req.question)
+    await _off_loop(convo.append, cid, user, "user", req.question)
     if res.get("text"):
         # 그림도 함께 남긴다. 안 남기면 새로고침한 순간 화면에서 사라진다.
-        convo.append(cid, user, "assistant", res["text"], images=res.get("images"))
+        await _off_loop(convo.append, cid, user, "assistant", res["text"],
+                        images=res.get("images"))
     res["convo_id"] = cid
     log.info("ask user=%s engine=%s rounds=%s stopped=%s", user, ask.engine_name(),
              res.get("rounds"), res.get("stopped"))

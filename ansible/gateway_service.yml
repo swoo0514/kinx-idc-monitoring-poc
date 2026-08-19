@@ -1,0 +1,83 @@
+---
+# 게이트웨이를 systemd 로 올린다. 근거는 bot/GATEWAY_GUIDE.md §20 과 배포 파일
+# bot/deploy/kinx-gateway.service 주석.
+#
+# 왜 필요한가. 지금까지는 `restart_gateway.sh` 가 nohup 으로 띄웠다. 그러면 프로세스가
+# 죽었을 때 아무도 살리지 않고, 서버가 재부팅되면 봇이 통째로 사라진다. 이 자리는 알림
+# 분석·조치 후보 등록·리포트 승인·질의가 모두 지나는 단일 장애점이다.
+#
+#   ansible-playbook -i inventory gateway_service.yml -l core
+#   ansible-playbook -i inventory gateway_service.yml -l core -e restart=true
+- name: Install gateway systemd unit
+  hosts: gateway
+  become: true
+
+  vars:
+    gw_user: rocky
+    gw_home: "/home/{{ gw_user }}"
+    unit_src: "{{ playbook_dir }}/../bot/deploy/kinx-gateway.service"
+    restart: false
+
+  tasks:
+    - name: 유닛 파일 배치
+      ansible.builtin.template:
+        src: "{{ unit_src }}"
+        dest: /etc/systemd/system/kinx-gateway.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: unit
+
+    # %h 는 시스템 단위에서 루트 홈으로 풀리므로 실제 경로로 바꿔 둔다.
+    - name: 홈 경로 치환
+      ansible.builtin.replace:
+        path: /etc/systemd/system/kinx-gateway.service
+        regexp: "%h"
+        replace: "{{ gw_home }}"
+
+    - name: 서비스 등록
+      ansible.builtin.systemd:
+        name: kinx-gateway
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if (restart | bool or unit.changed) else 'started' }}"
+
+    # 저널이 자리를 다 먹지 않게 상한을 둔다. 실 호스트명이 남는 기록이라 보존 기간도
+    # 함께 정한다.
+    - name: 저널 보존 한도
+      ansible.builtin.copy:
+        dest: /etc/systemd/journald.conf.d/kinx-gateway.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # 자동 생성 — ansible/gateway_service.yml
+          [Journal]
+          SystemMaxUse=500M
+          MaxRetentionSec=14day
+      notify: journald 재시작
+
+    - name: 상태 확인
+      ansible.builtin.command: systemctl is-active kinx-gateway
+      register: active
+      changed_when: false
+      failed_when: active.stdout.strip() != "active"
+
+    - name: 응답 확인
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8800/healthz
+        return_content: true
+      register: health
+      retries: 6
+      delay: 3
+      until: health.status == 200
+
+    - name: 결과
+      ansible.builtin.debug:
+        msg: "kinx-gateway active — {{ health.json }}"
+
+  handlers:
+    - name: journald 재시작
+      ansible.builtin.systemd:
+        name: systemd-journald
+        state: restarted

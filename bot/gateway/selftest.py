@@ -288,6 +288,7 @@ def main():
                     + _log_cap_checks() + _prewarm_checks()
                     + _repo_secret_checks() + _session_isolation_checks()
                     + _panel_status_checks() + _token_scope_checks()
+                    + _event_loop_checks() + _nametable_freshness_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -4164,6 +4165,87 @@ def _cap_answer_checks() -> int:
     assert "다시 물어보라" in ask.stall_note("deadline", [])
     assert "host_logs" in ask.stall_note("rounds", [{"tool": "host_logs"}])
     return 14
+
+
+def _nametable_freshness_checks() -> int:
+    """이름 표가 얼어붙은 것을 밖에서 볼 수 있는가.
+
+    갱신 스레드는 예외를 삼키고 계속 돌며, 전건 실패가 이어져도 직전 표를 그대로 쓴다.
+    조회 토큰이 만료되면 표가 그 시점에 멈추고 로그에만 오류가 쌓인다. 그 사이 온보딩한
+    호스트는 표에 영영 없고, 질의 경로가 그 이름을 원문으로 내보낸다. **아무 지표도
+    안 움직여 발견 계기가 없다**(2026-08-19 감사 E-9). 감시자를 감시한다는 이 프로젝트의
+    진단이 게이트웨이 자신에게 그대로 되돌아온 자리다.
+    """
+    import time
+
+    from . import app as gw
+    from . import heartbeat, nametable
+
+    saved = (dict(nametable._terms), nametable._built_at, nametable._error)
+    try:
+        nametable._terms = {"a": "host", "b": "group"}
+        nametable._built_at = time.time() - 3 * 3600
+        nametable._error = ""
+        v = heartbeat.Beat().values()
+        assert v["gateway.names"] == 2, v
+        # 나이를 초로 싣는다. "3시간 넘게 안 갱신" 같은 판단을 Zabbix 쪽에서 한다.
+        assert 3 * 3600 - 5 <= v["gateway.names_age"] <= 3 * 3600 + 5, v
+        assert v["gateway.names_error"] == 0, v
+
+        # 갱신이 실패하고 있으면 그것도 숫자로 나간다. 로그만 남으면 아무도 안 본다.
+        nametable._error = "토큰 만료"
+        assert heartbeat.Beat().values()["gateway.names_error"] == 1
+
+        # 한 번도 못 만들었으면 나이를 지어내지 않는다.
+        nametable._built_at = 0.0
+        v2 = heartbeat.Beat().values()
+        assert v2["gateway.names_age"] == -1, v2
+
+        # /healthz 로도 본다. 사람이 가장 먼저 여는 곳이다.
+        h = gw.healthz()
+        assert h["names"] == 2 and h["names_error"] is True, h
+    finally:
+        nametable._terms, nametable._built_at, nametable._error = saved
+    return 7
+
+
+def _event_loop_checks() -> int:
+    """느린 저장소가 다른 요청까지 세우지 않는가.
+
+    `/ask` 는 `async def` 인데 그 안에서 Redis 와 SQLite 를 `await` 없이 불렀다. Redis
+    클라이언트는 동기이고 시한이 2초라, 저장소가 늦으면 호출마다 이벤트 루프가 서고
+    한 요청에 세 번이므로 6초다. 그동안 웹훅 수신도 다른 질의도 인시던트 타이머 마감도
+    전부 멈춘다(2026-08-19 감사 E-5).
+
+    검사는 저장소를 일부러 늦추고, 그 사이 다른 코루틴이 도는지 본다.
+    """
+    import asyncio
+    import time
+
+    from . import app as gw
+
+    async def scenario():
+        ticks = {"n": 0}
+
+        async def heartbeat():
+            # 루프가 살아 있으면 계속 돈다. 막히면 이 값이 안 는다.
+            for _ in range(40):
+                await asyncio.sleep(0.005)
+                ticks["n"] += 1
+
+        def slow():
+            time.sleep(0.12)                       # 늦는 저장소
+            return "ok"
+
+        beat = asyncio.ensure_future(heartbeat())
+        await gw._off_loop(slow)
+        got = ticks["n"]
+        beat.cancel()
+        return got
+
+    ticked = asyncio.run(scenario())
+    assert ticked > 3, "저장소가 도는 동안 이벤트 루프가 멈췄다 (tick=%d)" % ticked
+    return 1
 
 
 def _token_scope_checks() -> int:

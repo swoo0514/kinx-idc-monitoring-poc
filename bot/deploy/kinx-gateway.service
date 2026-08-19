@@ -1,0 +1,43 @@
+[Unit]
+# 게이트웨이는 알림 분석·조치 후보 등록·리포트 승인·질의가 모두 지나는 자리다.
+# 기동이 nohup 한 줄이면 죽었을 때 아무도 살리지 않는다(2026-08-19 점검 E-8).
+Description=KINX 관제 게이트웨이 (알림 분석·질의)
+Documentation=file:///opt/kinx/bot/GATEWAY_GUIDE.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=rocky
+Group=rocky
+WorkingDirectory=%h/kinx-idc-monitoring-poc/bot
+EnvironmentFile=%h/kinx-idc-monitoring-poc/bot/.env
+ExecStart=%h/bot-venv/bin/python -m uvicorn gateway.app:app --host 0.0.0.0 --port 8800
+
+# 워커를 늘리지 않는다. 워커마다 인시던트 버퍼와 세션 표가 따로 생겨 부모 카드가
+# 여러 개 뜬다. 다중화하려면 그 두 상태를 먼저 Redis 로 옮겨야 한다.
+
+# 정상 종료 때 대기 중인 사건을 마감할 시간을 준다(가이드 §8-6).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=always
+RestartSec=5
+# 5분에 다섯 번을 넘겨 죽으면 그만 살린다. 무한 재기동은 원인을 가린다.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# 로그는 저널로 보낸다. /tmp 에 회전 없이 쌓이던 것을 옮긴 것이다 — 그 파일에는
+# 실 호스트명이 남고 같은 기계의 다른 사용자가 읽을 수 있었다(2026-08-19 점검 E-10).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kinx-gateway
+
+# 이 프로세스가 건드릴 곳을 좁힌다. 저장소와 대기 파일은 홈 아래에 있다.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target

@@ -229,6 +229,24 @@ class Beat:
             out["gateway.fire_new_1h"] = fc.get("new", 0)
         except Exception as e:
             log.warning("LLM 혼잡 지표 수집 실패: %s", e)
+        # 이름 표의 신선도. **이 값이 없으면 표가 얼어붙어도 아무 지표가 안 움직인다.**
+        # 갱신 스레드는 예외를 삼키고 직전 표를 계속 쓰므로, 조회 토큰이 만료되면 그
+        # 시점의 표로 굳은 채 로그에만 오류가 쌓인다. 그 사이 온보딩한 호스트는 표에
+        # 없고 질의 경로가 그 이름을 원문으로 내보낸다(2026-08-19 감사 E-9).
+        #
+        # 개수·나이·오류를 따로 보낸다. **개수가 0 이 아니라 줄어드는 것**이 조용한
+        # 고장의 모양이므로, Zabbix 쪽에서 "3시간 넘게 안 갱신" 과 "직전 대비 30% 감소"
+        # 두 가지를 판단할 재료를 준다.
+        try:
+            from . import nametable
+            st = nametable.status()
+            out["gateway.names"] = int(st.get("terms") or 0)
+            built = float(st.get("built_at") or 0)
+            # 한 번도 못 만들었으면 나이를 지어내지 않는다. -1 은 "모름" 이다.
+            out["gateway.names_age"] = int(now - built) if built else -1
+            out["gateway.names_error"] = 1 if st.get("error") else 0
+        except Exception as e:
+            log.warning("이름 표 상태 수집 실패: %s", e)
         # 발행 측이 **같은 구간에** 몇 건을 만들었는지. 창을 기동 이후로 자르는 것이
         # 중요하다 — 재기동하면 우리 수신 기록은 비는데 발행 측은 지난 한 시간을 그대로
         # 세므로, 자르지 않으면 재기동 직후 한 시간 동안 "저쪽엔 있는데 이쪽은 0" 이

@@ -11,6 +11,19 @@
 #
 set -uo pipefail
 
+# systemd 로 올려 두었으면 그쪽이 주인이다. 여기서 따로 띄우면 두 프로세스가 같은
+# 포트를 다투고, 죽었을 때 살아나는 쪽과 사람이 보는 쪽이 달라진다.
+# 유닛은 bot/deploy/kinx-gateway.service, 설치는 ansible/gateway_service.yml.
+if systemctl is-enabled kinx-gateway.service >/dev/null 2>&1; then
+    echo "systemd 유닛이 등록돼 있다. 그쪽으로 재기동한다."
+    sudo systemctl restart kinx-gateway
+    sleep 3
+    systemctl is-active kinx-gateway
+    echo -n "healthz: "; curl -s localhost:8800/healthz; echo
+    echo "로그 보기:  journalctl -u kinx-gateway -f"
+    exit 0
+fi
+
 cd "$(dirname "$0")" || exit 1
 LOG="${GATEWAY_LOG:-/tmp/gw-verify.log}"
 PATTERN='uvicorn gateway.app'
