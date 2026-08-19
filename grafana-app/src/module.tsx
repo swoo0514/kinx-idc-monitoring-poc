@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { AppPlugin } from '@grafana/data';
+import { AppPlugin, dateMath, dateTime } from '@grafana/data';
 import { LoadingPlaceholder } from '@grafana/ui';
 import { getTemplateSrv } from '@grafana/runtime';
 import type { AppConfigProps } from './components/AppConfig/AppConfig';
@@ -55,9 +55,25 @@ export const plugin = new AppPlugin<{}>()
       if (context.dashboard && context.dashboard.title) {
         q.set('dash', String(context.dashboard.title));
       }
-      if (context.timeRange && context.timeRange.from) {
-        q.set('from', String(context.timeRange.from));
-        q.set('to', String(context.timeRange.to));
+      // **절대 시각으로 바꿔서 넘긴다.** 대시보드 시간 범위는 두 모양으로 온다.
+      // 사람이 그래프를 끌어 확대하면 절대 구간이지만, 그냥 열면 기본값이라 `now-6h`
+      // 같은 글자다. 그 글자를 그대로 넘기면 게이트웨이가 못 읽고 조용히 최근 1시간을
+      // 본다. 질문 글에는 "(구간 now-6h ~ now)" 가 남아 사람 눈에는 전달된 것처럼
+      // 보인다(2026-08-19 점검).
+      const at = (v: any, roundUp: boolean): string => {
+        if (v === undefined || v === null || v === '') {
+          return '';
+        }
+        const parsed = typeof v === 'string' ? dateMath.parse(v, roundUp) : dateTime(v);
+        return parsed && parsed.isValid() ? parsed.toISOString() : '';
+      };
+      if (context.timeRange) {
+        const from = at(context.timeRange.from, false);
+        const to = at(context.timeRange.to, true);
+        if (from && to) {
+          q.set('from', from);
+          q.set('to', to);
+        }
       }
       return { path: PAGE + '?' + q.toString() };
     },

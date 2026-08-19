@@ -10,4 +10,7 @@ datasources:
     isDefault: false
     editable: false
     secureJsonData:
-      gatewayToken: $GATEWAY_TOKEN
+      # 질의 화면이 쓰는 토큰. 웹훅·LLM 중계는 이 토큰을 거부한다.
+      # 화면을 볼 수 있는 사람이 프록시로 그 경로들을 부를 수 있었기 때문이다
+      # (2026-08-19 랩 실측: Viewer 계정이 /webhook/zabbix 422, /v1/messages 200).
+      gatewayToken: $ASK_TOKEN

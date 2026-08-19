@@ -287,7 +287,7 @@ def main():
                     + _query_masking_checks() + _empty_table_checks()
                     + _log_cap_checks() + _prewarm_checks()
                     + _repo_secret_checks() + _session_isolation_checks()
-                    + _panel_status_checks()
+                    + _panel_status_checks() + _token_scope_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -4164,6 +4164,44 @@ def _cap_answer_checks() -> int:
     assert "다시 물어보라" in ask.stall_note("deadline", [])
     assert "host_logs" in ask.stall_note("rounds", [{"tool": "host_logs"}])
     return 14
+
+
+def _token_scope_checks() -> int:
+    """질의용 토큰으로 웹훅과 LLM 중계를 부를 수 없는가.
+
+    화면은 Grafana 데이터소스 프록시를 거쳐 게이트웨이를 부른다. 그 프록시는 선언된
+    경로의 **하위 경로를 전부 통과시킨다.** 2026-08-19 랩 실측으로 Viewer 권한 계정이
+    `/webhook/zabbix` 를 부르면 핸들러까지 닿았고(422), `/v1/messages` 는 회사 키로
+    실제 답을 받았다(200). 토큰이 하나뿐이라 용도를 가릴 수 없었다.
+
+    질의용 토큰은 `/ask*` 만 연다. 웹훅과 중계는 게이트웨이 토큰만 받는다.
+    """
+    import os
+
+    from . import app as gw
+
+    saved = {k: os.environ.get(k) for k in ("GATEWAY_TOKEN", "ASK_TOKEN")}
+    try:
+        os.environ["GATEWAY_TOKEN"] = "gw-secret"
+        os.environ["ASK_TOKEN"] = "ask-secret"
+        # ① 질의는 두 토큰 다 받는다. 게이트웨이 토큰만 아는 배포도 계속 돌아야 한다.
+        assert gw._ask_token_ok("ask-secret") is True
+        assert gw._ask_token_ok("gw-secret") is True
+        assert gw._ask_token_ok("아무거나") is False
+        # ② 웹훅·중계는 질의용 토큰을 거부한다.
+        assert gw._token_ok("gw-secret") is True
+        assert gw._token_ok("ask-secret") is False
+        # ③ 질의용 토큰을 안 적은 배포에서는 예전처럼 하나로 돈다.
+        del os.environ["ASK_TOKEN"]
+        assert gw._ask_token_ok("gw-secret") is True
+        assert gw._token_ok("gw-secret") is True
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return 7
 
 
 def _panel_status_checks() -> int:

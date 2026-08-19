@@ -173,9 +173,34 @@ _seen: dict = {}  # (source, event_id, event_value) -> monotonic. 프로덕션�
 _seen_lock = threading.Lock()
 
 
+def _as_bytes(v) -> bytes:
+    return str(v or "").encode("utf-8", "ignore")
+
+
 def _token_ok(token: str) -> bool:
+    """웹훅·LLM 중계용 토큰인가.
+
+    **질의용 토큰은 여기서 거부한다.** 화면이 지나는 Grafana 데이터소스 프록시는 선언한
+    경로의 하위 경로를 전부 통과시킨다. 2026-08-19 랩 실측으로 Viewer 권한 계정이
+    `/webhook/zabbix` 를 부르면 핸들러까지 닿았고 `/v1/messages` 는 회사 키로 실제 답을
+    받았다. 토큰이 하나뿐이라 용도를 가릴 수 없었다.
+    """
     expected = os.environ.get("GATEWAY_TOKEN", "")
-    return bool(expected) and hmac.compare_digest(token or "", expected)
+    # **바이트로 견준다.** 문자열끼리 비교하면 아스키가 아닌 값이 들어왔을 때
+    # `compare_digest` 가 예외를 던져 401 대신 500 이 나간다.
+    return bool(expected) and hmac.compare_digest(_as_bytes(token), _as_bytes(expected))
+
+
+def _ask_token_ok(token: str) -> bool:
+    """질의용 토큰인가. 게이트웨이 토큰도 받는다.
+
+    `ASK_TOKEN` 을 안 적은 배포는 예전처럼 하나로 돈다. 설정을 아직 안 나눈 곳이
+    갑자기 멈추면 안 되기 때문이다. 나눠 적은 곳에서는 질의용 토큰이 웹훅을 못 연다.
+    """
+    ask = os.environ.get("ASK_TOKEN", "")
+    if ask and hmac.compare_digest(_as_bytes(token), _as_bytes(ask)):
+        return True
+    return _token_ok(token)
 
 
 def _duplicate(key: tuple) -> bool:
@@ -255,7 +280,7 @@ async def ask_endpoint(req: AskRequest, request: Request,
     신원은 Grafana 가 프록시하면서 붙이는 헤더로 들어온다. **그 헤더는 Grafana 를 거친
     요청에서만 믿을 수 있으므로**, 이 포트를 Grafana 만 접근하도록 막는 것이 전제다.
     """
-    if not _token_ok(x_gateway_token):
+    if not _ask_token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="unauthorized")
     user = ask.who(x_grafana_user)
     ok, why = ask.user_budget_ok(user)
@@ -295,7 +320,7 @@ def _who(header: str) -> str:
 def convo_list(x_gateway_token: str = Header(default=""),
                x_grafana_user: str = Header(default="")):
     """내 대화 목록. 남의 것은 애초에 안 나온다."""
-    if not _token_ok(x_gateway_token):
+    if not _ask_token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="unauthorized")
     return {"convos": convo.listing(_who(x_grafana_user)),
             "store": convo.status()["backend"]}
@@ -304,7 +329,7 @@ def convo_list(x_gateway_token: str = Header(default=""),
 @app.get("/ask/convos/{cid}")
 def convo_get(cid: str, x_gateway_token: str = Header(default=""),
               x_grafana_user: str = Header(default="")):
-    if not _token_ok(x_gateway_token):
+    if not _ask_token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="unauthorized")
     return {"messages": convo.load(cid, _who(x_grafana_user))}
 
@@ -312,7 +337,7 @@ def convo_get(cid: str, x_gateway_token: str = Header(default=""),
 @app.post("/ask/convos/{cid}/rename")
 def convo_rename(cid: str, req: ConvoRequest, x_gateway_token: str = Header(default=""),
                  x_grafana_user: str = Header(default="")):
-    if not _token_ok(x_gateway_token):
+    if not _ask_token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="unauthorized")
     return {"ok": convo.rename(cid, _who(x_grafana_user), req.title)}
 
@@ -320,7 +345,7 @@ def convo_rename(cid: str, req: ConvoRequest, x_gateway_token: str = Header(defa
 @app.post("/ask/convos/{cid}/delete")
 def convo_delete(cid: str, x_gateway_token: str = Header(default=""),
                  x_grafana_user: str = Header(default="")):
-    if not _token_ok(x_gateway_token):
+    if not _ask_token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="unauthorized")
     return {"ok": convo.remove(cid, _who(x_grafana_user))}
 
@@ -333,7 +358,7 @@ def ask_cancel(req: AskRequest, x_gateway_token: str = Header(default=""),
     **누른 사람의 세션만 멈춘다.** 화면이 보내는 세션 이름은 새 대화의 첫 턴에 모두
     같으므로, 신원을 함께 넣지 않으면 한 사람의 멈춤이 남의 질문을 끊는다.
     """
-    if not _token_ok(x_gateway_token):
+    if not _ask_token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="unauthorized")
     ask.cancel(ask.session_key(req.session or "-", ask.who(x_grafana_user)))
     return {"ok": True}
