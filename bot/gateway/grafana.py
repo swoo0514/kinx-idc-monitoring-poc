@@ -3,6 +3,7 @@
 import base64
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
@@ -87,6 +88,9 @@ def annotate(text: str, event_ts: float, tags=()) -> int:
 
 
 SEARCH_LIMIT = 50
+# 한 번에 상세를 열어 볼 대시보드 수와 동시 조회 수. 지목하면 대개 한두 개다.
+DASH_MAX = 20
+DASH_WORKERS = 6
 
 
 def _flatten(panels):
@@ -156,15 +160,32 @@ def list_panels(dash_match: str = "", limit: int = 40) -> list:
             r = c.get(base + "/api/search", params={"type": "dash-db", "limit": SEARCH_LIMIT},
                       headers=_auth())
             r.raise_for_status()
-            for d in r.json():
+            boards = [d for d in r.json()
+                      if d.get("uid") and (not want
+                                           or want in str(d.get("title") or "").lower())]
+            # **대시보드 상세를 순차로 돌지 않는다.** 랩에 열 개 남짓이지만 실환경은
+            # 더 많고, 콜당 5초라 최악이 분 단위였다(2026-08-19 감사 E-1). 지목한
+            # 대시보드가 있으면 그 안에서만 찾으므로 대개 한두 개다.
+            boards = boards[:DASH_MAX]
+
+            def fetch(d):
+                try:
+                    dr = c.get(base + "/api/dashboards/uid/" + str(d.get("uid")),
+                               headers=_auth())
+                    if dr.status_code != 200:
+                        return d, None
+                    return d, (dr.json().get("dashboard") or {})
+                except Exception as e:                 # 하나가 실패해도 나머지는 본다
+                    log.warning("대시보드 조회 실패 %s: %s", d.get("uid"), e)
+                    return d, None
+
+            with ThreadPoolExecutor(max_workers=DASH_WORKERS) as pool:
+                fetched = list(pool.map(fetch, boards))
+            for d, board in fetched:
+                if not board:
+                    continue
                 dash = str(d.get("title") or "")
-                if want and want not in dash.lower():
-                    continue
-                dr = c.get(base + "/api/dashboards/uid/" + str(d.get("uid") or ""),
-                           headers=_auth())
-                if dr.status_code != 200:
-                    continue
-                for p in _flatten((dr.json().get("dashboard") or {}).get("panels")):
+                for p in _flatten(board.get("panels")):
                     title = str(p.get("title") or "")
                     if not title or p.get("type") not in PANEL_TYPES:
                         continue

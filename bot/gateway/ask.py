@@ -111,6 +111,20 @@ def _alias(mk, name: str, *others) -> None:
                 mk._re = None
 
 
+# 대상 표 캐시. 질문마다 감시 서버 전체를 다시 받으면 첫 모델 호출 전에 그 왕복이
+# 통째로 들어간다(실환경 사내 321대 + MSP 145대). **시한을 짧게 둔다** — 이름 표와 달리
+# 이 표가 낡으면 없는 호스트를 있다고 답한다. 실패한 결과는 캐시하지 않는다.
+TABLE_TTL_S = float(os.environ.get("ASK_TABLE_TTL_S", "60"))
+_tables: dict = {}       # 소스 묶음 -> (만든 시각, 표)
+
+
+def forget_tables() -> None:
+    """대상 표·패널 목록 캐시를 버린다. 검사와 온보딩 직후에 쓴다."""
+    with _lock:
+        _tables.clear()
+        _panel_lists.clear()
+
+
 async def build_table(masker: masking.Masker = None, client_factory=None) -> dict:
     """질의가 조회할 수 있는 대상 표. `{토큰: {host, source, logs, security}}`.
 
@@ -126,8 +140,19 @@ async def build_table(masker: masking.Masker = None, client_factory=None) -> dic
 
     mk = masker if masker is not None else proxy.build_masker()
     factory = client_factory or (lambda source="": collector.ZabbixClient(source=source))
+    sources = allowed_sources()
+    key = "|".join(sources)
+    with _lock:
+        made, cached = _tables.get(key, (0.0, None))
+    if cached and _now() - made < TABLE_TTL_S:
+        # 캐시를 쓰더라도 이름 등록은 이번 마스커에 다시 해야 한다. 마스커는 요청마다
+        # 새로 만들어지므로, 안 하면 이번 턴에 실명이 안 가려진다.
+        for ent in cached.values():
+            mk.register("host", ent.get("host", ""))
+            _alias(mk, ent.get("host", ""), ent.get("logs", ""), ent.get("security", ""))
+        return dict(cached)
     table = {}
-    for source in allowed_sources():
+    for source in sources:
         try:
             zbx = factory(source=source)
             async with httpx.AsyncClient() as client:
@@ -149,6 +174,11 @@ async def build_table(masker: masking.Masker = None, client_factory=None) -> dic
             table[mk._fwd[name]] = {
                 "host": name, "source": source, "logs": logs, "security": sec,
             }
+    # **빈 표는 캐시하지 않는다.** 조회가 실패한 상태를 60초 동안 붙들면 그 사이 모든
+    # 질문이 "조회할 수 있는 대상이 없다" 로 끝난다.
+    if table:
+        with _lock:
+            _tables[key] = (_now(), dict(table))
     return table
 
 
@@ -1007,19 +1037,29 @@ def metrics_result(items: list, series: dict, masker: masking.Masker = None) -> 
     return {"metrics": out}
 
 
-def problems_result(rows: list, masker: masking.Masker = None) -> dict:
+def problems_result(rows: list, masker: masking.Masker = None, total: int = 0) -> dict:
     """열린 문제 결과 한 벌.
 
     Zabbix 문제명은 매크로가 풀린 문장이라 `Zabbix agent is not available on <호스트명>`
     처럼 호스트명이 박혀 있다. 같은 값을 알림 경로는 이미 가린다(masking.py).
+
+    **총 건수를 함께 받는다.** 소스당 50건에서 자르는데 그 말이 없으면 모델은 실린 것이
+    전부인 줄 안다. 실환경 사내 Zabbix 는 Warning 노이즈로 50건을 쉽게 넘는다.
     """
     from . import collector
 
     mask = masker.mask if masker is not None else (lambda x: x)
-    return {"problems": [{"name": mask(str(p.get("name") or "")),
-                          "sev": p.get("severity"),
-                          "t": int(p.get("clock") or 0)} for p in rows or []],
-            "status": collector.SOURCE_OK}
+    out = {"problems": [{"name": mask(str(p.get("name") or "")),
+                         "sev": p.get("severity"),
+                         "t": int(p.get("clock") or 0)} for p in rows or []],
+           "status": collector.SOURCE_OK}
+    if total:
+        out["total"] = int(total)
+        if int(total) > len(out["problems"]):
+            out["note"] = ("지금 열린 문제는 모두 %d건인데 최근 %d건만 실었다. 건수는 "
+                           "total 을 쓰고, 나머지는 host 를 지정해 좁혀서 보라"
+                           % (int(total), len(out["problems"])))
+    return out
 
 
 async def fetch_metrics(entry: dict, match: str, start: int, end: int,
@@ -1058,37 +1098,47 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int,
             items = asktools.rank_items(items, match)
             total = len(items)
             dropped = [mask(str(x.get("name") or "")) for x in items[asktools.ITEM_LIMIT:]]
+            picked = items[:asktools.ITEM_LIMIT]
+            # **아이템마다 따로 묻지 않는다.** 상한이 8개라 왕복이 10번까지 갔고 콜당
+            # 5초라 최악 50초였다(2026-08-19 감사). Zabbix 는 itemids 에 배열을 받으므로
+            # 값 유형으로 묶으면 이력은 최대 두 번, 추세는 한 번이다.
+            trend = asktools.use_trend(start, end)
+            series = {}
+            if trend:
+                rows = await zbx.call(c, "trend.get", {
+                    "itemids": [it["itemid"] for it in picked
+                                if int(it.get("value_type", 3)) in (0, 3)],
+                    "time_from": start, "time_till": end, "output": "extend",
+                    "limit": asktools.HISTORY_FETCH_MAX * len(picked)})
+                for r in rows:
+                    # 값은 시간별 **최대**를 쓴다. 평균으로 줄이면 한 시간 안에 튄 자리가
+                    # 묻혀 "정상입니다" 가 나온다.
+                    series.setdefault(str(r.get("itemid")), []).append(
+                        {"t": int(r["clock"]), "v": r.get("value_max"),
+                         "avg": r.get("value_avg"), "min": r.get("value_min")})
+            else:
+                # 값 유형이 섞이면 나눠 부른다. history 는 호출마다 하나여야 한다.
+                by_type = {}
+                for it in picked:
+                    vt = int(it.get("value_type", 3))
+                    if vt in (0, 3):
+                        by_type.setdefault(vt, []).append(it["itemid"])
+                for vt, ids in by_type.items():
+                    # **구간 전체를 받아 놓고 줄인다.** 상한만큼만 최신순으로 받으면
+                    # 앞부분이 잘려 먼저 난 스파이크를 못 본다(2026-08-18 실측).
+                    hist = await zbx.call(c, "history.get", {
+                        "itemids": ids, "history": vt,
+                        "time_from": start, "time_till": end, "output": "extend",
+                        "sortfield": "clock", "sortorder": "ASC",
+                        "limit": asktools.HISTORY_FETCH_MAX * len(ids)})
+                    for h in hist:
+                        series.setdefault(str(h.get("itemid")), []).append(
+                            {"t": int(h["clock"]), "v": h["value"]})
             out = []
-            for it in items[:asktools.ITEM_LIMIT]:
-                vt = int(it.get("value_type", 3))
-                raw, kind = [], ""
-                if vt in (0, 3):         # 수치형만 추이가 뜻이 있다
-                    if asktools.use_trend(start, end):
-                        # **긴 구간은 추세로 본다.** 이력 보관이 짧아 90일을 이력으로
-                        # 물으면 비거나 잘린다. 추세는 시간 단위 집계라 가볍다.
-                        rows = await zbx.call(c, "trend.get", {
-                            "itemids": it["itemid"], "time_from": start,
-                            "time_till": end, "output": "extend",
-                            "limit": asktools.HISTORY_FETCH_MAX})
-                        rows.sort(key=lambda r: int(r.get("clock", 0)))
-                        # 값은 시간별 **최대**를 쓴다. 평균으로 줄이면 한 시간 안에
-                        # 튄 자리가 묻혀 "정상입니다" 가 나온다.
-                        raw = [{"t": int(r["clock"]), "v": r.get("value_max"),
-                                "avg": r.get("value_avg"), "min": r.get("value_min")}
-                               for r in rows]
-                        kind = "trend"
-                    else:
-                        # **구간 전체를 받아 놓고 줄인다.** 상한만큼만 최신순으로 받으면
-                        # 앞부분이 잘려 먼저 난 스파이크를 못 본다(2026-08-18 실측).
-                        hist = await zbx.call(c, "history.get", {
-                            "itemids": it["itemid"], "history": vt,
-                            "time_from": start, "time_till": end, "output": "extend",
-                            "sortfield": "clock", "sortorder": "ASC",
-                            "limit": asktools.HISTORY_FETCH_MAX})
-                        raw = [{"t": int(h["clock"]), "v": h["value"]} for h in hist]
-                        kind = "history"
-                out.append(metric_item(it, raw, asktools.downsample(raw), kind,
-                                       mask))
+            for it in picked:
+                raw = sorted(series.get(str(it["itemid"])) or [], key=lambda x: x["t"])
+                kind = ("trend" if trend else "history") if raw else ""
+                out.append(metric_item(it, raw, asktools.downsample(raw), kind, mask))
     except Exception as e:
         log.warning("지표 조회 실패: %s", e)
         return {"metrics": [], "status": collector.SOURCE_UNAVAILABLE,
@@ -1107,7 +1157,7 @@ async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
 
     try:
         sources = [entry["source"]] if entry else allowed_sources()
-        out = []
+        out, total = [], 0
         for src in sources:
             zbx = collector.ZabbixClient(source=src)
             async with httpx.AsyncClient() as c:
@@ -1119,13 +1169,31 @@ async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
                     if not hosts:
                         continue
                     params["hostids"] = hosts[0]["hostid"]
-                out.extend(problems_result(
-                    await zbx.call(c, "problem.get", params), masker)["problems"])
+                got = await zbx.call(c, "problem.get", params)
+                # 총계는 따로 센다. Zabbix 는 countOutput 으로 개수만 돌려준다.
+                cnt = await zbx.call(c, "problem.get",
+                                     dict(params, countOutput=True,
+                                          output=None, limit=None,
+                                          sortfield=None, sortorder=None))
+                try:
+                    total += int(cnt if isinstance(cnt, (int, str)) else 0)
+                except (TypeError, ValueError):
+                    total += len(got)
+                out.extend(problems_result(got, masker)["problems"])
     except Exception as e:
         log.warning("열린 문제 조회 실패: %s", e)
         return {"problems": [], "status": collector.SOURCE_UNAVAILABLE,
                 "note": "조회하지 못했다. 이 결과를 '없음'으로 읽지 마라"}
-    return {"problems": out, "status": collector.SOURCE_OK}
+    # 조립은 한 곳에서 한다. 총계까지 넘겨야 잘림 안내가 붙는다.
+    res = problems_result([], masker, total=total)
+    res["problems"] = out
+    if total and int(total) <= len(out):
+        res.pop("note", None)
+    elif total:
+        res["note"] = ("지금 열린 문제는 모두 %d건인데 최근 %d건만 실었다. 건수는 "
+                       "total 을 쓰고, 나머지는 host 를 지정해 좁혀서 보라"
+                       % (int(total), len(out)))
+    return res
 
 
 def var_host_of(entry: dict, panel: dict) -> str:
@@ -1163,6 +1231,11 @@ async def fetch_panel(entry: dict, target, start: int, end: int,
     return out
 
 
+# 패널 목록 캐시. 대시보드는 자주 안 바뀌는데 턴마다 Grafana 를 다시 훑었다.
+PANELS_TTL_S = float(os.environ.get("ASK_PANELS_TTL_S", "60"))
+_panel_lists: dict = {}      # 대시보드 조건 -> (만든 시각, 목록)
+
+
 async def fetch_panel_list(dash: str, masker: masking.Masker) -> tuple:
     """볼 수 있는 패널 목록과 조회 상태. 손잡이는 부르는 쪽이 붙인다.
 
@@ -1177,11 +1250,21 @@ async def fetch_panel_list(dash: str, masker: masking.Masker) -> tuple:
     # **조회 실패와 "없음" 을 구분한다.** 다른 네 축은 이미 상태를 싣는데(§12) 이 축만
     # 빠져 있어, 주소가 없거나 Grafana 가 죽어도 "그 조건에 맞는 패널이 없다" 로 나갔다.
     # 사람은 화면에서 그 패널을 보고 있는데 봇이 없다고 답한다(2026-08-19 감사).
-    try:
-        items = await asyncio.to_thread(grafana.list_panels, dash)
-    except Exception as e:
-        log.warning("패널 목록 조회 실패: %s", e)
-        return [], collector.SOURCE_UNAVAILABLE
+    key = str(dash or "")
+    with _lock:
+        made, cached = _panel_lists.get(key, (0.0, None))
+    if cached is not None and _now() - made < PANELS_TTL_S:
+        items = cached
+    else:
+        try:
+            items = await asyncio.to_thread(grafana.list_panels, dash)
+        except Exception as e:
+            log.warning("패널 목록 조회 실패: %s", e)
+            return [], collector.SOURCE_UNAVAILABLE
+        # 빈 목록은 캐시하지 않는다. 미배선 상태를 60초 붙들 이유가 없다.
+        if items:
+            with _lock:
+                _panel_lists[key] = (_now(), list(items))
     # 빈 목록일 때만 설정을 본다. 먼저 보면 조회 자체를 건너뛰게 되어, 목록을 대신 채워
     # 넣는 검사가 통째로 지나가 버린다.
     if not items and not grafana._base():

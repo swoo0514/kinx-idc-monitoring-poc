@@ -290,7 +290,9 @@ def main():
                     + _panel_status_checks() + _token_scope_checks()
                     + _event_loop_checks() + _nametable_freshness_checks()
                     + _model_kind_wiring_checks() + _now_context_checks()
-                    + _no_evidence_checks()
+                    + _no_evidence_checks() + _metric_batch_checks()
+                    + _tool_timeout_checks() + _table_cache_checks()
+                    + _list_truncation_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -4168,6 +4170,202 @@ def _cap_answer_checks() -> int:
     return 14
 
 
+def _list_truncation_checks() -> int:
+    """목록이 잘렸을 때 그 사실을 말하는가.
+
+    보안 경보에는 총 건수를 실었는데(§A-3) 열린 문제와 호스트 목록에는 안 실려 있었다.
+    열린 문제는 소스당 50건에서 자르고 호스트 목록은 100개에서 자르는데 둘 다 말이 없다.
+    실환경 사내 Zabbix 는 Warning 노이즈로 열린 문제가 50건을 쉽게 넘는다.
+    """
+    import asyncio
+
+    from . import ask, asktools
+
+    # ① 열린 문제 — 총계를 함께 받아 잘림을 밝힌다.
+    rows = [{"name": "p%d" % i, "severity": "3", "clock": "1786500000"}
+            for i in range(50)]
+    out = ask.problems_result(rows, None, total=137)
+    assert out.get("total") == 137, out
+    assert "137" in (out.get("note") or ""), out
+
+    # 안 잘렸으면 붙이지 않는다.
+    out2 = ask.problems_result(rows[:3], None, total=3)
+    assert not (out2.get("note") or ""), out2
+
+    # ② 호스트 목록 — 100개에서 자르면 몇 개 중 몇 개인지 말한다.
+    table = {"[h-%d]" % i: {"host": "web-%d" % i, "source": "s"} for i in range(150)}
+    got = asyncio.run(asktools.run_tool("list_hosts", {"query": ""}, {"table": table}))
+    assert got["n"] == 150 and len(got["hosts"]) == 100, (got["n"], len(got["hosts"]))
+    assert "150" in (got.get("note") or ""), got
+    return 6
+
+
+def _table_cache_checks() -> int:
+    """질문마다 대상 표를 새로 만들지 않는가.
+
+    `build_table` 은 허용된 감시 서버마다 `host.get` 을 인터페이스까지 붙여 전부 받는다.
+    실환경은 사내 321대 + MSP 145대라 첫 모델 호출 전에 그 왕복이 매번 들어갔다
+    (2026-08-19 감사 E-6, 세 갈래 감사가 같은 결론).
+
+    **낡은 표를 오래 들고 있지는 않는다.** 이름 표와 달리 이쪽이 낡으면 없는 호스트를
+    있다고 답한다. 그래서 짧은 시한만 두고, 조회가 실패하면 직전 값을 유지하지 않는다.
+    """
+    import asyncio
+    import os
+
+    from . import ask, collector, incident as inc_mod, registry
+
+    calls = {"n": 0}
+
+    class FakeZbx:
+        def __init__(self, source=""):
+            pass
+
+        async def call(self, client, method, params):
+            calls["n"] += 1
+            return [{"hostid": "1", "host": "web-01", "name": "web-01", "status": "0",
+                     "interfaces": [{"ip": "192.0.2.9", "dns": "web-01.example"}]}]
+
+    saved = collector.ZabbixClient
+    saved_src, saved_map = list(registry._SOURCES), dict(inc_mod.REALM_MAP)
+    saved_env = os.environ.get("ASK_ALLOWED_REALMS")
+    try:
+        registry._SOURCES = [{"name": "zabbix-internal", "realm": "internal"}]
+        inc_mod.REALM_MAP = {}
+        os.environ.pop("ASK_ALLOWED_REALMS", None)
+        collector.ZabbixClient = FakeZbx
+        ask.forget_tables()
+        t1 = asyncio.run(ask.build_table(ask.proxy.build_masker()))
+        n1 = calls["n"]
+        t2 = asyncio.run(ask.build_table(ask.proxy.build_masker()))
+        assert calls["n"] == n1, "표를 다시 만들었다"
+        assert list(t1) == list(t2), (t1, t2)
+
+        # 시한이 지나면 다시 만든다. 낡은 표로 답하면 없는 호스트를 있다고 한다.
+        ask.forget_tables()
+        asyncio.run(ask.build_table(ask.proxy.build_masker()))
+        assert calls["n"] > n1
+
+        # 조회가 실패하면 빈 표를 캐시하지 않는다. 다음 질문에서 다시 시도해야 한다.
+        class Broken(FakeZbx):
+            async def call(self, client, method, params):
+                calls["n"] += 1
+                raise RuntimeError("zabbix down")
+
+        collector.ZabbixClient = Broken
+        ask.forget_tables()
+        empty = asyncio.run(ask.build_table(ask.proxy.build_masker()))
+        assert empty == {}, empty
+        before = calls["n"]
+        asyncio.run(ask.build_table(ask.proxy.build_masker()))
+        assert calls["n"] > before, "실패한 결과를 캐시했다"
+    finally:
+        collector.ZabbixClient = saved
+        registry._SOURCES, inc_mod.REALM_MAP = saved_src, saved_map
+        if saved_env is not None:
+            os.environ["ASK_ALLOWED_REALMS"] = saved_env
+        ask.forget_tables()
+    return 6
+
+
+def _tool_timeout_checks() -> int:
+    """느린 조회 하나가 질의 전체를 잡아먹지 않는가.
+
+    도구 호출에 시한이 없었다. `list_panels` 는 검색 1회에 대시보드 상세 최대 50회를
+    순차로 도는데 콜당 5초라 최악 255초다. 마감 검사는 라운드 사이에서만 도므로 사람은
+    몇 분을 기다린 끝에 "상한에 닿아 멈췄다" 를 받는다(2026-08-19 감사 E-1).
+
+    시한을 넘긴 조회는 **다른 조회 실패와 같은 형태**로 돌려준다. 새 형태를 만들면 모델이
+    그것만 다르게 읽는다.
+    """
+    import asyncio
+    import os
+
+    from . import asktools, collector
+
+    saved = os.environ.get("ASK_TOOL_TIMEOUT_S")
+    try:
+        os.environ["ASK_TOOL_TIMEOUT_S"] = "0.05"
+
+        async def slow(q, a, b, limit):
+            await asyncio.sleep(5)
+            return {"logs": [], "status": "ok"}
+
+        ctx = {"table": {"[h-1]": {"host": "web-01", "source": "s", "logs": "web-01",
+                                   "security": ""}},
+               "now": 1786590000, "fetch_logs": slow}
+        out = asyncio.run(asktools.run_tool("host_logs", {"host": "[h-1]"}, ctx))
+        assert out.get("status") == collector.SOURCE_UNAVAILABLE, out
+        assert "중단했다" in (out.get("note") or ""), out
+        # "없음" 으로 읽히면 안 된다. 조회를 못 한 것이다.
+        assert "근거로 쓰지 마라" in (out.get("note") or ""), out
+    finally:
+        if saved is None:
+            os.environ.pop("ASK_TOOL_TIMEOUT_S", None)
+        else:
+            os.environ["ASK_TOOL_TIMEOUT_S"] = saved
+    return 3
+
+
+def _metric_batch_checks() -> int:
+    """지표를 아이템마다 따로 물어보지 않는가.
+
+    상한이 8개라 `host.get`·`item.get` 까지 최대 10왕복이고 콜당 5초라 최악 50초다. Zabbix
+    는 `itemids` 에 배열을 받으므로 값 유형으로 묶으면 이력은 최대 두 번, 추세는 한 번이다
+    (2026-08-19 감사 E-7).
+
+    검사는 호출 횟수를 센다. 결과가 아이템별로 제대로 갈리는지도 함께 본다 — 묶어 받으면
+    한 덩어리로 오므로 그 자리를 틀리면 남의 값이 붙는다.
+    """
+    import asyncio
+
+    from . import ask, collector
+
+    calls = []
+
+    class FakeZbx:
+        def __init__(self, source=""):
+            pass
+
+        async def call(self, client, method, params):
+            calls.append((method, params))
+            if method == "host.get":
+                return [{"hostid": "10"}]
+            if method == "item.get":
+                return [{"itemid": "1", "name": "CPU utilization", "key_": "cpu",
+                         "value_type": 0, "units": "%", "lastvalue": "5"},
+                        {"itemid": "2", "name": "Load average", "key_": "load",
+                         "value_type": 0, "units": "", "lastvalue": "1"},
+                        {"itemid": "3", "name": "Processes", "key_": "proc",
+                         "value_type": 3, "units": "", "lastvalue": "200"}]
+            if method == "history.get":
+                # 요청한 아이템들의 값을 한 덩어리로 돌려준다.
+                ids = params["itemids"]
+                ids = ids if isinstance(ids, list) else [ids]
+                return [{"itemid": i, "clock": "1786500000", "value": "1"} for i in ids]
+            return []
+
+    saved = collector.ZabbixClient
+    try:
+        collector.ZabbixClient = FakeZbx
+        out = asyncio.run(ask.fetch_metrics({"host": "web-01", "source": "s"}, "cpu",
+                                            1786500000, 1786500600))
+    finally:
+        collector.ZabbixClient = saved
+
+    hist = [c for c in calls if c[0] == "history.get"]
+    assert len(hist) <= 2, "아이템마다 따로 물었다: %d번" % len(hist)
+    # 값 유형이 섞이면 나눠 부른다. 한 번에 두 유형을 넣으면 Zabbix 가 못 받는다.
+    for _m, params in hist:
+        assert isinstance(params["itemids"], list), params
+        assert isinstance(params["history"], int), params
+    # 받은 값이 아이템별로 갈려야 한다. 한 덩어리를 그대로 붙이면 남의 값이 섞인다.
+    got = {m["name"]: m["sampled_from"] for m in out["metrics"]}
+    assert got.get("CPU utilization") == 1, got
+    assert got.get("Processes") == 1, got
+    return 6
+
+
 def _no_evidence_checks() -> int:
     """조회가 한 건도 성공하지 않았는데 "없습니다" 로 답하지 않는가.
 
@@ -4943,6 +5141,9 @@ def _ask_table_checks() -> int:
             async def call(self, client, method, params):
                 raise RuntimeError("zabbix down")
 
+        # 캐시를 비우고 본다. 짧은 시한 안에서는 직전 표가 그대로 쓰이는 것이 맞고
+        # (도구가 status 로 실패를 밝힌다), 여기서 보려는 것은 캐시가 없을 때다.
+        ask.forget_tables()
         assert asyncio.run(ask.build_table(client_factory=_Dead)) == {}
         return 9
     finally:

@@ -193,6 +193,8 @@ def window_label(start: int, end: int) -> str:
 
 # 이름으로 아이템을 고를 때 몇 개까지 볼 것인가. 접두사가 캐시에 올라가 있어 여유가 있다.
 ITEM_LIMIT = 8
+# 한 번에 실을 호스트 수. 실환경은 사내 321대 + MSP 145대라 전부 실으면 접두사가 커진다.
+HOST_LIST_MAX = 100
 
 _WORD = re.compile(r"[A-Za-z0-9]+")
 
@@ -681,15 +683,41 @@ def _target(args: dict, ctx: dict) -> tuple:
     return ent, None
 
 
+def tool_timeout_s() -> float:
+    """도구 한 번의 시한(초).
+
+    없으면 느린 조회 하나가 질의 전체를 잡아먹는다. 관측 화면 목록은 대시보드 상세를
+    순차로 도느라 최악 255초였다(2026-08-19 감사 E-1). 마감 검사는 라운드 사이에서만
+    도므로 그동안 아무도 못 끊는다.
+    """
+    import os
+
+    try:
+        return max(1.0, float(os.environ.get("ASK_TOOL_TIMEOUT_S", "20")))
+    except ValueError:
+        return 20.0
+
+
 async def run_tool(name: str, args: dict, ctx: dict) -> dict:
     """도구 하나를 실행한다. 어떤 실패도 예외로 던지지 않는다."""
+    import asyncio
+
     fn = _TOOLS.get(name)
     if fn is None:
         return _err("그런 도구는 없다: %s. 쓸 수 있는 것은 %s"
                     % (name, ", ".join(sorted(_TOOLS))))
     try:
-        out = await fn(args or {}, ctx)
+        out = await asyncio.wait_for(fn(args or {}, ctx), timeout=tool_timeout_s())
         return _hint_if_empty(name, out)
+    except asyncio.TimeoutError:
+        # **다른 조회 실패와 같은 형태로 돌려준다.** 새 형태를 만들면 모델이 그것만
+        # 다르게 읽는다. 비어 있다는 뜻이 아니라는 것도 함께 적는다.
+        from . import collector
+        log.warning("도구 %s 시한 초과 (%.0f초)", name, tool_timeout_s())
+        return {"status": collector.SOURCE_UNAVAILABLE,
+                "note": ("조회가 %.0f초 안에 끝나지 않아 중단했다. 구간을 좁히거나 "
+                         "대상을 지정해서 다시 불러라. 이 결과를 근거로 쓰지 마라"
+                         % tool_timeout_s())}
     except ValueError as e:                      # 조립기가 막은 인자
         return _err(str(e))
     except Exception as e:                       # 조회 실패는 없음이 아니다
@@ -779,7 +807,14 @@ async def _tool_list_hosts(args: dict, ctx: dict) -> dict:
     if not out:
         return {"hosts": [], "n": 0,
                 "hint": "그 이름에 맞는 호스트가 없다. query 를 비우고 전체를 받아 보라"}
-    return {"hosts": out[:100], "n": len(out)}
+    shown = out[:HOST_LIST_MAX]
+    res = {"hosts": shown, "n": len(out)}
+    if len(out) > len(shown):
+        # **자르면 잘랐다고 말한다.** 안 알리면 모델은 실린 것이 전부인 줄 알고
+        # "그런 호스트는 없다" 로 답한다.
+        res["note"] = ("호스트 %d대 중 %d대만 실었다. query 에 이름 일부를 넣어 좁혀라"
+                       % (len(out), len(shown)))
+    return res
 
 
 async def _tool_host_logs(args: dict, ctx: dict) -> dict:
