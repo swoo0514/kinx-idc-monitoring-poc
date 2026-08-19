@@ -27,7 +27,7 @@ SESSION_TTL_S = 1800
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 _sessions: dict = {}     # sid -> {"rev": {토큰: 원문}, "at": 단조시각}
-_cancelled: set = set()  # 사람이 멈춘 세션. 다음 라운드에서 확인한다.
+_cancelled: dict = {}    # 세션 -> 멈춤을 누른 단조시각. 다음 라운드에서 확인한다.
 _lock = threading.Lock()
 
 
@@ -189,7 +189,18 @@ def prune_sessions(now: float = None) -> int:
         dead = [k for k, v in _sessions.items() if now - v["at"] > SESSION_TTL_S]
         for k in dead:
             del _sessions[k]
+    prune_cancels(now)
     return len(dead)
+
+
+def session_key(sid: str, user: str = "") -> str:
+    """이 요청이 속한 세션의 열쇠.
+
+    **화면이 보낸 이름만으로 나누지 않는다.** 화면은 새 대화의 첫 턴에 `'ui'` 를 보내므로
+    그 값만 쓰면 모든 사람이 한 세션이 된다. 그러면 한 사람의 멈춤이 남의 질문을 끊고,
+    역치환 표도 섞인다(2026-08-19 감사, 네 갈래가 같은 결론).
+    """
+    return "%s|%s" % (str(user or ANON), str(sid or "-"))
 
 
 def cancel(sid: str) -> None:
@@ -199,12 +210,35 @@ def cancel(sid: str) -> None:
     받아 놓은 것을 버리면 사람에게 남는 것이 없다.
     """
     with _lock:
-        _cancelled.add(str(sid or "-"))
+        _cancelled[str(sid or "-")] = _now()
 
 
-def _take_cancel(sid: str) -> bool:
+def cancelled(sid: str, started: float) -> bool:
+    """이 요청을 멈춰야 하는가. 맞으면 표시를 지우고 True.
+
+    **요청이 시작된 뒤에 눌린 것만 인정한다.** 답이 끝난 뒤 도착한 멈춤을 그대로 두면
+    다음 질문이 조회 한 번 못 하고 죽는다(2026-08-19 감사 C-3).
+    """
+    key = str(sid or "-")
     with _lock:
-        return bool(_cancelled.discard(sid) if sid in _cancelled else False) or False
+        at = _cancelled.get(key)
+        if at is None:
+            return False
+        if at < float(started):          # 이미 지난 취소다
+            del _cancelled[key]
+            return False
+        del _cancelled[key]
+        return True
+
+
+def prune_cancels(now: float = None) -> int:
+    """오래된 취소 표시를 지운다. 반환은 지운 개수."""
+    now = _now() if now is None else now
+    with _lock:
+        dead = [k for k, at in _cancelled.items() if now - at > SESSION_TTL_S]
+        for k in dead:
+            del _cancelled[k]
+    return len(dead)
 
 
 def forget_all() -> None:
@@ -576,6 +610,9 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         return {"text": "", "trace": [], "rounds": 0, "images": [], "stopped": "rejected",
                 "error": clean["reason"]}
 
+    # 세션 열쇠에 신원을 넣는다. 화면이 보내는 이름만으로는 사람이 안 나뉜다.
+    sid = session_key(sid, user)
+
     # 사람이 보던 구간. 화면이 넘겨 주므로 모델에게 받아 적으라고 시키지 않는다.
     panel_span = None
     pf = asktools.parse_when((panel or {}).get("from"))
@@ -688,11 +725,9 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         if tick() - started > DEADLINE_S:
             stopped = "deadline"
             break
-        with _lock:
-            if (sid or "-") in _cancelled:
-                _cancelled.discard(sid or "-")
-                stopped = "cancelled"
-                break
+        if cancelled(sid, started):
+            stopped = "cancelled"
+            break
         res = await asyncio.to_thread(egress.call_raw, lambda: _model(messages),
                                       kind="ask", user=user)
         if not res["ok"]:
@@ -1093,8 +1128,8 @@ async def fetch_panel(entry: dict, target, start: int, end: int,
     return out
 
 
-async def fetch_panel_list(dash: str, masker: masking.Masker) -> list:
-    """볼 수 있는 패널 목록. 손잡이는 부르는 쪽이 붙인다.
+async def fetch_panel_list(dash: str, masker: masking.Masker) -> tuple:
+    """볼 수 있는 패널 목록과 조회 상태. 손잡이는 부르는 쪽이 붙인다.
 
     제목에 고객사명이나 호스트명이 들어 있을 수 있으므로 이름 표를 거쳐 내보낸다.
     """
@@ -1102,12 +1137,25 @@ async def fetch_panel_list(dash: str, masker: masking.Masker) -> list:
 
     from . import grafana
 
-    items = await asyncio.to_thread(grafana.list_panels, dash)
+    from . import collector
+
+    # **조회 실패와 "없음" 을 구분한다.** 다른 네 축은 이미 상태를 싣는데(§12) 이 축만
+    # 빠져 있어, 주소가 없거나 Grafana 가 죽어도 "그 조건에 맞는 패널이 없다" 로 나갔다.
+    # 사람은 화면에서 그 패널을 보고 있는데 봇이 없다고 답한다(2026-08-19 감사).
+    try:
+        items = await asyncio.to_thread(grafana.list_panels, dash)
+    except Exception as e:
+        log.warning("패널 목록 조회 실패: %s", e)
+        return [], collector.SOURCE_UNAVAILABLE
+    # 빈 목록일 때만 설정을 본다. 먼저 보면 조회 자체를 건너뛰게 되어, 목록을 대신 채워
+    # 넣는 검사가 통째로 지나가 버린다.
+    if not items and not grafana._base():
+        return [], collector.SOURCE_DISABLED
     # 질의문에는 호스트명이 그대로 들어 있는 일이 있다. 이름 표를 거쳐 내보낸다.
     return [dict(it, title=masker.mask(str(it.get("title") or "")),
                  dashboard=masker.mask(str(it.get("dashboard") or "")),
                  query=masker.mask(str(it.get("query") or "")))
-            for it in items]
+            for it in items], collector.SOURCE_OK
 
 
 def engine_name() -> str:
@@ -1146,11 +1194,9 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
         if tick() - started > DEADLINE_S:
             _stop["why"] = "deadline"
             return True
-        with _lock:
-            if (sid or "-") in _cancelled:
-                _cancelled.discard(sid or "-")
-                _stop["why"] = "cancelled"
-                return True
+        if cancelled(sid, started):
+            _stop["why"] = "cancelled"
+            return True
         return False
 
     _stop = {"why": ""}

@@ -14,8 +14,14 @@ type Convo = { id: string; title: string; at: number };
 // 마크다운이 물결표 한 쌍을 취소선으로 읽는다. 봇이 "2026-08-12~13" 처럼 기간을
 // 물결표로 적으면 그 뒤 문장까지 통째로 그어진다(2026-08-18 실측). 취소선은 우리
 // 답에 쓸 일이 없으므로 물결표를 글자 그대로 보이게 한다.
+//
+// **코드 구간 안은 건드리지 않는다.** 마크다운은 코드 스팬과 코드 블록 안에서 역슬래시
+// 이스케이프를 처리하지 않으므로, 그 안에 역슬래시를 넣으면 화면에 그대로 보인다. 봇이
+// 확인 명령을 코드 블록으로 주기 때문에 사람이 복사한 명령이 틀리게 된다(2026-08-19 점검).
 function keepTildes(text: string): string {
-  return String(text || '').replace(/~/g, '\\~');
+  const src = String(text || '');
+  // ```블록``` 과 `스팬` 을 통째로 건너뛰고, 그 밖의 물결표만 바꾼다.
+  return src.replace(/(```[\s\S]*?```|`[^`\n]*`)|~/g, (m, code) => (code ? code : '\\~'));
 }
 
 // 패널 그림은 Grafana 가 헤들리스 브라우저로 그린다. 랩 실측으로 **질의가 없는 텍스트
@@ -81,14 +87,26 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
   const [err, setErr] = useState('');
   const [toDelete, setToDelete] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
+  // 이 탭을 가리키는 이름. 새 대화의 첫 턴에는 대화 번호가 아직 없는데, 그때 모두가
+  // 같은 이름('ui')을 보내면 게이트웨이에서 한 세션이 된다. 한 사람이 누른 멈춤이 남의
+  // 질문을 끊고 이름 표도 섞인다(2026-08-19 점검). 탭마다 다른 이름을 만들어 보낸다.
+  const tabRef = useRef(Math.random().toString(36).slice(2, 10));
+  // 지금 답을 기다리는 대화. 응답이 도착했을 때 화면이 다른 대화로 옮겨 갔으면 그 답을
+  // 붙이지 않는다.
+  const waitingRef = useRef('');
 
   const refresh = useCallback(async () => {
     try {
       const r: any = await getBackendSrv().get(GATEWAY + '/ask/convos');
       setConvos(r?.convos || []);
       setStore(r?.store || '');
-    } catch (e) {
-      setStore('none');
+    } catch (e: any) {
+      // 무엇이 실패했는지 그대로 말한다. 예전에는 게이트웨이가 죽었을 때도, 토큰이
+      // 틀렸을 때도 "대화 저장소가 없다" 로 나가서 사람이 저장소 설정을 뒤졌다.
+      const code = e?.status || e?.data?.status;
+      setStore('');
+      setErr(code ? `대화 목록을 못 불러왔습니다 (HTTP ${code})` :
+        `대화 목록을 못 불러왔습니다: ${String(e?.data?.error || e?.message || e)}`);
     }
   }, []);
 
@@ -103,6 +121,7 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
   const open = async (id: string) => {
     setErr('');
     setConvoId(id);
+    waitingRef.current = '__moved__';    // 오는 중인 답을 이 화면에 붙이지 않는다
     try {
       const r: any = await getBackendSrv().get(GATEWAY + '/ask/convos/' + id);
       setTurns((r?.messages || []).map((m: any) => ({
@@ -113,6 +132,7 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
   };
 
   const fresh = () => {
+    waitingRef.current = '__moved__';
     setConvoId('');
     setTurns([]);
     setQ('');
@@ -121,7 +141,8 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
 
   const stop = async () => {
     try {
-      await getBackendSrv().post(GATEWAY + '/ask/cancel', { question: '', session: convoId || 'ui' });
+      await getBackendSrv().post(GATEWAY + '/ask/cancel', {
+        question: '', session: convoId || tabRef.current });
     } catch (e) {
       // 멈춤이 실패해도 화면은 그대로 기다린다
     }
@@ -149,30 +170,51 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
     setErr('');
     setTurns((t) => [...t, { role: 'user', text }]);
     setBusy(true);
+    // 이 질문이 어느 대화의 것인지 적어 둔다. 답이 오는 사이에 사람이 다른 대화를 열면
+    // 그 답을 붙이지 않는다. 예전에는 방금 연 대화의 마지막 줄로 붙고 대화 번호까지
+    // 되돌아가, 화면에 보이는 대화와 실제 대화가 어긋난 채 다음 질문이 나갔다.
+    const asked = convoId;
+    waitingRef.current = asked;
     try {
       const res: any = await getBackendSrv().post(GATEWAY + '/ask', {
         question: text,
         convo_id: convoId,
-        session: convoId || 'ui',
+        session: convoId || tabRef.current,
         // **매 턴 보낸다.** 첫 턴에만 보내면 두 번째 질문부터 게이트웨이가
         // 식별자를 못 받아 제목으로 뒤진다. 첫 턴은 맞고 둘째 턴은 틀리므로
         // 사람이 원인을 가장 짚기 어렵다. 같은 그림을 다시 붙일지는 모델이 정한다.
         panel,
       });
+      if (waitingRef.current !== asked) {
+        // 사람이 다른 대화로 옮겨 갔다. 답은 서버에 남아 있으므로 그 대화를 다시 열면
+        // 보인다. 여기서 붙이면 남의 대화에 끼어든다.
+        refresh();
+        return;
+      }
       if (res?.error) {
         setErr(res.error);
       }
       if (res?.convo_id && res.convo_id !== convoId) {
         setConvoId(res.convo_id);
       }
-      setTurns((t) => [
-        ...t,
-        { role: 'assistant', text: res?.text || '(답이 비어 있습니다)', trace: res?.trace, images: res?.images },
-      ]);
+      // 오류만 온 경우에는 말풍선을 만들지 않는다. 오류 띠와 "(답이 비어 있습니다)" 가
+      // 함께 뜨면 무엇이 문제인지 읽기 어렵다.
+      if (res?.text) {
+        setTurns((t) => [
+          ...t,
+          { role: 'assistant', text: res.text, trace: res?.trace, images: res?.images },
+        ]);
+      } else if (!res?.error) {
+        setErr('답이 비어 있습니다. 다시 물어보십시오.');
+      }
       refresh();
     } catch (e: any) {
       setErr(String(e?.data?.error || e?.message || e));
+      refresh();
     } finally {
+      if (waitingRef.current === asked) {
+        waitingRef.current = '';
+      }
       setBusy(false);
     }
   };

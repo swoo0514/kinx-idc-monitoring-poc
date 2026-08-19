@@ -286,7 +286,8 @@ def main():
                     + _ask_dispatch_checks() + _cap_answer_checks()
                     + _query_masking_checks() + _empty_table_checks()
                     + _log_cap_checks() + _prewarm_checks()
-                    + _repo_secret_checks()
+                    + _repo_secret_checks() + _session_isolation_checks()
+                    + _panel_status_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -4165,6 +4166,122 @@ def _cap_answer_checks() -> int:
     return 14
 
 
+def _panel_status_checks() -> int:
+    """패널 조회가 실패했을 때 "없다" 로 나가지 않는가.
+
+    Zabbix·Loki·Wazuh·판정 이력 네 축은 조회 실패와 신호 없음을 상태로 구분해 싣는다(§12).
+    Grafana 축만 그 계약이 없어, 주소 미설정도 예외도 빈 목록이 되고 도구는 "그 조건에 맞는
+    패널이 없다" 를 돌려줬다. 사람은 화면에서 그 패널을 보고 있는데 봇이 없다고 답한다
+    (2026-08-19 감사 A-2).
+    """
+    import asyncio
+
+    from . import ask, asktools, collector, grafana
+
+    saved = grafana.list_panels
+    try:
+        # ① 조회가 실패하면 "없음" 이 아니라 "확인 못 했다" 로 말한다.
+        def boom(dash_match="", limit=40):
+            raise RuntimeError("grafana down")
+
+        grafana.list_panels = boom
+        out = asyncio.run(asktools.run_tool("list_panels", {"dashboard": ""},
+                                            {"list_panels": lambda d: ask.fetch_panel_list(
+                                                d, ask.proxy.build_masker())}))
+        assert out.get("status") == collector.SOURCE_UNAVAILABLE, out
+        assert "없" not in (out.get("note") or ""), out
+
+        # ② 주소가 없으면 미배선이다. 그것도 "없음" 이 아니다.
+        grafana.list_panels = lambda dash_match="", limit=40: []
+        saved_base = grafana._base
+        try:
+            grafana._base = lambda: ""
+            out2 = asyncio.run(asktools.run_tool("list_panels", {"dashboard": ""},
+                                                 {"list_panels": lambda d: ask.fetch_panel_list(
+                                                     d, ask.proxy.build_masker())}))
+        finally:
+            grafana._base = saved_base
+        assert out2.get("status") == collector.SOURCE_DISABLED, out2
+
+        # ③ 정상 조회는 예전 그대로다.
+        def ok(dash_match="", limit=40):
+            return [{"uid": "u1", "panel_id": 3, "dashboard": "d", "title": "t"}]
+
+        grafana.list_panels = ok
+        ctx = {"list_panels": lambda d: ask.fetch_panel_list(d, ask.proxy.build_masker())}
+        out3 = asyncio.run(asktools.run_tool("list_panels", {"dashboard": ""}, ctx))
+        assert out3.get("status") == collector.SOURCE_OK and out3["panels"], out3
+    finally:
+        grafana.list_panels = saved
+    return 5
+
+
+def _session_isolation_checks() -> int:
+    """한 사람의 멈춤이 남의 질문을 끊지 않는가.
+
+    화면이 새 대화의 첫 턴에 세션 이름을 `'ui'` 로 고정해 보냈다. 게이트웨이는 그 값을
+    그대로 열쇠로 썼으므로 **모든 사람이 같은 세션**이었다. 두 사람이 각자 첫 질문을 던진
+    상태에서 한 사람이 멈춤을 누르면 다른 사람의 조회가 함께 멈춘다. 마스킹 역치환 표도
+    그 열쇠로 나뉘어 앞사람이 쓰던 토큰이 뒷사람 화면에서 실명으로 풀릴 수 있었다
+    (2026-08-19 감사, 네 갈래 감사가 같은 결론).
+
+    그리고 취소 표시가 청소되지 않았다. 답이 끝난 뒤 도착한 멈춤이 남아 다음 질문을
+    시작하자마자 죽였다.
+    """
+    import asyncio
+
+    from . import ask
+
+    ask.forget_all()
+    # ① 사람이 다르면 열쇠도 다르다. 화면이 같은 이름을 보내도 그렇다.
+    a, b = ask.session_key("ui", "swoo"), ask.session_key("ui", "kim")
+    assert a != b, (a, b)
+    assert ask.session_key("ui", "swoo") == a          # 같은 사람은 같은 열쇠
+
+    # ② 한쪽 멈춤이 다른 쪽을 끊지 않는다.
+    ask.cancel(a)
+    assert ask.cancelled(b, started=0.0) is False, "남의 세션이 함께 멈췄다"
+    assert ask.cancelled(a, started=0.0) is True
+
+    # ③ **끝난 뒤 도착한 멈춤은 다음 질문을 죽이지 않는다.** 요청 시작보다 앞선 취소는
+    #    이미 지난 것이다.
+    ask.forget_all()
+    ask.cancel(a)
+    later = ask._now() + 10
+    assert ask.cancelled(a, started=later) is False, "지난 취소가 새 질문을 죽였다"
+
+    # ④ 한 번 쓰면 지워진다. 남아 있으면 그다음 질문도 죽는다.
+    ask.forget_all()
+    ask.cancel(a)
+    assert ask.cancelled(a, started=0.0) is True
+    assert ask.cancelled(a, started=0.0) is False
+
+    # ⑤ 실경로 — 도는 중에 누르면 다음 라운드에서 멈춘다.
+    table = {ask.proxy.token_for("host", "web-01"):
+             {"host": "web-01", "source": "s", "logs": "", "security": ""}}
+
+    def model(system, messages, tools):
+        # 첫 호출 뒤에 사람이 멈춤을 누른 상황이다.
+        ask.cancel(ask.session_key("ui", "swoo"))
+        return {"stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": "t1", "name": "list_hosts", "input": {"query": ""}}]}
+
+    r = asyncio.run(ask.run_ask("뭐 있어", table=table, model_fn=model,
+                                sid="ui", user="swoo"))
+    assert r["stopped"] == "cancelled", r["stopped"]
+
+    # ⑥ **남의 멈춤은 내 질의를 끊지 않는다.** 화면이 같은 세션 이름을 보내도 그렇다.
+    def model2(system, messages, tools):
+        ask.cancel(ask.session_key("ui", "kim"))       # 다른 사람이 눌렀다
+        return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
+
+    r2 = asyncio.run(ask.run_ask("뭐 있어", table=table, model_fn=model2,
+                                 sid="ui", user="swoo"))
+    assert r2["stopped"] == "end_turn", r2["stopped"]
+    ask.forget_all()
+    return 10
+
+
 def _repo_secret_checks() -> int:
     """리포에 실환경 주소가 커밋돼 있지 않은가.
 
@@ -4892,7 +5009,9 @@ def _ask_loop_checks() -> int:
 
         # ⑲ **멈추면 그때까지 본 것으로 끝낸다.** 사람이 끊었는데 계속 돌면 비용만 든다.
         def keeps_going(system, messages, tools):
-            ask.cancel("sess-x")          # 첫 라운드 뒤 사람이 멈춤 단추를 눌렀다
+            # 첫 라운드 뒤 사람이 멈춤 단추를 눌렀다. 열쇠에 신원이 들어가므로 화면이
+            # 보내는 이름만으로는 남의 세션을 멈출 수 없다(§C-1).
+            ask.cancel(ask.session_key("sess-x"))
             return {"stop_reason": "tool_use", "content": [
                 {"type": "tool_use", "id": "c1", "name": "list_hosts", "input": {}}]}
 

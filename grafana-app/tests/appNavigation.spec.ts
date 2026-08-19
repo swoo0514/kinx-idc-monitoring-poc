@@ -1,31 +1,16 @@
 import { test, expect } from './fixtures';
 import { ROUTES } from '../src/constants';
 
-test.describe('navigating app', () => {
-  test('page one should render successfully', async ({ gotoPage, page }) => {
+// 화면은 관제 질의 하나다. 만들어질 때 딸려 온 자리표시 페이지와 그 검사는 지웠다.
+// 예전 검사는 "This is page one." 을 기대했는데 그 자리는 이미 챗봇이었다(2026-08-19).
+test.describe('관제 질의 화면', () => {
+  test('질의 화면이 뜬다', async ({ gotoPage, page }) => {
     await gotoPage(`/${ROUTES.One}`);
-    await expect(page.getByText('This is page one.')).toBeVisible();
+    await expect(page.getByPlaceholder('질문을 입력하고 Enter')).toBeVisible();
   });
 
-  test('page two should render successfully', async ({ gotoPage, page }) => {
-    await gotoPage(`/${ROUTES.Two}`);
-    await expect(page.getByText('This is page two.')).toBeVisible();
-  });
-
-  test('page three should support an id parameter', async ({ gotoPage, page }) => {
-    await gotoPage(`/${ROUTES.Three}/123456`);
-    await expect(page.getByText('ID: 123456')).toBeVisible();
-  });
-
-  test('page three should render sucessfully', async ({ gotoPage, page }) => {
-    // wait for page to successfully render
+  test('대화 목록과 새 대화 단추가 있다', async ({ gotoPage, page }) => {
     await gotoPage(`/${ROUTES.One}`);
-    await expect(page.getByText('This is page one.')).toBeVisible();
-
-    // navigating to page four with full width layout without sidebar menu
-    await page.getByText('Full-width page example').click();
-
-    // navigate back to page one
-    await page.getByRole('link', { name: 'Back', exact: true }).click();
+    await expect(page.getByText('새 대화')).toBeVisible();
   });
 });

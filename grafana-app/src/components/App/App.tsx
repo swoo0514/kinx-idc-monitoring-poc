@@ -1,22 +1,13 @@
 import React from 'react';
 import { Route, Routes } from 'react-router-dom';
 import { AppRootProps } from '@grafana/data';
-import { ROUTES } from '../../constants';
 const PageOne = React.lazy(() => import('../../pages/PageOne'));
-const PageTwo = React.lazy(() => import('../../pages/PageTwo'));
-const PageThree = React.lazy(() => import('../../pages/PageThree'));
-const PageFour = React.lazy(() => import('../../pages/PageFour'));
 
 function App(props: AppRootProps) {
+  // 화면은 관제 질의 하나다. 만들어질 때 딸려 온 자리표시 페이지 셋은 지웠다 —
+  // 왼쪽 메뉴에 "Page Two" 같은 항목이 그대로 보이고 있었다(2026-08-19 점검).
   return (
     <Routes>
-      <Route path={ROUTES.Two} element={<PageTwo />} />
-      <Route path={`${ROUTES.Three}/:id?`} element={<PageThree />} />
-
-      {/* Full-width page (this page will have no side navigation) */}
-      <Route path={ROUTES.Four} element={<PageFour />} />
-
-      {/* Default page */}
       <Route path="*" element={<PageOne />} />
     </Routes>
   );

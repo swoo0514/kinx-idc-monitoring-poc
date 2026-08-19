@@ -326,11 +326,16 @@ def convo_delete(cid: str, x_gateway_token: str = Header(default=""),
 
 
 @app.post("/ask/cancel")
-def ask_cancel(req: AskRequest, x_gateway_token: str = Header(default="")):
-    """사람이 멈춤 단추를 눌렀다. 다음 라운드에서 멈춘다."""
+def ask_cancel(req: AskRequest, x_gateway_token: str = Header(default=""),
+               x_grafana_user: str = Header(default="")):
+    """사람이 멈춤 단추를 눌렀다. 다음 라운드에서 멈춘다.
+
+    **누른 사람의 세션만 멈춘다.** 화면이 보내는 세션 이름은 새 대화의 첫 턴에 모두
+    같으므로, 신원을 함께 넣지 않으면 한 사람의 멈춤이 남의 질문을 끊는다.
+    """
     if not _token_ok(x_gateway_token):
         raise HTTPException(status_code=401, detail="unauthorized")
-    ask.cancel(req.session or "-")
+    ask.cancel(ask.session_key(req.session or "-", ask.who(x_grafana_user)))
     return {"ok": True}
 
 

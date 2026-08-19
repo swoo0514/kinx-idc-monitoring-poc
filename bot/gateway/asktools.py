@@ -876,16 +876,22 @@ async def _tool_panel_image(args: dict, ctx: dict) -> dict:
 
 
 async def _tool_list_panels(args: dict, ctx: dict) -> dict:
-    raw = await ctx["list_panels"](str(args.get("dashboard") or ""))
+    raw, status = await ctx["list_panels"](str(args.get("dashboard") or ""))
     items = panel_refs(raw, ctx.setdefault("panel_refs", {}))
+    if status != "ok":
+        # **조회 실패를 "없음" 으로 바꾸지 않는다.** 다른 축과 같은 계약이다(§12).
+        return {"panels": [], "status": status,
+                "note": ("관측 화면 목록을 조회하지 못했다" if status == "unavailable"
+                         else "관측 화면이 연결돼 있지 않다")}
     if not items:
-        return {"panels": [], "note": "그 조건에 맞는 패널이 없다. dashboard 를 비우고 "
-                                      "전체 목록을 받아 보라"}
+        return {"panels": [], "status": status,
+                "note": "그 조건에 맞는 패널이 없다. dashboard 를 비우고 전체 목록을 받아 보라"}
     note = "그림을 붙이려면 ref 를 panel_image 의 panel_ref 에 그대로 적어라"
+    # 상태는 늘 싣는다. 있을 때만 실으면 모델이 없는 것을 "ok" 로 읽는다.
     if len(raw) >= PANEL_REF_MAX:
         note += (" 목록이 %d개에서 잘렸다. dashboard 를 적어 좁혀야 나머지가 보인다"
                  % PANEL_REF_MAX)
-    return {"panels": items, "n": len(items), "note": note}
+    return {"panels": items, "n": len(items), "status": status, "note": note}
 
 
 _TOOLS = {
