@@ -290,6 +290,7 @@ def main():
                     + _panel_status_checks() + _token_scope_checks()
                     + _event_loop_checks() + _nametable_freshness_checks()
                     + _model_kind_wiring_checks() + _now_context_checks()
+                    + _no_evidence_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -4165,6 +4166,49 @@ def _cap_answer_checks() -> int:
     assert "다시 물어보라" in ask.stall_note("deadline", [])
     assert "host_logs" in ask.stall_note("rounds", [{"tool": "host_logs"}])
     return 14
+
+
+def _no_evidence_checks() -> int:
+    """조회가 한 건도 성공하지 않았는데 "없습니다" 로 답하지 않는가.
+
+    2026-08-19 랩 실측이다. 모델이 인자를 깨뜨려 보냈고 도구가 거부했는데, 모델은 그
+    거부를 읽고도 "해당 시간대 로그가 없습니다" 로 답을 닫았다. 사람에게는 조회가 된
+    것처럼 보인다. 판정은 코드가 한다 — 성공한 조회가 하나도 없으면 그 사실을 답에 붙인다.
+    """
+    import asyncio
+
+    from . import ask
+
+    table = {ask.proxy.token_for("host", "web-01"):
+             {"host": "web-01", "source": "s", "logs": "web-01", "security": ""}}
+    tok = list(table)[0]
+
+    def model(system, messages, tools):
+        if len(messages) == 1:
+            # 깨진 인자 — 도구가 거부한다.
+            return {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "t1", "name": "host_logs",
+                 "input": {"host": tok, "contains": '어제 "로그" {x}'}}]}
+        return {"stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": "t2", "name": "answer",
+             "input": {"summary": "그 시간대 로그가 없습니다"}}]}
+
+    r = asyncio.run(ask.run_ask("어제 로그", table=table, model_fn=model))
+    assert ask.NO_EVIDENCE in r["text"], r["text"]
+
+    # 성공한 조회가 있으면 붙이지 않는다. 늘 붙으면 사람이 그 문장을 무시한다.
+    def ok_model(system, messages, tools):
+        if len(messages) == 1:
+            return {"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "t1", "name": "list_hosts",
+                 "input": {"query": ""}}]}
+        return {"stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": "t2", "name": "answer",
+             "input": {"summary": "호스트는 하나다"}}]}
+
+    r2 = asyncio.run(ask.run_ask("호스트 뭐 있어", table=table, model_fn=ok_model))
+    assert ask.NO_EVIDENCE not in r2["text"], r2["text"]
+    return 2
 
 
 def _now_context_checks() -> int:

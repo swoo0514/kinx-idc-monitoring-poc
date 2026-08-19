@@ -525,8 +525,19 @@ def chosen_images(images: list, answer: dict) -> list:
     return [im for im in images if im.get("id") in keep]
 
 
-def render_answer(args: dict) -> str:
-    """답 도구의 필드를 사람이 읽는 글로. 손잡이와 구간을 산문에서 뺀 대가로 여기서 만든다."""
+# 조회가 한 건도 성공하지 않았을 때 답에 붙이는 말. 사람이 화면에서 보는 문장이다.
+NO_EVIDENCE = ("※ 이 답은 조회가 한 건도 성공하지 않은 상태에서 작성됐다. "
+               "없다는 뜻이 아니라 확인하지 못했다는 뜻이다.")
+
+
+def render_answer(args: dict, had_evidence: bool = True) -> str:
+    """답 도구의 필드를 사람이 읽는 글로. 손잡이와 구간을 산문에서 뺀 대가로 여기서 만든다.
+
+    **근거가 하나도 없으면 그 사실을 붙인다.** 2026-08-19 랩 실측으로 모델이 인자를
+    깨뜨려 보내 도구가 전부 거부했는데도 "그 시간대 로그가 없습니다" 로 답을 닫았다.
+    사람에게는 조회가 된 것처럼 보인다. 판정은 코드가 한다 — 성공한 조회가 있었는지는
+    세면 되는 값이다.
+    """
     a = args or {}
     parts = [str(a.get("summary") or "").strip()]
     for f in (a.get("findings") or []):
@@ -536,6 +547,8 @@ def render_answer(args: dict) -> str:
     win = str(a.get("window_utc") or "").strip()
     if win:
         parts.append("조회 구간: " + win)
+    if not had_evidence:
+        parts.append(NO_EVIDENCE)
     return (chr(10)).join(p for p in parts if p)
 
 
@@ -673,6 +686,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     specs = asktools.build_tool_specs(table)
     # 답 도구가 참조할 수 있는 값. 턴 중에 생기므로 스키마가 아니라 코드가 지킨다.
     made_images, seen_windows, final = set(), set(), {}
+    # 성공한 조회 수. 답이 근거 없이 "없다" 로 닫히는 것을 막는 데 쓴다.
+    ok_queries = {"n": 0}
 
     async def _exec_query(name, args, seen, idx):
         """조회 도구 한 번. 반환 `(화면에 붙일 그림, 모델에 줄 결과, 직렬화한 글자)`.
@@ -698,6 +713,8 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
                    "note": "화면에 붙였다. answer 의 image_ids 에 이 id 를 적어라"}
         if isinstance(out, dict) and out.get("window_utc"):
             seen_windows.add(out["window_utc"])
+        if isinstance(out, dict) and not out.get("error"):
+            ok_queries["n"] += 1
         return image, out, _json.dumps(out, ensure_ascii=False)
 
     async def exec_tool(name, args, seen, idx):
@@ -772,7 +789,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
                             "content": blob})
         messages = messages + [{"role": "user", "content": results}]
         if final:
-            text = render_answer(final)
+            text = render_answer(final, ok_queries["n"] > 0)
             break
         if stopped == "budget":
             break
@@ -784,7 +801,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     if stopped in ("rounds", "deadline", "budget") and not final and trace:
         if await force_answer(system_prompt(), messages, specs, user,
                               model_fn, exec_tool, trace):
-            text = render_answer(final)
+            text = render_answer(final, ok_queries["n"] > 0)
     if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not final:
         text = (stall_note(stopped, trace)
                 + ((chr(10) * 2 + text) if text else ""))
@@ -1231,7 +1248,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
     text = ""
     if final:
         # 답 도구로 받았으면 그것이 답이다. 산문에서 손잡이를 걷어 낼 일이 없다.
-        text = render_answer(final)
+        text = render_answer(final, ok_queries["n"] > 0)
     else:
         for m in reversed(out.get("messages") or []):
             if isinstance(m, AIMessage) and isinstance(m.content, str) and m.content.strip():
@@ -1245,7 +1262,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
     if stopped in ("rounds", "deadline", "budget") and not final and trace:
         if await force_answer(system, G.to_anthropic(out.get("messages") or []),
                               specs, user, model_fn, exec_tool, trace):
-            text = render_answer(final)
+            text = render_answer(final, ok_queries["n"] > 0)
     if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not final:
         text = (stall_note(stopped, trace)
                 + ((chr(10) * 2 + text) if text else ""))
