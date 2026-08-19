@@ -285,7 +285,8 @@ def main():
                     + _panel_route_checks()
                     + _ask_dispatch_checks() + _cap_answer_checks()
                     + _query_masking_checks() + _empty_table_checks()
-                    + _log_cap_checks()
+                    + _log_cap_checks() + _prewarm_checks()
+                    + _repo_secret_checks()
                     + _ask_table_checks() + _ask_loop_checks()
                     + _ask_user_checks() + _convo_checks()
                     + _graph_engine_checks())
@@ -2391,7 +2392,12 @@ def _dashboard_annotation_checks() -> int:
     import os
     import sys
 
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # gateway/selftest.py → gateway → bot → 리포 뿌리. 한 겹만 세면 bot 안만 훑고
+    # 대시보드 JSON 은 검사 대상에서 통째로 빠진다.
+    here = os.path.abspath(__file__)
+    root = os.path.dirname(os.path.dirname(os.path.dirname(here)))
+    if not os.path.isdir(os.path.join(root, ".git")):
+        root = os.path.dirname(root)
     sys.path.insert(0, os.path.join(root, "tools"))
     import set_judgment_annotation as sja
 
@@ -4144,6 +4150,104 @@ def _cap_answer_checks() -> int:
     assert "다시 물어보라" in ask.stall_note("deadline", [])
     assert "host_logs" in ask.stall_note("rounds", [{"tool": "host_logs"}])
     return 14
+
+
+def _repo_secret_checks() -> int:
+    """리포에 실환경 주소가 커밋돼 있지 않은가.
+
+    2026-08-19 감사에서 대시보드 JSON 한 곳에 실환경 공인 IP 가 다시 들어가 있는 것이
+    확인됐다. Day6 에 자리표시자로 바꿔 둔 것이 대시보드를 다시 내보내면서 되돌아왔고
+    `.bak` 만 남아 있었다. **되돌리는 것만으로는 같은 사고가 재현되므로** 검사를 세운다.
+
+    사설 대역(10./192.168./172.16~31.)은 랩 구성이라 통과시킨다. 공인 IP 만 본다.
+    """
+    import io as _io
+    import os
+    import re
+    import subprocess
+
+    # gateway/selftest.py → gateway → bot → 리포 뿌리. 뿌리를 잘못 세면 bot 안만 훑고
+    # 대시보드 JSON 이 검사 대상에서 통째로 빠진다.
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if not os.path.isdir(os.path.join(root, ".git")):
+        root = os.path.dirname(root)
+    try:
+        files = subprocess.check_output(["git", "ls-files"], cwd=root).decode().split()
+    except Exception as e:                     # git 이 없는 곳에서는 건너뛴다
+        log.info("리포 검사 건너뜀: %s", e)
+        return 0
+    ip = re.compile(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b")
+
+    def allowed(a, b, c):
+        """랩 사설 대역과 **문서용 예시 대역**은 통과시킨다.
+
+        예시 대역은 RFC 5737 이 문서에 쓰라고 비워 둔 것이라 이 리포가 자리표시자로
+        쓰고 있다(192.0.2.0/24 · 198.51.100.0/24 · 203.0.113.0/24). 이것까지 막으면
+        검사가 늘 빨개져 아무도 안 본다.
+        """
+        return (a in (0, 10, 127) or a >= 224
+                or (a == 192 and b == 168)
+                or (a == 172 and 16 <= b <= 31)
+                or (a == 192 and b == 0 and c == 2)
+                or (a == 198 and b == 51 and c == 100)
+                or (a == 203 and b == 0 and c == 113))
+
+    bad = []
+    for rel in files:
+        if not rel.endswith((".json", ".yml", ".yaml", ".md", ".py", ".ts", ".tsx")):
+            continue
+        path = os.path.join(root, rel)
+        try:
+            with _io.open(path, encoding="utf-8", errors="ignore") as f:
+                text = f.read()
+        except OSError:
+            continue
+        for m in ip.finditer(text):
+            a, b, c, d = (int(x) for x in m.groups())
+            if max(a, b, c, d) > 255 or allowed(a, b, c):
+                continue
+            # 판 번호(예: 1.2.3.4 형태의 버전)는 드물지만, 주소로 쓰이는 자리만 본다.
+            line = text[max(0, m.start() - 60):m.start()]
+            if "http" in line or "url" in line.lower() or "host" in line.lower():
+                bad.append("%s: %s" % (rel, m.group(0)))
+    assert not bad, "리포에 실환경 주소가 있다: %s" % ", ".join(sorted(set(bad))[:5])
+    return 1
+
+
+def _prewarm_checks() -> int:
+    """기동 예열이 다른 호출과 같은 출구를 지나는가.
+
+    예열은 기동 때마다 최대 2회 상류를 부른다. `egress.call_raw` 를 안 거치면 동시 수
+    상한·시간당 상한·토큰 계수 밖에서 도는 호출이 생긴다(2026-08-19 감사 B-5).
+    단일 출구 검사는 공급자 주소 정규식으로 파일을 훑어서, `llm.py` 를 경유하는 이
+    우회를 구조적으로 못 본다.
+    """
+    from . import ask, egress
+
+    saved = egress.call_raw
+    seen = {}
+    try:
+        def spy(fn, exempt=False, kind="", user=""):
+            seen["kind"] = kind
+            return {"ok": True, "value": {"content": []}, "reason": "", "elapsed_s": 0.0}
+
+        egress.call_raw = spy
+        # 표를 못 만들면 예열은 거기서 끝난다. 상류를 부르는 자리까지 가게 세운다.
+        saved_build = ask.build_table
+
+        async def table(*a, **kw):
+            return {"[h-1]": {"host": "web-01", "source": "s"}}
+
+        ask.build_table = table
+        try:
+            msg = ask.prewarm()
+        finally:
+            ask.build_table = saved_build
+        assert "완료" in msg, msg
+        assert seen.get("kind") == "ask", seen
+    finally:
+        egress.call_raw = saved
+    return 2
 
 
 def _log_cap_checks() -> int:

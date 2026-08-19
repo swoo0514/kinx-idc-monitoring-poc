@@ -768,7 +768,7 @@ def prewarm() -> str:
     """
     import asyncio
 
-    from . import asktools, llm
+    from . import asktools, egress, llm
 
     try:
         table = asyncio.run(build_table(proxy.build_masker()))
@@ -779,13 +779,16 @@ def prewarm() -> str:
         # 한 번 실패했다고 그만두면 예열이 안 된 채로 사람이 첫 질의를 받는다. 배경에서
         # 도는 일이라 한 번 더 해도 사람이 기다리지 않는다.
         for _try in range(2):
-            try:
-                llm.claude_tools(system_prompt(),
-                                 [{"role": "user", "content": "준비"}], specs,
-                                 timeout_s=PREWARM_TIMEOUT_S)
+            # **같은 출구를 지난다.** 여기만 빠지면 기동 때마다 동시 수·시간당 상한·
+            # 토큰 계수 밖에서 도는 호출이 생긴다(2026-08-19 감사).
+            res = egress.call_raw(
+                lambda: llm.claude_tools(system_prompt(),
+                                         [{"role": "user", "content": "준비"}], specs,
+                                         timeout_s=PREWARM_TIMEOUT_S),
+                kind="ask", user="(예열)")
+            if res["ok"]:
                 return "질의 예열 완료 (대상 %d개)" % len(table)
-            except Exception as e:
-                last = str(e)
+            last = res["reason"]
         return "질의 예열 실패: %s" % last
     except Exception as e:
         return "질의 예열 실패: %s" % e

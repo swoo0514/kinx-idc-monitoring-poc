@@ -683,7 +683,7 @@
       {
        "targetBlank": true,
        "title": "Wazuh 대시보드에서 심층 조사",
-       "url": "https://1.201.177.127/app/threat-hunting#/overview/?tab=general&tabView=dashboard&_a=(filters:!(),query:(language:kuery,query:''))&_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-24h,to:now))"
+       "url": "https://${wazuh_host}/app/threat-hunting#/overview/?tab=general&tabView=dashboard&_a=(filters:!(),query:(language:kuery,query:''))&_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-24h,to:now))"
       }
      ],
      "mappings": [],
@@ -1737,6 +1737,18 @@
  ],
  "templating": {
   "list": [
+   {
+    "current": {
+     "text": "WAZUH_DASHBOARD_HOST",
+     "value": "WAZUH_DASHBOARD_HOST"
+    },
+    "hide": 2,
+    "label": "Wazuh 대시보드 주소",
+    "name": "wazuh_host",
+    "query": "WAZUH_DASHBOARD_HOST",
+    "skipUrlSync": false,
+    "type": "constant"
+   },
    {
     "allValue": ".+",
     "current": {
