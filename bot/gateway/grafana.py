@@ -102,92 +102,23 @@ def _flatten(panels):
     return out
 
 
-def find_panel(match: str, prefer_uid: str = "", dash_match: str = "") -> tuple:
-    """제목에 그 문자열이 든 시계열 패널 하나. 반환 `(대시보드 uid, 패널 번호, 제목)`.
-
-    **보고 있는 대시보드를 먼저 본다.** 안 그러면 이름만 맞는 남의 대시보드 패널을
-    그려서, 사람이 보던 화면과 다른 그림이 붙는다(2026-08-18 실측: MSP 리포트
-    대시보드의 패널이 그려졌다).
-
-    못 찾으면 `(None, None, "")`. 지어내지 않는다.
-    """
-    base = _base()
-    if not base:
-        return None, None, ""
-    try:
-        with httpx.Client(timeout=TIMEOUT_S) as c:
-            r = c.get(base + "/api/search", params={"type": "dash-db", "limit": SEARCH_LIMIT},
-                      headers=_auth())
-            r.raise_for_status()
-            found = r.json()
-            if len(found) >= SEARCH_LIMIT:
-                # 잘렸다는 것을 남긴다. 이 저장소는 다른 곳에서 잘림을 꼬박 알린다.
-                log.warning("대시보드가 %d개를 넘어 뒤쪽은 보지 못했다", SEARCH_LIMIT)
-            # 사람이 대시보드를 지목했으면 그 안에서만 찾는다. 안 그러면 이름이 비슷한
-            # 다른 대시보드 패널을 집어 놓고 "그 대시보드에는 없다" 고 답한다
-            # (2026-08-18 실측: MSP 리포트를 물었는데 통합 관제 패널을 보고 없다고 했다).
-            want = str(dash_match or "").strip().lower()
-            if want:
-                found = [d for d in found
-                         if want in str(d.get("title") or "").lower()]
-            order = ([d for d in found if d.get("uid") == prefer_uid] +
-                     [d for d in found if d.get("uid") != prefer_uid])
-            for d in order:
-                uid = d.get("uid")
-                if not uid:
-                    continue
-                dr = c.get(base + "/api/dashboards/uid/" + uid, headers=_auth())
-                if dr.status_code != 200:
-                    continue
-                for p in _flatten((dr.json().get("dashboard") or {}).get("panels")):
-                    title = str(p.get("title") or "")
-                    # 시계열만 보면 표·로그 패널을 "없다"고 답한다(2026-08-18 실측:
-                    # 인증 활동 패널이 있는데 없다고 했다).
-                    # **match 가 비면 아무것도 고르지 않는다.** 예전에는 그 대시보드의
-                    # 첫 시계열 패널을 무조건 집었다. 근거 없는 선택이라 사람이 보던
-                    # 화면과 다른 그림이 붙었다.
-                    if not match:
-                        continue
-                    if p.get("type") in ("timeseries", "graph", "table", "logs",
-                                         "stat", "barchart", "piechart") and (
-                            match.lower() in title.lower()):
-                        return uid, p.get("id"), title
-    except Exception as e:
-        log.warning("패널 검색 실패: %s", e)
-    return None, None, ""
 
 
-def dashboard_titles(limit: int = 30) -> list:
-    """대시보드 제목 목록. 못 읽으면 빈 목록.
-
-    패널을 못 찾았을 때 이것을 함께 주지 않으면 모델이 "그 대시보드에는 없다" 를
-    지어낸다. 무엇이 있는지 알려 주면 사람에게 되물을 수 있다.
-    """
-    base = _base()
-    if not base:
-        return []
-    try:
-        with httpx.Client(timeout=TIMEOUT_S) as c:
-            r = c.get(base + "/api/search", params={"type": "dash-db", "limit": SEARCH_LIMIT},
-                      headers=_auth())
-            r.raise_for_status()
-            return [str(d.get("title") or "") for d in r.json()][:limit]
-    except Exception as e:
-        log.warning("대시보드 목록 조회 실패: %s", e)
-        return []
 
 
 PANEL_TYPES = ("timeseries", "graph", "table", "logs", "stat", "barchart", "piechart")
 
 
-def panel_titles(dash_match: str, limit: int = 25) -> list:
-    """그 대시보드에 있는 패널 제목들. 못 읽으면 빈 목록.
+def list_panels(dash_match: str = "", limit: int = 40) -> list:
+    """패널 목록. `[{uid, panel_id, dashboard, title}]`. 못 읽으면 빈 목록.
 
-    대시보드만 지목하고 패널 제목을 모르는 경우가 있다. 목록을 주지 않으면 모델이
-    제목을 지어내거나 "특정하지 못했다" 로 끝난다(2026-08-18 실측).
+    **제목으로 찾지 않고 번호로 그리기 위한 목록이다.** 제목 검색은 이름이 비슷한 옆
+    패널을 집는다. 목록을 주고 그중 하나를 번호로 가리키게 하면 그 종류의 실수가
+    구조적으로 사라진다(2026-08-18 실측: 제목으로 찾다가 남의 대시보드 패널을 붙였고,
+    이름이 안 맞자 "그 대시보드에는 없다" 고 답했다).
     """
     base, want = _base(), str(dash_match or "").strip().lower()
-    if not base or not want:
+    if not base:
         return []
     out = []
     try:
@@ -196,7 +127,8 @@ def panel_titles(dash_match: str, limit: int = 25) -> list:
                       headers=_auth())
             r.raise_for_status()
             for d in r.json():
-                if want not in str(d.get("title") or "").lower():
+                dash = str(d.get("title") or "")
+                if want and want not in dash.lower():
                     continue
                 dr = c.get(base + "/api/dashboards/uid/" + str(d.get("uid") or ""),
                            headers=_auth())
@@ -204,8 +136,10 @@ def panel_titles(dash_match: str, limit: int = 25) -> list:
                     continue
                 for p in _flatten((dr.json().get("dashboard") or {}).get("panels")):
                     title = str(p.get("title") or "")
-                    if title and p.get("type") in PANEL_TYPES:
-                        out.append(title)
+                    if not title or p.get("type") not in PANEL_TYPES:
+                        continue
+                    out.append({"uid": d.get("uid"), "panel_id": p.get("id"),
+                                "dashboard": dash, "title": title})
                     if len(out) >= limit:
                         return out
     except Exception as e:

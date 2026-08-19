@@ -3308,18 +3308,24 @@ def _ask_result_checks() -> int:
                                        max_m=asktools.WINDOW_MAX_TREND_M)
     assert not cut and b - a == 90 * 86400, (a, b, cut)
 
-    # (3)-d-1 **보고 있는 패널을 제목으로 뒤지지 않는다.** 화면이 패널 번호를 넘겨
-    #         주면 그것을 그대로 쓴다. 제목으로 찾으면 이름이 비슷한 옆 패널이 걸린다
-    #         (2026-08-18 실측: "인증 활동" 을 보고 물었는데 "보안 이벤트" 가 그려졌다).
+    # (3)-d-1 **패널은 번호로 가리킨다.** 화면이 넘긴 번호를 그대로 쓰고, 다른 패널은
+    #         list_panels 가 준 손잡이로 가리킨다. 제목으로 찾는 길은 아예 없앴다 —
+    #         그 길이 있는 한 이름이 비슷한 옆 패널이 계속 걸린다(2026-08-18 실측:
+    #         "인증 활동" 을 보고 물었는데 "보안 이벤트" 가 그려졌고, 다른 대시보드를
+    #         물었을 때는 보고 있던 대시보드에서 찾아 놓고 "없다" 고 답했다).
     ctx = {"uid": "kinx-overview", "panelId": 12, "title": "인증 활동 (Wazuh)"}
-    assert asktools.panel_pick(ctx, match="") == ("kinx-overview", 12)
-    # **모델이 넣은 match 로 화면 맥락을 버리지 않는다.** 보던 제목이 "프로세서 사용률"
-    # 인데 모델이 "CPU" 를 넣었다고 남의 패널을 그리면 사람은 같은 화면을 봤다고 믿는다.
-    assert asktools.panel_pick(ctx, match="CPU") == ("kinx-overview", 12)
-    assert asktools.panel_pick(ctx, match="인증") == ("kinx-overview", 12)
-    # 번호가 없으면 예전처럼 찾는다.
-    assert asktools.panel_pick({"uid": "kinx-overview"}, match="") == (None, None)
-    assert asktools.panel_pick(None, match="") == (None, None)
+    assert asktools.panel_pick(ctx) == ("kinx-overview", 12)
+    assert asktools.panel_pick({"uid": "kinx-overview"}) == (None, None)
+    assert asktools.panel_pick(None) == (None, None)
+    # 손잡이는 이번 턴 안에서만 뜻이 있고, 대시보드 식별자는 모델에 안 간다.
+    refs = {}
+    shown = asktools.panel_refs(
+        [{"uid": "u-msp", "panel_id": 16, "dashboard": "MSP 리포트", "title": "인증 활동"}],
+        refs)
+    assert shown == [{"ref": "pnl-1", "dashboard": "MSP 리포트", "title": "인증 활동"}], shown
+    assert refs["pnl-1"] == ("u-msp", 16, "인증 활동"), refs
+    import json as _js
+    assert "u-msp" not in _js.dumps(shown, ensure_ascii=False)
 
     # (3)-d-2 **`at` 을 없앤다.** 모델이 90일 추이를 물을 때 window_m 대신 at 을 고르고
     #         엉뚱한 시점을 반복해서 라운드를 태웠다(2026-08-18 랩 실측 두 번). from/to 가
@@ -3658,7 +3664,7 @@ def _prompt_file_checks() -> int:
 
 
 def _panel_route_checks() -> int:
-    """보고 있는 패널이 **실경로로** 그려지는가.
+    """보고 있는 패널이 **실경로로** 그려지는가, 그리고 다른 패널을 가리킬 수 있는가.
 
     `panel_pick` 을 직접 부르는 검사와 `panel_fn` 을 주입하는 검사만 있으면
     `run_ask → fetch_panel` 사이가 안 지나간다. 2026-08-18 에 그 사이에 중복 대입이
@@ -3669,16 +3675,17 @@ def _panel_route_checks() -> int:
     from . import ask, asktools, grafana, nametable
 
     saved_terms = dict(nametable._terms)
-    saved_find = grafana.find_panel
+    saved_list = grafana.list_panels
     calls = []
 
-    def _spy(match, prefer_uid="", dash_match=""):
-        calls.append((match, prefer_uid, dash_match))
-        return "다른-대시보드", 99, "남의 패널"
+    def _spy(dash_match="", limit=40):
+        calls.append(dash_match)
+        return [{"uid": "u-msp", "panel_id": 16, "dashboard": "KINX MSP 월간 리포트",
+                 "title": "인증 활동 — web-01 로그인 실패"}]
 
     try:
         nametable._terms = {"web-01": "host"}
-        grafana.find_panel = _spy
+        grafana.list_panels = _spy
         table = {ask.proxy.token_for("host", "web-01"):
                  {"host": "web-01", "source": "zabbix-internal",
                   "logs": "web-01.example", "security": "web-01.example"}}
@@ -3691,11 +3698,11 @@ def _panel_route_checks() -> int:
                      "input": {"host": tok}}]}
             return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
 
-        # ① 화면이 번호를 주면 검색을 아예 안 부른다.
+        # ① 화면이 번호를 주면 목록을 아예 안 부른다.
         r = asyncio.run(ask.run_ask("이 패널 뭐야", table=table, model_fn=model,
                                     panel={"uid": "kinx-overview", "panelId": 12,
                                            "title": "인증 활동 (Wazuh)"}))
-        assert not calls, "번호를 쥐고도 제목으로 뒤졌다: %r" % (calls,)
+        assert not calls, "번호를 쥐고도 목록을 뒤졌다: %r" % (calls,)
         assert r["images"] and "/render/d-solo/kinx-overview/" in r["images"][0]["url"],             r["images"]
         assert "panelId=12" in r["images"][0]["url"], r["images"][0]["url"]
         # **화면이 준 호스트 값을 쓴다.** Zabbix 축 이름을 넣으면 Loki·Wazuh 패널이
@@ -3705,78 +3712,70 @@ def _panel_route_checks() -> int:
                                             "title": "t", "host": "web-01.example"}))
         assert "web-01.example" in r2["images"][0]["url"], r2["images"][0]["url"]
 
-        # ①-b **행 안에 접힌 패널도 찾는다.** 최상위만 보면 사람이 펼쳐 본 패널을
+        # ①-b **행 안에 접힌 패널도 목록에 든다.** 최상위만 보면 사람이 펼쳐 본 패널을
         #      "없다" 고 답한다.
         nested = [{"type": "row", "title": "묶음", "panels": [
             {"type": "timeseries", "title": "복제 지연", "id": 7}]}]
         assert [x["id"] for x in grafana._flatten(nested) if x.get("id")] == [7]
         assert grafana._flatten(None) == []
 
-        # ①-b-2 **선택 인자 수 한도.** 넘기면 API 가 호출을 통째로 거부한다. 인자를
-        #        하나 더했다가 모든 질의가 400 으로 죽었다(2026-08-18 실측).
+        # ①-c **선택 인자 수 한도.** 넘기면 API 가 호출을 통째로 거부한다. 인자를 하나
+        #      더했다가 모든 질의가 400 으로 죽었다(2026-08-18 실측).
         n = asktools.optional_params(asktools.build_tool_specs(table))
         assert n <= asktools.OPTIONAL_PARAM_MAX, "선택 인자가 %d개다 (한도 %d)" % (
             n, asktools.OPTIONAL_PARAM_MAX)
 
-        # ①-c **다른 대시보드 패널도 물을 수 있어야 한다.** 화면 패널로 고정해 두면
-        #      "MSP 대시보드 것도 같은 값이냐" 에 영영 답을 못 한다(2026-08-18 실측).
-        #      다만 모델이 scope 를 적었을 때만 푼다. match 만으로는 안 바뀐다.
-        assert asktools.panel_pick({"uid": "u1", "panelId": 3}, "CPU") == ("u1", 3)
-        assert asktools.panel_pick({"uid": "u1", "panelId": 3}, "CPU", "리포트") == (None, None)
+        # ② **다른 대시보드 패널은 목록을 받아 손잡이로 가리킨다.** 제목을 넘기는 길이
+        #    없으므로 이름이 비슷한 옆 패널이 걸릴 수 없다.
+        seen = {}
 
         def model2(system, messages, tools):
             if len(messages) == 1:
                 return {"stop_reason": "tool_use", "content": [
-                    {"type": "tool_use", "id": "t1", "name": "panel_image",
-                     "input": {"host": tok, "match": "MSP 인증", "dashboard": "MSP"}}]}
+                    {"type": "tool_use", "id": "t1", "name": "list_panels",
+                     "input": {"dashboard": "월간 리포트"}}]}
+            if len(messages) == 3:
+                blob = str(messages[-1])
+                seen["blob"] = blob
+                return {"stop_reason": "tool_use", "content": [
+                    {"type": "tool_use", "id": "t2", "name": "panel_image",
+                     "input": {"host": tok, "panel_ref": "pnl-1"}}]}
             return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
 
         calls[:] = []
-        r3 = asyncio.run(ask.run_ask("MSP 대시보드 것도 보여줘", table=table, model_fn=model2,
+        r3 = asyncio.run(ask.run_ask("MSP 리포트 것도 보여줘", table=table, model_fn=model2,
                                      panel={"uid": "kinx-overview", "panelId": 12,
                                             "title": "인증 활동"}))
-        assert calls == [("MSP 인증", "", "MSP")], calls
-        assert "/render/d-solo/다른-대시보드/" in r3["images"][0]["url"], r3["images"]
+        assert calls == ["월간 리포트"], calls
+        # 목록에는 손잡이와 제목만 간다. 대시보드 식별자는 서버가 들고 있는다.
+        assert "pnl-1" in seen["blob"] and "u-msp" not in seen["blob"], seen["blob"][:200]
+        # 이름 표를 거치므로 실명이 그대로 나가지 않는다.
+        assert "web-01" not in seen["blob"], seen["blob"][:200]
+        assert r3["images"] and "/render/d-solo/u-msp/" in r3["images"][0]["url"], r3["images"]
+        assert "panelId=16" in r3["images"][0]["url"], r3["images"][0]["url"]
 
-        # ①-d **대시보드를 지목하면 화면 대시보드를 앞세우지 않는다.** 앞세우면 지목한
-        #      곳 대신 보고 있던 곳에서 찾아 놓고 "그 대시보드에는 없다" 고 답한다.
+        # ③ **모르는 손잡이는 거부한다.** 모델이 지어내면 엉뚱한 패널이 그려진다.
         def model3(system, messages, tools):
             if len(messages) == 1:
                 return {"stop_reason": "tool_use", "content": [
                     {"type": "tool_use", "id": "t1", "name": "panel_image",
-                     "input": {"host": tok, "match": "인증",
-                               "dashboard": "월간 리포트"}}]}
+                     "input": {"host": tok, "panel_ref": "pnl-9"}}]}
             return {"stop_reason": "end_turn", "content": [{"type": "text", "text": "끝"}]}
 
-        calls[:] = []
-        asyncio.run(ask.run_ask("리포트 것도", table=table, model_fn=model3,
-                                panel={"uid": "kinx-overview", "panelId": 12, "title": "t"}))
-        assert calls == [("인증", "", "월간 리포트")], calls
+        r4 = asyncio.run(ask.run_ask("저것도", table=table, model_fn=model3,
+                                     panel={"uid": "kinx-overview", "panelId": 12}))
+        assert not r4["images"], r4["images"]
+        assert "list_panels" in r4["trace"][0]["error"], r4["trace"][0]
 
-        # ①-e **못 찾으면 무엇이 있는지 준다.** 안 주면 모델이 "그런 패널은 없다" 를
-        #      지어내거나 "특정하지 못했다" 로 끝난다(2026-08-18 실측 둘 다 나왔다).
-        saved_pt, saved_dt = grafana.panel_titles, grafana.dashboard_titles
-        try:
-            grafana.find_panel = lambda m, prefer="", dash="": (None, None, "")
-            grafana.panel_titles = lambda dash, limit=25: ["인증 활동 — web-01 실패"]
-            grafana.dashboard_titles = lambda limit=30: ["KINX 통합 관제"]
-            out = asyncio.run(ask.fetch_panel({"host": "web-01"}, "없는패널", 1, 2,
-                                              dash="월간 리포트",
-                                              masker=ask.proxy.build_masker()))
-            assert out.get("panels") and not out.get("error"), out
-            assert "match 에 적고" in out.get("note", ""), out
-            out2 = asyncio.run(ask.fetch_panel({"host": "web-01"}, "없는패널", 1, 2))
-            assert out2.get("dashboards") == ["KINX 통합 관제"], out2
-        finally:
-            grafana.panel_titles, grafana.dashboard_titles = saved_pt, saved_dt
-
-        # ② 화면 맥락이 없으면 그때만 찾는다.
-        r = asyncio.run(ask.run_ask("이 패널 뭐야", table=table, model_fn=model))
-        assert calls, "맥락이 없는데도 안 찾았다"
+        # ④ 화면 맥락도 손잡이도 없으면 무엇을 하라고 알린다.
+        r5 = asyncio.run(ask.run_ask("이 패널 뭐야", table=table, model_fn=model))
+        assert not r5["images"], r5["images"]
+        assert "list_panels" in r5["trace"][0]["error"], r5["trace"][0]
     finally:
-        grafana.find_panel = saved_find
+        grafana.list_panels = saved_list
         nametable._terms = saved_terms
-    return 16
+    return 18
+
 
 
 
@@ -4467,7 +4466,7 @@ def _ask_loop_checks() -> int:
                      "input": {"host": list(long_tbl)[0], "match": "CPU"}}]}
             return _text("아래 그림을 보라 img-1")
 
-        async def fake_panel(ent, m, a, b, dash=""):
+        async def fake_panel(ent, target, a, b):
             return {"id": "img-1", "title": "CPU 사용률",
                     "url": "/render/d-solo/x?var-host=%s" % ent["host"]}
 

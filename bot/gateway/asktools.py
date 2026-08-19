@@ -498,14 +498,16 @@ def build_tool_specs(table: dict = None) -> list:
               "답과 함께 보여 줄 때 쓴다. 반환된 id 를 answer 의 image_ids 에 적는다.",
               dict(_WINDOW_PROPS,
                    host=_host_prop("조회할 호스트 토큰", toks),
-                   match={"type": "string",
-                          "description": "패널 제목에 든 문자열 (예: CPU, 복제, 로그)"},
-                   dashboard={"type": "string",
+                   panel_ref={"type": "string",
                               "description": ("비우면 사람이 보고 있는 패널을 그린다. "
-                                              "다른 대시보드의 패널을 보여 줄 때만 그 "
-                                              "대시보드 제목의 일부를 적고 match 에 패널 "
-                                              "제목을 넣는다")}),
+                                              "다른 패널을 그릴 때만 list_panels 가 준 "
+                                              "ref 를 그대로 적는다")}),
               ["host"]),
+        _spec("list_panels",
+              "볼 수 있는 관측 화면(패널) 목록. 다른 대시보드의 패널을 가리킬 때 먼저 "
+              "부른다. 여기서 받은 ref 를 panel_image 에 넣으면 그 패널이 그려진다.",
+              {"dashboard": {"type": "string",
+                             "description": "대시보드 제목의 일부. 비우면 전체"}}),
         _spec("past_judgments", "봇이 전에 내린 판정 기록. 같은 일이 반복되는지 볼 때 쓴다.",
               {"host": _host_prop("비우면 전체", toks),
                "days": {"type": "integer", "description": "며칠 전까지. 최대 90"}}),
@@ -549,29 +551,38 @@ def check_answer(args: dict, images, windows) -> tuple:
     return True, ""
 
 
-def panel_pick(panel: dict, match: str = "", dash: str = "") -> tuple:
-    """보고 있는 패널을 그대로 쓸 것인가. 반환 `(대시보드 uid, 패널 번호)`.
+def panel_pick(panel: dict) -> tuple:
+    """보고 있는 패널. 반환 `(대시보드 uid, 패널 번호)`. 화면 맥락이 없으면 `(None, None)`.
 
-    화면이 패널 번호를 넘겨 주면 제목으로 뒤지지 않는다. 제목으로 찾으면 이름이 비슷한
-    옆 패널이 걸린다(2026-08-18 실측: "인증 활동" 을 보고 물었는데 "보안 이벤트" 가
-    그려졌다).
+    화면이 패널 번호를 넘겨 주므로 제목으로 뒤지지 않는다. 제목으로 찾으면 이름이
+    비슷한 옆 패널이 걸린다(2026-08-18 실측).
 
-    **모델이 넣은 `match` 로 이 판단을 하지 않는다.** 보던 패널 제목이 "프로세서 사용률"
-    인데 모델이 지침대로 `match="CPU"` 를 넣으면 화면 맥락이 버려지고 남의 대시보드
-    패널이 그려진다. 사람은 같은 패널을 봤다고 믿는다. 사람이 다른 패널을 원하면
-    그때는 화면에서 그 패널을 열고 다시 물으면 된다.
+    다른 대시보드의 패널은 `list_panels` 로 목록을 받아 **손잡이로 가리킨다.** 제목을
+    인자로 넘기는 길은 없앴다 — 그 길이 있는 한 이름이 비슷한 패널이 계속 걸린다.
     """
-    # 다만 **사람이 다른 패널을 물을 수는 있어야 한다.** "MSP 대시보드 것도 같은 값이냐"
-    # 같은 질문이 그렇다. 화면 패널로 고정해 두면 그 질문에 영영 답을 못 한다
-    # (2026-08-18 실측). 그래서 모델이 대시보드를 **지목했을 때만** 찾는다. 지목은
-    # 명시적인 행동이라, 아무 생각 없이 match 를 넣는 것으로는 안 바뀐다.
-    if str(dash or "").strip():
-        return None, None
     p = panel or {}
     uid, pid = p.get("uid"), p.get("panelId")
     if not uid or pid in (None, ""):
         return None, None
     return uid, pid
+
+
+PANEL_REF_MAX = 40
+
+
+def panel_refs(items: list, refs: dict) -> list:
+    """패널 목록에 손잡이를 붙여 모델에 줄 형태로. 대시보드 식별자는 안 나간다.
+
+    그림 손잡이(`img-...`)와 같은 방식이다. 모델은 `pnl-3` 만 보고, 그 뒤의 대시보드
+    uid 와 패널 번호는 서버가 들고 있는다.
+    """
+    out = []
+    for it in (items or [])[:PANEL_REF_MAX]:
+        ref = "pnl-%d" % (len(refs) + 1)
+        refs[ref] = (it.get("uid"), it.get("panel_id"), it.get("title") or "")
+        out.append({"ref": ref, "dashboard": it.get("dashboard") or "",
+                    "title": it.get("title") or ""})
+    return out
 
 
 def query_count(trace) -> int:
@@ -785,13 +796,30 @@ async def _tool_panel_image(args: dict, ctx: dict) -> dict:
         return err
     a, b, _cut = window_bounds(args, int(ctx["now"]), WINDOW_MAX_WIDE_M,
                                default_span=ctx.get("panel_span"))
-    return await ctx["fetch_panel"](ent, str(args.get("match") or ""), a, b,
-                                    str(args.get("dashboard") or ""))
+    ref = str(args.get("panel_ref") or "").strip()
+    target = None
+    if ref:
+        target = (ctx.get("panel_refs") or {}).get(ref)
+        if not target:
+            return _err("%s 는 이번 대화에서 받은 패널 손잡이가 아니다. list_panels 를 "
+                        "먼저 부르고 거기 적힌 ref 를 그대로 써라" % ref)
+    return await ctx["fetch_panel"](ent, target, a, b)
+
+
+async def _tool_list_panels(args: dict, ctx: dict) -> dict:
+    raw = await ctx["list_panels"](str(args.get("dashboard") or ""))
+    items = panel_refs(raw, ctx.setdefault("panel_refs", {}))
+    if not items:
+        return {"panels": [], "note": "그 조건에 맞는 패널이 없다. dashboard 를 비우고 "
+                                      "전체 목록을 받아 보라"}
+    return {"panels": items, "n": len(items),
+            "note": "그림을 붙이려면 ref 를 panel_image 의 panel_ref 에 그대로 적어라"}
 
 
 _TOOLS = {
     "list_hosts": _tool_list_hosts,
     "panel_image": _tool_panel_image,
+    "list_panels": _tool_list_panels,
     "host_metrics": _tool_host_metrics,
     "open_problems": _tool_open_problems,
     "host_logs": _tool_host_logs,

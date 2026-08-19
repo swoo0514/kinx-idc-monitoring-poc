@@ -574,9 +574,12 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
         "fetch_judgments": lambda host, days: fetch_judgments(host, days, mk),
         "fetch_metrics": lambda ent, match, a, b: fetch_metrics(ent, match, a, b),
         "fetch_problems": lambda ent: fetch_problems(ent),
+        # 패널 손잡이는 이번 턴 안에서만 뜻이 있다. 모델은 pnl-3 만 보고 대시보드
+        # 식별자는 서버가 들고 있는다.
+        "panel_refs": {},
         "fetch_panel": (panel_fn or (
-            lambda ent, m, a, b, dash="": fetch_panel(
-                ent, m, a, b, (panel or {}).get("uid", ""), panel, dash, mk))),
+            lambda ent, target, a, b: fetch_panel(ent, target, a, b, panel))),
+        "list_panels": (lambda dash: fetch_panel_list(dash, mk)),
     }
 
     images = []          # 화면이 그릴 그림. 모델에는 손잡이만 준다.
@@ -985,54 +988,54 @@ async def fetch_problems(entry) -> dict:
     return {"problems": out, "status": collector.SOURCE_OK}
 
 
-async def fetch_panel(entry: dict, match: str, start: int, end: int,
-                      prefer_uid: str = "", panel: dict = None,
-                      dash: str = "", masker: masking.Masker = None) -> dict:
+def var_host_of(entry: dict, panel: dict) -> str:
+    """대시보드 변수에 넣을 호스트 값. 화면이 준 값이 먼저다.
+
+    Zabbix 축 이름을 넣으면 Loki·Wazuh 패널이 빈 그래프로 나오고 사람은 "아무 일도
+    없었다" 로 읽는다(축마다 이름이 다르다 — collector._resolve_label 참고).
+    """
+    return str((panel or {}).get("host") or "") or (entry or {}).get("host", "")
+
+
+async def fetch_panel(entry: dict, target, start: int, end: int,
+                      panel: dict = None) -> dict:
     """관측 화면 한 장. 모델에는 손잡이만 가고 주소는 화면으로만 간다.
 
-    **보고 있는 패널은 번호로 그린다.** 화면이 패널 번호를 넘겨 주는데도 제목으로
-    대시보드를 뒤지면 이름이 비슷한 옆 패널이 걸린다(2026-08-18 실측).
+    `target` 이 있으면 그 패널을(list_panels 가 준 손잡이를 서버가 푼 값), 없으면
+    사람이 보고 있는 패널을 그린다. **제목으로 찾는 길은 없다.**
     """
     from . import asktools, grafana
 
-    uid, panel_id = asktools.panel_pick(panel, match, dash)
-    title = str((panel or {}).get("title") or "")
-    searched = False
+    if target:
+        uid, panel_id, title = target
+        note = "사람이 보고 있는 패널이 아니라 목록에서 고른 패널이다"
+    else:
+        uid, panel_id = asktools.panel_pick(panel)
+        title, note = str((panel or {}).get("title") or ""), ""
     if not uid:
-        # 대시보드를 지목했으면 화면 대시보드를 앞세우지 않는다. 앞세우면 지목한 곳
-        # 대신 보고 있던 곳에서 찾아 놓고 "그 대시보드에는 없다" 고 답한다.
-        prefer = "" if dash else prefer_uid
-        uid, panel_id, title = grafana.find_panel(match or "", prefer, dash)
-        searched = True
-    if not uid:
-        # **무엇이 있는지 함께 준다.** 안 주면 모델이 "그 대시보드에는 없다" 를 지어낸다
-        # (2026-08-18 실측).
-        mask = masker.mask if masker is not None else (lambda x: x)
-        if dash:
-            # 대시보드는 찾았는데 패널을 못 고른 경우가 많다. 그 안에 무엇이 있는지
-            # 주면 모델이 골라서 다시 부른다. 안 주면 "특정하지 못했다" 로 끝난다.
-            titles = [mask(t) for t in grafana.panel_titles(dash)]
-            if titles:
-                # **오류로 돌려주지 않는다.** 오류로 주면 모델이 같은 인자로 다시
-                # 부른다(2026-08-18 실측: 똑같은 호출을 세 번 했다). 목록은 성공한
-                # 조회 결과이고, 다음에 무엇을 할지만 적는다.
-                return {"panels": titles,
-                        "note": ("그 대시보드의 패널 목록이다. 그림을 붙이려면 이 중 "
-                                 "하나를 match 에 적고 dashboard 는 그대로 두어 다시 "
-                                 "불러라. 목록에 없으면 없는 것이다")}
-        return {"error": "그 조건에 맞는 패널을 못 찾았다. match 나 dashboard 를 바꿔 보라",
-                "dashboards": [mask(t) for t in grafana.dashboard_titles()]}
-    # **화면이 준 호스트 값을 먼저 쓴다.** 대시보드 변수의 실제 현재 값이다. Zabbix 축
-    # 이름을 넣으면 Loki·Wazuh 패널이 빈 그래프로 나오고 사람은 "아무 일도 없었다" 로
-    # 읽는다(축마다 이름이 다르다 — collector._resolve_label 참고).
-    var_host = str((panel or {}).get("host") or "") or entry.get("host", "")
+        return {"error": "어느 패널인지 모른다. list_panels 로 목록을 받아 ref 를 골라 "
+                         "panel_ref 에 넣어라"}
     out = {"id": "img-%d" % (abs(hash((uid, panel_id, start))) % 9000 + 1000),
            "title": title,
-           "url": grafana.panel_url(uid, panel_id, var_host, start, end)}
-    if searched and (panel or {}).get("uid"):
-        # **사람이 보던 패널이 아니다.** 밝히지 않으면 같은 패널을 봤다고 믿는다.
-        out["note"] = "사람이 보고 있는 패널이 아니라 제목으로 찾은 패널이다"
+           "url": grafana.panel_url(uid, panel_id, var_host_of(entry, panel), start, end)}
+    if note:
+        out["note"] = note
     return out
+
+
+async def fetch_panel_list(dash: str, masker: masking.Masker) -> list:
+    """볼 수 있는 패널 목록. 손잡이는 부르는 쪽이 붙인다.
+
+    제목에 고객사명이나 호스트명이 들어 있을 수 있으므로 이름 표를 거쳐 내보낸다.
+    """
+    import asyncio
+
+    from . import grafana
+
+    items = await asyncio.to_thread(grafana.list_panels, dash)
+    return [dict(it, title=masker.mask(str(it.get("title") or "")),
+                 dashboard=masker.mask(str(it.get("dashboard") or "")))
+            for it in items]
 
 
 def engine_name() -> str:
