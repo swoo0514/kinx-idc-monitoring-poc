@@ -731,7 +731,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     if engine_name() == "graph":
         return await _run_graph(
             system_prompt(), messages, mk, sid, user, exec_tool, model_fn,
-            started, tick, specs, final, made_images)
+            started, tick, specs, final, made_images, ok_queries)
 
     def _model(msgs):
         if model_fn is not None:
@@ -789,7 +789,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
                             "content": blob})
         messages = messages + [{"role": "user", "content": results}]
         if final:
-            text = render_answer(final, ok_queries["n"] > 0)
+            text = render_answer(final, int((ok_queries or {}).get("n", 1)) > 0)
             break
         if stopped == "budget":
             break
@@ -801,7 +801,7 @@ async def run_ask(question: str, history=None, sid: str = "", table: dict = None
     if stopped in ("rounds", "deadline", "budget") and not final and trace:
         if await force_answer(system_prompt(), messages, specs, user,
                               model_fn, exec_tool, trace):
-            text = render_answer(final, ok_queries["n"] > 0)
+            text = render_answer(final, int((ok_queries or {}).get("n", 1)) > 0)
     if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not final:
         text = (stall_note(stopped, trace)
                 + ((chr(10) * 2 + text) if text else ""))
@@ -1199,7 +1199,8 @@ def engine_name() -> str:
 
 async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
                      exec_tool, model_fn, started: float, tick,
-                     specs=None, final=None, made_images=None) -> dict:
+                     specs=None, final=None, made_images=None,
+                     ok_queries=None) -> dict:
     """LangGraph 로 도는 경로. 반환 계약은 기존 반복문과 같다.
 
     상한·멈춤·마스킹·도구는 전부 우리 것을 그대로 쓴다. 프레임워크가 맡는 것은 모델과
@@ -1248,7 +1249,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
     text = ""
     if final:
         # 답 도구로 받았으면 그것이 답이다. 산문에서 손잡이를 걷어 낼 일이 없다.
-        text = render_answer(final, ok_queries["n"] > 0)
+        text = render_answer(final, int((ok_queries or {}).get("n", 1)) > 0)
     else:
         for m in reversed(out.get("messages") or []):
             if isinstance(m, AIMessage) and isinstance(m.content, str) and m.content.strip():
@@ -1262,7 +1263,7 @@ async def _run_graph(system: str, messages: list, mk, sid: str, user: str,
     if stopped in ("rounds", "deadline", "budget") and not final and trace:
         if await force_answer(system, G.to_anthropic(out.get("messages") or []),
                               specs, user, model_fn, exec_tool, trace):
-            text = render_answer(final, ok_queries["n"] > 0)
+            text = render_answer(final, int((ok_queries or {}).get("n", 1)) > 0)
     if stopped in ("rounds", "deadline", "budget", "cancelled", "invalid_state") and not final:
         text = (stall_note(stopped, trace)
                 + ((chr(10) * 2 + text) if text else ""))
