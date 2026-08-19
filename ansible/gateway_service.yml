@@ -7,9 +7,11 @@
 # 분석·조치 후보 등록·리포트 승인·질의가 모두 지나는 단일 장애점이다.
 #
 #   ansible-playbook -i inventory gateway_service.yml -l core
+#   ansible-playbook -i 'localhost,' -c local -e target=localhost gateway_service.yml
 #   ansible-playbook -i inventory gateway_service.yml -l core -e restart=true
 - name: Install gateway systemd unit
-  hosts: gateway
+  # 게이트웨이 자신에서 돌릴 때는 `-e target=localhost -c local` 로 부른다.
+  hosts: "{{ target | default('gateway') }}"
   become: true
 
   vars:
