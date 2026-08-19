@@ -279,9 +279,14 @@ def build(system: str, specs: list, user: str, run_tool, model_fn=None,
         stopped: str
         error: str
 
-    async def ask_model(state: State) -> dict:
+    async def ask_model(state: State, config=None) -> dict:
+        # **설정을 그대로 넘긴다.** 모델 호출을 다른 스레드에서 돌리므로, 넘기지 않으면
+        # 프레임워크가 이 호출을 그래프와 이어진 것으로 못 보고 별개 기록으로 남긴다.
+        # 추적 화면에서 질문 하나가 LangGraph 한 줄과 GatewayChat 여러 줄로 흩어져
+        # 보이던 이유다(2026-08-19 확인).
         try:
-            reply = await asyncio.to_thread(model.invoke, state["messages"])
+            reply = await asyncio.to_thread(
+                lambda: model.invoke(state["messages"], config=config))
         except ModelBlocked as e:
             return {"stopped": "llm_failed", "error": str(e)}
         except Exception as e:              # 가짜 모델이 터지는 경우까지 사람 문장으로
