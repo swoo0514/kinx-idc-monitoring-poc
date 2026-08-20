@@ -35,9 +35,17 @@ def validate(h: dict, records: dict):
     """가설이 실재하는 기록만 인용했는가. 반환 `(통과, 사유)`."""
     if is_null(h):
         return True, ""
-    missing = [r for r in (list(h.get("supports") or []) + list(h.get("contradicts") or []))
-               if r not in (records or {})]
+    cites = list(h.get("supports") or []) + list(h.get("contradicts") or [])
+    missing = [r for r in cites if r not in (records or {})]
     if missing:
+        # 근거 자리에 가설 id 를 적는 실수가 잦다. 관측 기록 id 는 `metrics#1` 처럼 `#` 를
+        # 가지므로 모양으로 구분된다. 무엇을 대신 쓸지 안 알려 주면 다시 시켜도 반복한다.
+        wrong = [r for r in missing if "#" not in str(r)]
+        if wrong:
+            sample = sorted(records or {})[:2] or ["metrics#1"]
+            return False, ("근거 자리에 가설 id 를 적었다: %s. 여기에는 관측 기록 id 를"
+                           " 적는다 — 예: %s"
+                           % (", ".join(sorted(wrong)), ", ".join(sample)))
         return False, "없는 기록을 인용했다: %s" % ", ".join(sorted(missing))
     if not str(h.get("claim") or "").strip():
         return False, "주장이 비었다"

@@ -315,6 +315,31 @@ def _baseline_checks() -> int:
     return 12
 
 
+def _citation_kind_checks() -> int:
+    """근거 자리에 가설 id 를 적었을 때 무엇이 틀렸는지 말해 주는가.
+
+    2026-08-20 랩 실증 단계 3 에서 계획자가 `supports` 에 `H1`·`H3` 를 적어 가설이 전부
+    폐기됐다. 그때 사유가 "없는 기록을 인용했다: H1, H3" 여서 **무엇을 대신 써야 하는지가
+    안 적혀 있었고**, 다시 시켜도 같은 실수를 반복했다. 관측 기록 id 는 `metrics#1` 처럼
+    `#` 를 갖는다 — 모양으로 구분할 수 있다.
+    """
+    from ..deep import hypothesis as H
+
+    recs = {"metrics#1": {"id": "metrics#1", "status": "ok"}}
+
+    ok, why = H.validate({"id": "H2", "claim": "가설", "supports": ["H1", "H3"]}, recs)
+    assert not ok
+    assert "가설" in why and "metrics#1" in why, why
+
+    # 모양은 맞는데 없는 기록이면 사유가 다르다 — 섞으면 고칠 방향이 달라진다
+    ok, why = H.validate({"id": "H2", "claim": "가설", "supports": ["metrics#9"]}, recs)
+    assert not ok and "가설 id" not in why, why
+
+    ok, _ = H.validate({"id": "H2", "claim": "가설", "supports": ["metrics#1"]}, recs)
+    assert ok
+    return 5
+
+
 def _premature_checks() -> int:
     """질의를 한 번도 안 던지고 '못 가름'으로 끝내지 않는가.
 
