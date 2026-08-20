@@ -358,8 +358,7 @@ def _loop_checks() -> int:
     try:
         st = S.new_state({"host": "[host-1]"}, dict(recs))
         app = G.build(model, probe, lambda: "", system="s")
-        out = asyncio.get_event_loop().run_until_complete(
-            app.ainvoke(st, {"recursion_limit": 20}))
+        out = asyncio.run(app.ainvoke(st, {"recursion_limit": 20}))
 
         # ① 판가름이 나면 멈춘다 — 세는 상한이 아니라 의미로 끝나야 한다
         assert out.get("stopped") == "판가름", out.get("stopped")
@@ -377,9 +376,8 @@ def _loop_checks() -> int:
             return _plan([H1, H2], ["H1", "H2"], args={"host": "[host-1]"})
 
         st2 = S.new_state({"host": "[host-1]"}, dict(recs))
-        out2 = asyncio.get_event_loop().run_until_complete(
-            G.build(same, probe, lambda: "", system="s").ainvoke(
-                st2, {"recursion_limit": 20}))
+        out2 = asyncio.run(G.build(same, probe, lambda: "", system="s")
+                           .ainvoke(st2, {"recursion_limit": 20}))
         assert len(out2.get("probes") or []) == 1, \
             "같은 조회를 라운드마다 다시 던지면 안 된다 — 우리가 실측한 낭비가 그것이다"
         assert out2.get("stopped") in ("못가름", "rounds"), out2.get("stopped")
