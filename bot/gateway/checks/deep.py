@@ -302,6 +302,68 @@ def _baseline_checks() -> int:
     return 12
 
 
+def _premature_checks() -> int:
+    """질의를 한 번도 안 던지고 '못 가름'으로 끝내지 않는가.
+
+    랩 첫 실행(2026-08-20)이 정확히 그렇게 끝났다 — 축 기록 넷과 미결 가설 둘을 손에 쥐고
+    질의 0개로 1라운드에 종료했다. 이 설계가 막으려던 조기 종결을 설계 자신이 한 것이다.
+    """
+    import asyncio
+    import os
+
+    from ..deep import graph as G
+    from ..deep import memory
+    from ..deep import state as S
+
+    recs = {"metrics#1": {"id": "metrics#1", "axis": "metrics", "status": "ok",
+                          "finding": "iowait 80%", "units": "%",
+                          "baseline_status": "ok", "t_first": 100, "t_last": 900}}
+
+    # ③ 인용할 수 있는 기록 id 를 대 놓고 알려 준다. **langgraph 유무와 무관하게 돈다** —
+    # 랩에서만 도는 검사는 개발 PC 에서 통째로 건너뛰어 검사 구실을 못 한다.
+    txt = memory.render(S.new_state({"host": "[host-1]"}, dict(recs)))
+    assert "metrics#1" in txt.split("[관측]")[1].splitlines()[0], txt
+
+    try:
+        import langgraph  # noqa: F401
+    except ImportError:
+        return 1
+
+    H1 = {"id": "H1", "claim": "자원 경합", "if_true": "iowait 급등",
+          "if_false": "iowait 평상", "status": "미결", "supports": [], "contradicts": []}
+    H2 = {"id": "H2", "claim": "DB 고장", "if_true": "SQL 정지",
+          "if_false": "IO/SQL 정상", "status": "미결", "supports": [], "contradicts": []}
+
+    tries = []
+
+    async def model(system, user, specs):
+        tries.append(user)
+        return {"content": [{"type": "tool_use", "name": "plan",
+                             "input": {"hypotheses": [H1, H2], "probe_discriminates": [],
+                                       "probe_why": "", "note": ""}}]}
+
+    async def probe(req):
+        raise AssertionError("질의를 안 냈는데 조회가 돌았다")
+
+    saved = os.environ.get("DEEP_LOOP")
+    os.environ["DEEP_LOOP"] = "hypothesis"
+    try:
+        out = asyncio.run(G.build(model, probe, lambda: "", system="s")
+                          .ainvoke(S.new_state({"host": "[host-1]"}, dict(recs)),
+                                   {"recursion_limit": 30}))
+        # ① 1라운드 '못가름'을 금지한다 — 세는 상한까지 다시 시켜 본다
+        assert out.get("stopped") == "rounds", out.get("stopped")
+        assert int(out.get("round") or 0) == G.MAX_ROUNDS, out.get("round")
+        # ② 다시 시킬 때 무엇을 안 했는지 알려 준다
+        assert any("질의를 하나" in t for t in tries[1:]), tries[-1][-200:]
+    finally:
+        if saved is None:
+            os.environ.pop("DEEP_LOOP", None)
+        else:
+            os.environ["DEEP_LOOP"] = saved
+    return 4
+
+
 def _loop_checks() -> int:
     """반복문 — 가르는 질의만 돌고, 판가름이 나면 멈추는가. 유료 호출 없이 돈다."""
     import asyncio

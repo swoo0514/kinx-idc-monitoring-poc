@@ -78,7 +78,11 @@ def render(state: dict) -> str:
     recs = state.get("records") or {}
     if recs:
         body = "\n".join(_record_line(recs[k]) for k in sorted(recs))
-        parts.append("[관측]\n" + body)
+        # id 를 머리에 한 번 더 적는다. 랩 첫 실행에서 계획자가 없는 기록
+        # "A" 를 인용해 가설이 폐기됐다 — 본문에 있어도 목록으로 안 주면
+        # 제 이름을 지어낸다.
+        parts.append("[관측] 인용 가능한 기록 id: %s\n%s"
+                     % (", ".join(sorted(recs)), body))
 
     # ③ 가설표
     table = state.get("table") or []

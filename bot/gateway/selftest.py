@@ -96,6 +96,7 @@ from .checks.deep import (_hypothesis_checks,
     _state_checks,
     _baseline_checks,
     _loop_checks,
+    _premature_checks,
     _deep_budget_checks,
     _deep_record_checks,
     _survey_parallel_checks,
@@ -299,7 +300,7 @@ def main():
                    + _time_order_checks()
                    + _condense_adapter_checks()
                    + _memory_checks() + _state_checks()
-                   + _baseline_checks() + _loop_checks()
+                   + _baseline_checks() + _loop_checks() + _premature_checks()
                    + _deep_budget_checks() + _deep_record_checks()
                    + _survey_parallel_checks() + _deadline_checks()
                    + _entry_wiring_checks() + _ask_target_checks()

@@ -157,6 +157,21 @@ def build(model_fn, run_probe, guard, system: str = ""):
     """
     from langgraph.graph import END, StateGraph
 
+    def _untested(state):
+        """가를 수 없다는 말을 아직 할 수 없는 상태인가.
+
+        **가를 수 없다는 것은 질의를 해 보고 아는 것이다.** 랩 첫 실행이 축 기록 넷과 미결
+        가설 둘을 쥐고 질의 0개로 1라운드에 끝났다 — 이 설계가 막으려던 조기 종결을 설계
+        자신이 했다. 그래서 질의가 하나도 안 나갔으면 사유를 지우고 다시 시킨다. 라운드
+        상한이 그대로 천장이라 무한히 되풀이하지 않는다.
+        """
+        if state.get("probes"):
+            return False
+        if int(state.get("round") or 0) >= MAX_ROUNDS:
+            return False
+        memory.add_step(state, "질의를 안 냈다 — 가설을 가를 질의를 하나 반드시 내라")
+        return True
+
     def _stop(state, why):
         """멈출 때 **왜 멈췄는지 발자취와 함께 남긴다.**
 
@@ -229,13 +244,16 @@ def build(model_fn, run_probe, guard, system: str = ""):
         if why:
             return _stop(state, why)
 
+        reason = ""
         if loop_mode() == "hypothesis":
             reason, _note = H.done(state.get("table") or [],
                                    probes_left=bool(state.get("probe")))
-            if reason:
-                return _stop(state, reason)
-        elif not state.get("probe"):
-            return _stop(state, "못가름")
+            if reason == "못가름" and _untested(state):
+                reason = ""
+        elif not state.get("probe") and not _untested(state):
+            reason = "못가름"
+        if reason:
+            return _stop(state, reason)
 
         if not should_continue(state, lambda: bool(guard())):
             return _stop(state, "rounds" if int(state.get("round") or 0) >= MAX_ROUNDS
