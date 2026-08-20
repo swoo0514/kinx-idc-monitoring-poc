@@ -91,7 +91,10 @@ from .checks.store import (_annotation_checks,
 from .checks.deep import (_hypothesis_checks,
     _probe_checks,
     _time_order_checks,
-    _condense_adapter_checks)
+    _condense_adapter_checks,
+    _memory_checks,
+    _state_checks,
+    _baseline_checks)
 from .checks.ops import (_flush_checks,
     _heartbeat_checks,
     _llm_concurrency_checks,
@@ -286,7 +289,9 @@ def main():
     usage_checks = _llm_usage_checks()
     deep_checks = (_hypothesis_checks() + _probe_checks()
                    + _time_order_checks()
-                   + _condense_adapter_checks())
+                   + _condense_adapter_checks()
+                   + _memory_checks() + _state_checks()
+                   + _baseline_checks())
     flush_checks = _flush_checks()
 
     if fails:

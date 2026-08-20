@@ -180,3 +180,123 @@ def _condense_adapter_checks() -> int:
         else:
             os.environ["OPENAI_API_KEY"] = saved
     return 14
+
+
+def _memory_checks() -> int:
+    """구조화 기억 — 누적이 아니라 재구성인가, 그리고 축약이 사건을 못 보는가."""
+    from ..deep import memory as M
+    from ..deep import state as S
+
+    inc = {"host": "[host-1]", "names": ["복제 지연"], "classes": ["replication"],
+           "sev": "SEV2", "verdict": "신규", "statement": "90일 내 처음"}
+    st = S.new_state(inc, {})
+
+    # ① 라운드가 늘어도 프롬프트가 선형으로 안 부푼다 — 이게 이 설계의 출발점이다
+    for i in range(1, 4):
+        st["round"] = i
+        M.put_record(st, {"id": "logs#%d" % i, "axis": "logs", "status": "ok",
+                          "finding": "오류 급증", "evidence": ["줄 %d" % i],
+                          "units": "count", "baseline_status": "ok"})
+        M.add_step(st, "%d라운드: 로그를 봤다" % i)
+    a = len(M.render(st))
+    for i in range(4, 7):
+        st["round"] = i
+        M.put_record(st, {"id": "logs#%d" % i, "axis": "logs", "status": "ok",
+                          "finding": "오류 급증", "evidence": ["줄 %d" % i],
+                          "units": "count", "baseline_status": "ok"})
+        M.add_step(st, "%d라운드: 로그를 봤다" % i)
+    b = len(M.render(st))
+    assert b < a * 2.2, "라운드가 두 배인데 프롬프트가 두 배 넘게 늘면 누적이다 (%d→%d)" % (a, b)
+
+    # ② 조회 상태와 평소값 없음이 글에 드러난다 — 모델이 빈 값을 "없었다"로 못 읽게
+    st2 = S.new_state(inc, {})
+    M.put_record(st2, {"id": "security#1", "axis": "security", "status": "unavailable",
+                       "finding": "조회하지 못했다", "baseline_status": "unavailable",
+                       "units": "—"})
+    txt = M.render(st2)
+    assert "unavailable" in txt and "평소값 없음" in txt, txt
+
+    # ③ 감시 인프라에서 온 기록은 그렇게 표시된다 (RF-03 출처 혼동)
+    M.put_record(st2, {"id": "logs#1", "axis": "logs", "status": "ok",
+                       "origin": "monitoring", "finding": "에이전트가 죽었다",
+                       "units": "—", "baseline_status": "ok"})
+    assert "감시 인프라" in M.render(st2)
+
+    # ④ ⭐ 축약 입력에는 사건 서사도 다른 축도 가설도 안 실린다
+    st2["table"] = [{"id": "H1", "claim": "가설 문장", "status": "미결"}]
+    payload = M.condense_input("logs", "평소 대비 무엇이 다른가",
+                               {"lines": ["a"]}, {"lines": ["b"]})
+    for leak in ("복제 지연", "SEV2", "가설 문장", "신규", "security#1"):
+        assert leak not in payload, "축약 입력에 %r 이 실렸다" % leak
+    assert "incident_window" in payload and "baseline_window" in payload
+
+    # ⑤ 기록 id 는 축마다 이어서 붙는다
+    assert M.next_record_id(st2, "metrics") == "metrics#1"
+    assert M.next_record_id(st2, "logs") == "logs#2"
+    return 12
+
+
+def _state_checks() -> int:
+    """상태 불변식 — 어긋나면 예외가 아니라 사유를 낸다."""
+    from ..deep import state as S
+
+    recs = {"logs#1": {"status": "ok"}}
+    st = S.new_state({"host": "h"}, recs)
+    assert S.check(st) == ""
+
+    st["stopped"] = "몰라"
+    assert "모르는 멈춤" in S.check(st)
+    st["stopped"] = "공동원인"
+    assert S.check(st) == "", "종료 사유 셋은 정상 값이어야 한다"
+
+    st["table"] = [{"id": "H1"}, {"id": "H1"}]
+    assert "두 번" in S.check(st)
+
+    st["table"] = [{"id": "H1", "supports": ["없는#9"], "contradicts": []}]
+    assert "없는 기록" in S.check(st)
+
+    st["table"] = [{"id": "H1", "status": "지지",
+                    "supports": ["logs#1"], "contradicts": ["logs#1"]}]
+    assert "반증을 받고도" in S.check(st), "RF-09 를 상태 검사에서도 잡는다"
+
+    st["table"] = []
+    st["seen"] = ["a", "b"]
+    st["probes"] = ["a"]
+    assert "지문 표" in S.check(st)
+    return 8
+
+
+def _baseline_checks() -> int:
+    """정상 구간 — 빈 창을 "평소엔 없었다"로 읽지 않는가."""
+    import time
+
+    from ..ask import tools as asktools
+    from ..deep import baseline as B
+
+    now = int(time.time())
+    inc = (now - 3600, now)
+
+    # ① 같은 요일·시간대로 옮긴다 — 주중/주말과 야간 배치가 섞이면 비교가 무의미하다
+    s, e = B.window(*inc)
+    assert (inc[0] - s, inc[1] - e) == (B.OFFSET_S, B.OFFSET_S)
+    assert (e - s) == (inc[1] - inc[0]), "창 길이가 같아야 비교가 성립한다"
+
+    # ② ⭐ 나이로도 추세 판정을 해야 한다.
+    #    use_trend 는 **길이만** 보므로 7일 전 1시간 창은 이력 조회로 가고, 보관이
+    #    짧으면 빈 목록이 '조회 성공'으로 온다.
+    assert not asktools.use_trend(s, e), "길이 기준으로는 이력 조회로 간다(문제의 전제)"
+    assert B.force_trend(s, e), "7일 전 창은 추세로 받아야 한다"
+    assert not B.force_trend(inc[0], inc[1]), "사건 창은 그대로 이력으로 본다"
+
+    # ③ 정상 창 상태는 축 상태와 **따로** 싣는다
+    assert B.status_of([{"clock": 1, "value": 1}], True) == B.BASELINE_OK
+    assert B.status_of([], True) == B.BASELINE_UNAVAILABLE, \
+        "조회는 됐지만 값이 없으면 '평소엔 없었다'가 아니라 '평소를 못 봤다'다"
+    assert B.status_of([{"clock": 1}], False) == B.BASELINE_UNAVAILABLE
+
+    # ④ 방향성 — 없는 수치를 지어내지 않는다
+    assert "배" in B.direction(80, 5)
+    assert B.direction(5, 5) == "평소와 비슷"
+    assert B.direction(None, 5) == "" and B.direction(80, None) == ""
+    assert B.direction(80, "x") == ""
+    return 12
