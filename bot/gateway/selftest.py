@@ -88,6 +88,9 @@ from .checks.store import (_annotation_checks,
     _select_invariant_checks,
     _store_checks,
     _store_schema_checks)
+from .checks.deep import (_hypothesis_checks,
+    _probe_checks,
+    _time_order_checks)
 from .checks.ops import (_flush_checks,
     _heartbeat_checks,
     _llm_concurrency_checks,
@@ -280,6 +283,8 @@ def main():
     registry_checks = _registry_checks()
     concurrency_checks = _llm_concurrency_checks()
     usage_checks = _llm_usage_checks()
+    deep_checks = (_hypothesis_checks() + _probe_checks()
+                   + _time_order_checks())
     flush_checks = _flush_checks()
 
     if fails:
@@ -289,7 +294,7 @@ def main():
                 + remediation_checks + holmes_checks + fastpath_checks + open_link_checks
                 + site_kw_checks + class_tag_checks + class_map_checks + pending_checks
                 + analyze_checks + beat_checks + flush_checks + registry_checks + idem_checks + overflow_checks + timer_checks + holmes_eg_checks + tenant_checks + collect_fail_checks + nametable_checks + proxy_checks + store_checks + wrong_srv_checks + evt_time_checks + open_limit_checks
-                + concurrency_checks + usage_checks)
+                + concurrency_checks + usage_checks + deep_checks)
     counted = _assert_count()
     print(f"ALL OK ({counted} asserts / 선언 {declared})")
     # 선언 숫자는 사람이 적는다 — 반복문 때문에 정확히 같을 수 없어 크게 벌어질 때만 알린다
