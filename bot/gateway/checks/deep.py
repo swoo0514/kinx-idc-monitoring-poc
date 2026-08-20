@@ -639,3 +639,36 @@ def _ask_target_checks() -> int:
                             _Mk())
     assert inc2["host"] == "가려짐", inc2["host"]
     return 4
+
+
+def _survey_args_checks() -> int:
+    """조사 인자 — 조회 계층이 **실제로 읽는 형태**인가.
+
+    랩 첫 실행이 1초 만에 "네 축에서 아무 기록도 못 만들었다"로 끝났다. 구간을
+    `시작-끝` 으로 적었는데 구분자가 `~`·`..`·`to` 다(하이픈은 ISO 날짜와 부딪힌다).
+    골격 검사만으로는 이런 것이 안 잡힌다.
+    """
+    import time
+
+    from ..ask import tools as asktools
+    from ..deep import run as deep_run
+
+    now = int(time.time())
+    span = (now - 3600, now)
+
+    for axis, tool in deep_run.SURVEY:
+        args = deep_run.tool_args(tool, "[host-1]", span)
+        assert args.get("host") == "[host-1]", (tool, args)
+        props = set()
+        for sp in (asktools.TOOL_SPECS or []):
+            if sp.get("name") == tool:
+                props = set((sp.get("input_schema") or {}).get("properties") or {})
+        # 그 도구가 안 받는 인자를 보내면 조용히 무시돼 엉뚱한 구간을 본다
+        assert set(args) <= props, (tool, set(args) - props)
+
+        if "range" in args:
+            a, b = asktools.span_of(args)
+            assert (a, b) == span, ("구간을 못 읽는다", tool, args, (a, b))
+        else:
+            assert args.get("days", 0) >= 1, (tool, args)
+    return 12

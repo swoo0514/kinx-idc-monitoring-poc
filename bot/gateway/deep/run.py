@@ -88,6 +88,20 @@ def verify(text: str, state: dict):
     return got, ""
 
 
+def tool_args(tool: str, host: str, span) -> dict:
+    """조사 한 번의 인자. **도구마다 받는 것이 다르다.**
+
+    구간 구분자가 하이픈이 아니라 `~` 다 — 하이픈은 ISO 날짜와 부딪혀서
+    `ask/tools.py` 가 안 받는다. 랩 첫 실행이 여기서 네 축을 통째로 잃었다.
+    판정 이력은 구간이 아니라 일수로 받는다.
+    """
+    a, b = int(span[0]), int(span[1])
+    if tool == "past_judgments":
+        days = max(1, int((int(time.time()) - a) / 86400) + 1)
+        return {"host": host, "days": min(days, 90)}
+    return {"host": host, "range": "%d~%d" % (a, b)}
+
+
 async def survey(st: dict, inc: dict, run_tool, condense_call, now: int) -> None:
     """조사 — 네 축 × (사건 창 + 정상 창). **축을 동시에 훑는다.**
 
@@ -102,13 +116,12 @@ async def survey(st: dict, inc: dict, run_tool, condense_call, now: int) -> None
 
     span = (now - 3600, now)
     bspan = baseline.window(*span)
-    args = {"host": inc.get("host", "")}
+    host = inc.get("host", "")
     plan = [(axis, tool, memory.next_record_id(st, axis)) for axis, tool in SURVEY]
 
     async def one(axis, tool, rid):
-        a, b = await asyncio.gather(
-            run_tool(tool, dict(args, **{"range": "%d-%d" % span})),
-            run_tool(tool, dict(args, **{"range": "%d-%d" % bspan})))
+        a, b = await asyncio.gather(run_tool(tool, tool_args(tool, host, span)),
+                                    run_tool(tool, tool_args(tool, host, bspan)))
         return axis, await condense_axis(axis, condense.SUBGOAL.get(axis, ""),
                                          a[0], b[0], rid, condense_call)
 
