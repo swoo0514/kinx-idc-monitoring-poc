@@ -11,7 +11,10 @@ import os
 log = logging.getLogger("gateway.deep.entry")
 
 # 심층 전용 시간당 상한. 트리아지와 같은 예산을 먹으면 폭주 때 알림 분석이 밀린다.
-MAX_PER_HOUR = int(os.environ.get("DEEP_MAX_PER_HOUR", "20"))
+#
+# **한 번의 조사가 축약을 최대 12번 부른다**(DEEP_CONDENSE_MAX). 그래서 20 으로 두면
+# 두 번을 못 돈다 — 랩에서 실제로 그렇게 막혔다. 시간당 4~5회를 돌 수 있게 잡는다.
+MAX_PER_HOUR = int(os.environ.get("DEEP_MAX_PER_HOUR", "60"))
 
 
 def enabled() -> bool:

@@ -555,10 +555,17 @@ def _deadline_checks() -> int:
     assert G.DEADLINE_S < PROXY_TIMEOUT_S, (
         "심층 마감(%s초)이 화면 앞단 시한(%s초)보다 크다 — 사람은 502 를 본다"
         % (G.DEADLINE_S, PROXY_TIMEOUT_S))
+    # ⭐ 시간당 상한이 조사 한 번을 담아야 한다. 한 번이 축약을 CONDENSE_MAX 번까지
+    #    부르므로, 상한이 그보다 작으면 **한 번도 못 끝낸다** — 랩에서 그렇게 막혔다.
+    from ..deep import entry as _entry
+    assert _entry.MAX_PER_HOUR >= G.CONDENSE_MAX * 2, (
+        "시간당 상한(%s)이 조사 한 번의 축약(%s)을 두 번도 못 담는다"
+        % (_entry.MAX_PER_HOUR, G.CONDENSE_MAX))
+
     # 라운드 상한과도 앞뒤가 맞아야 한다. 라운드마다 최소 한 번은 모델을 부른다.
     assert G.MAX_ROUNDS * 10 < G.DEADLINE_S, \
         "라운드 상한이 마감 안에 못 들어간다 — 마감으로만 끝나면 조사가 늘 잘린다"
-    return 2
+    return 3
 
 
 def _entry_wiring_checks() -> int:
