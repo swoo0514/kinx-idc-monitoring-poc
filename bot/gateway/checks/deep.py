@@ -421,7 +421,7 @@ def _deep_budget_checks() -> int:
     saved = (egress.MAX_PER_HOUR, list(egress._calls))
     try:
         egress.MAX_PER_HOUR = 100
-        egress._calls.clear()
+        egress._calls.clear(); egress._calls_kind.clear()
         # ① 심층 상한이 전역보다 낮으면 그쪽이 먼저 걸린다
         for _ in range(3):
             egress.call([_Ok()], "s", "u", kind="deep", max_per_hour=3)
@@ -431,17 +431,25 @@ def _deep_budget_checks() -> int:
         ok = egress.call([_Ok()], "s", "u", kind="triage")
         assert not ok["degraded"], ok
 
-        # ③ call_raw 도 같은 인자를 받는다(계획자가 이쪽을 쓴다)
-        egress._calls.clear()
+        # ③ ⭐ **전용 상한은 그 용도만 센다.** 전체를 세면 남의 트래픽에 먼저 소진돼
+        #    첫 호출부터 막힌다 — 랩에서 실제로 그랬다(hour_limit, 라운드 0).
+        egress._calls.clear(); egress._calls_kind.clear()
+        for _ in range(10):
+            egress.call([_Ok()], "s", "u", kind="triage")      # 남의 트래픽
+        got2 = egress.call([_Ok()], "s", "u", kind="deep", max_per_hour=3)
+        assert not got2["degraded"],             "전용 상한이 전체 호출을 센다 — 심층이 남의 트래픽에 굶는다"
+
+        # ④ call_raw 도 같은 인자를 받는다(계획자가 이쪽을 쓴다)
+        egress._calls.clear(); egress._calls_kind.clear()
         for _ in range(2):
             egress.call_raw(lambda: {"content": []}, kind="deep", max_per_hour=2)
         raw = egress.call_raw(lambda: {"content": []}, kind="deep", max_per_hour=2)
         assert not raw["ok"] and raw["reason"] == egress.BLOCKED_HOUR, raw
     finally:
         egress.MAX_PER_HOUR = saved[0]
-        egress._calls.clear()
+        egress._calls.clear(); egress._calls_kind.clear()
         egress._calls.extend(saved[1])
-    return 5
+    return 7
 
 
 def _deep_record_checks() -> int:

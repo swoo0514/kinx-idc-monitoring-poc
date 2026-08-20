@@ -19,6 +19,8 @@ MAX_PER_HOUR = int(os.environ.get("LLM_MAX_PER_HOUR", "200"))
 
 _sem = threading.BoundedSemaphore(MAX_CONCURRENCY)
 _calls: list = []          # 최근 1시간 호출 시각
+# 용도별 호출 시각. 전용 상한(심층 등)은 그 용도만 세야 남의 트래픽에 안 굶는다.
+_calls_kind: dict = {}
 _lock = threading.Lock()
 _stats = {"inflight": 0, "peak_inflight": 0, "queue_timeouts": 0, "hour_blocked": 0}
 _peaks: list = []          # (시각, 그때 동시 수) — 누적 최고만 두면 언제 찍혔는지 모른다
@@ -57,19 +59,33 @@ def kind_counts(now: float = None) -> dict:
         return out
 
 
-def _hour_ok(exempt: bool, now: float = None, cap: int = None) -> bool:
-    """시간당 총량이 남았는지 본다. **세지는 않는다.**"""
+def _hour_ok(exempt: bool, now: float = None, cap: int = None,
+             kind: str = "") -> bool:
+    """시간당 총량이 남았는지 본다. **세지는 않는다.**
+
+    **전용 상한을 준 용도는 그 용도만 센다.** 전체를 세면 낮게 잡은 전용 상한이 남의
+    트래픽에 먼저 소진돼 첫 호출부터 막힌다 — 랩에서 심층 조사가 그렇게 죽었다
+    (hour_limit, 라운드 0). 상한을 안 주면 예전처럼 전체를 센다.
+    """
     now = time.time() if now is None else now
+    limit = MAX_PER_HOUR if cap is None else cap
+    own = kind if cap is not None else ""      # 전용 상한일 때만 용도로 좁힌다
     if store.status()["open"]:
-        used = store.calls_since(3600, now)
-        if not exempt and used >= (MAX_PER_HOUR if cap is None else cap):
+        used = store.calls_since(3600, now, kind=own)
+        if not exempt and used >= limit:
             with _lock:
                 _stats["hour_blocked"] += 1
             return False
         return True
     with _lock:
         _calls[:] = [t for t in _calls if now - t <= 3600]
-        if not exempt and len(_calls) >= (MAX_PER_HOUR if cap is None else cap):
+        if own:
+            seen = [t for t in _calls_kind.get(own, []) if now - t <= 3600]
+            _calls_kind[own] = seen
+            used = len(seen)
+        else:
+            used = len(_calls)
+        if not exempt and used >= limit:
             _stats["hour_blocked"] += 1
             return False
         return True
@@ -82,6 +98,10 @@ def _record(kind: str, now: float = None, user: str = "") -> None:
     with _lock:
         _calls[:] = [t for t in _calls if now - t <= 3600]
         _calls.append(now)
+        if kind:
+            seen = [t for t in _calls_kind.get(kind, []) if now - t <= 3600]
+            seen.append(now)
+            _calls_kind[kind] = seen
         q = _by_kind.setdefault(kind or "?", [])
         q[:] = [t for t in q if now - t <= 3600]
         q.append(now)
@@ -121,7 +141,7 @@ class Blocked(Exception):
 def guard(kind: str = "", exempt: bool = False, max_per_hour: int = None,
           user: str = ""):
     """동시 수·시간당 총량을 걸고 실제 발신 직전에 센다 (§21-2)."""
-    if not _hour_ok(exempt, cap=max_per_hour):
+    if not _hour_ok(exempt, cap=max_per_hour, kind=kind):
         log.warning("시간당 상한 도달 — %d건/1h (용도 %s)",
                     max_per_hour or MAX_PER_HOUR, kind or "?")
         raise Blocked(BLOCKED_HOUR)
