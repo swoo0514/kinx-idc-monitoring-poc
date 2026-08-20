@@ -368,8 +368,13 @@ def _loop_checks() -> int:
         ids = [h.get("id") for h in (out.get("table") or [])]
         assert "H0" in ids, ids
 
-        # ③ 프롬프트가 누적이 아니라 재구성이다 — 2회차가 1회차의 두 배를 안 넘는다
-        assert len(seq) >= 2 and len(seq[1]) < len(seq[0]) * 2.5, [len(x) for x in seq]
+        # ③ ⭐ 프롬프트가 **누적이 아니라 재구성**이다.
+        #    2회차가 1회차를 통째로 품고 있으면 이어 붙인 것이다 — 우리가 실측한
+        #    0.4K→29.9K 가 그 모양이었다. 크기 비율은 라운드가 적을 때 의미가 없으므로
+        #    (첫 회차는 가설도 기록도 비어 있다) 포함 여부로 본다.
+        assert len(seq) >= 2, seq
+        assert seq[0] not in seq[1], "이전 프롬프트를 그대로 품고 있다 — 누적이다"
+        assert "[가설]" in seq[1] and "[지금까지]" in seq[1], "재구성한 칸이 보여야 한다"
 
         # ④ ⭐ 중복 질의는 두 번 안 돈다
         async def same(system, user, specs):
