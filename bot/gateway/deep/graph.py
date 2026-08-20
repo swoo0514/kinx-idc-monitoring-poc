@@ -158,7 +158,17 @@ def build(model_fn, run_probe, guard, system: str = ""):
     from langgraph.graph import END, StateGraph
 
     def _stop(state, why):
+        """멈출 때 **왜 멈췄는지 발자취와 함께 남긴다.**
+
+        사유만 남기면 '못가름'이 질의를 못 만든 것인지 가설이 안 갈린 것인지 알 수 없다.
+        운영에서 이 줄이 없으면 조사가 얕은 이유를 사람이 못 짚는다.
+        """
         state["stopped"] = why
+        table = state.get("table") or []
+        log.info("심층 종료 사유=%s 라운드=%s 가설=%d(미결 %d) 기록=%d 질의=%d · %s",
+                 why, state.get("round"), H.count_real(table), H.open_count(table),
+                 len(state.get("records") or {}), len(state.get("probes") or []),
+                 " / ".join((state.get("steps") or [])[-3:]))
         return state
 
     async def plan_node(state: dict) -> dict:
