@@ -163,7 +163,7 @@ def _log_usage(adapter, kind: str) -> None:
 
 
 def call(adapters, system: str, user: str, exempt: bool = False,
-         kind: str = "") -> dict:
+         kind: str = "", max_per_hour: int = None) -> dict:
     """외부 LLM 호출. 예외를 던지지 않는다."""
     t0 = time.monotonic()
 
@@ -172,7 +172,7 @@ def call(adapters, system: str, user: str, exempt: bool = False,
                 "reason": reason, "elapsed_s": round(time.monotonic() - t0, 2)}
 
     try:
-        with guard(kind, exempt) as record:
+        with guard(kind, exempt, max_per_hour=max_per_hour) as record:
             for adapter in adapters:
                 if not adapter.available():
                     continue
@@ -206,7 +206,8 @@ def _log_raw_usage(value, kind: str, user: str) -> None:
         log.warning("사용량 기록 실패 (%s): %s", kind or "?", e)
 
 
-def call_raw(fn, exempt: bool = False, kind: str = "", user: str = "") -> dict:
+def call_raw(fn, exempt: bool = False, kind: str = "", user: str = "",
+             max_per_hour: int = None) -> dict:
     """형태가 다른 호출(도구 사용 등)도 같은 출구를 지나게 한다."""
     t0 = time.monotonic()
 
@@ -215,7 +216,7 @@ def call_raw(fn, exempt: bool = False, kind: str = "", user: str = "") -> dict:
                 "elapsed_s": round(time.monotonic() - t0, 2)}
 
     try:
-        with guard(kind, exempt, user=user) as record:
+        with guard(kind, exempt, max_per_hour=max_per_hour, user=user) as record:
             record()
             value = fn()
             _log_raw_usage(value, kind, user)

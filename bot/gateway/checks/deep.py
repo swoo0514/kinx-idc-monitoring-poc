@@ -400,3 +400,90 @@ def _loop_checks() -> int:
         else:
             os.environ["DEEP_LOOP"] = saved
     return 10
+
+
+def _deep_budget_checks() -> int:
+    """심층 전용 시간당 상한 — 트리아지 예산을 먹지 않는가."""
+    from .. import egress
+
+    class _Ok:
+        name = "fake"
+
+        def __init__(self):
+            self.last_usage = None
+
+        def available(self):
+            return True
+
+        def complete(self, _s, _u):
+            return "ok"
+
+    saved = (egress.MAX_PER_HOUR, list(egress._calls))
+    try:
+        egress.MAX_PER_HOUR = 100
+        egress._calls.clear()
+        # ① 심층 상한이 전역보다 낮으면 그쪽이 먼저 걸린다
+        for _ in range(3):
+            egress.call([_Ok()], "s", "u", kind="deep", max_per_hour=3)
+        got = egress.call([_Ok()], "s", "u", kind="deep", max_per_hour=3)
+        assert got["degraded"] and got["reason"] == egress.BLOCKED_HOUR, got
+        # ② 그런데 전역 예산은 아직 남아 있어 트리아지는 돈다 — 이게 상한을 나눈 이유다
+        ok = egress.call([_Ok()], "s", "u", kind="triage")
+        assert not ok["degraded"], ok
+
+        # ③ call_raw 도 같은 인자를 받는다(계획자가 이쪽을 쓴다)
+        egress._calls.clear()
+        for _ in range(2):
+            egress.call_raw(lambda: {"content": []}, kind="deep", max_per_hour=2)
+        raw = egress.call_raw(lambda: {"content": []}, kind="deep", max_per_hour=2)
+        assert not raw["ok"] and raw["reason"] == egress.BLOCKED_HOUR, raw
+    finally:
+        egress.MAX_PER_HOUR = saved[0]
+        egress._calls.clear()
+        egress._calls.extend(saved[1])
+    return 5
+
+
+def _deep_record_checks() -> int:
+    """심층 결과 기록 — 실패도 남고, **사람 라벨을 오염시키지 않는가.**"""
+    import os
+    import tempfile
+
+    from .. import store
+    from ..alerts import quality, triage
+
+    # ① 기계가 남기는 축이 사람 라벨 축과 섞이면 안 된다.
+    #    섞이면 심층 조사 성공률이 판정 정확도로 둔갑해 슬라이드에 실린다.
+    assert "deep" not in quality.AXES, \
+        "심층 축을 품질 지표 축에 넣으면 기계 기록이 사람 라벨로 세어진다"
+
+    d = tempfile.mkdtemp(prefix="deep-note-")
+    saved = store.PATH
+    try:
+        store.PATH = os.path.join(d, "n.db")
+        store.close()
+        store.init()
+        jid = store.record_judgment({"fingerprint": "fp1", "host": "h",
+                                     "source": "zabbix-internal"})
+        assert jid
+
+        # ② 실패가 남는다 — 예전에는 로그 한 줄로 끝났다
+        triage._note_deep(jid, {"ok": 0, "stopped": "no_evidence", "error": "축 0건"})
+        # ③ 성공도 남는다
+        triage._note_deep(jid, {"ok": 1, "stopped": "판가름", "rounds": 2,
+                                "winner": "H1"})
+        rows = store._exec("SELECT axis, ok, note FROM feedback WHERE judgment_id = ?",
+                           (jid,), fetch="all") or []
+        assert len(rows) == 2, rows
+        assert {r[0] for r in rows} == {"deep"}, rows
+        assert {r[1] for r in rows} == {0, 1}, rows
+        assert any("no_evidence" in (r[2] or "") for r in rows), rows
+        assert any("H1" in (r[2] or "") for r in rows), rows
+
+        # ④ 품질 지표는 이 행들을 안 센다
+        lab = store.labels_for([jid]).get(jid) or {}
+        assert not (set(lab) & set(quality.AXES)), lab
+    finally:
+        store.close()
+        store.PATH = saved
+    return 9

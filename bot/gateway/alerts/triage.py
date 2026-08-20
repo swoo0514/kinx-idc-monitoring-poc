@@ -246,12 +246,12 @@ async def run_incident(inc, force: bool = False) -> dict:
                                                  merged=inc.is_merged(),
                                                  verdict=incident_mod.dominant_verdict(context))
     if fire_h:
-        log.info("holmes deep-dive scheduled fp=%s reason=%s", fp, reason_h)
+        log.info("deep-dive scheduled fp=%s reason=%s", fp, reason_h)
         _spawn_bg(_deep_investigate(
             inc.host,
             holmes.build_question([a.alert_name for a in inc.alerts],
                                   inc.classes(), inc.window_s()),
-            sev, fp, anchor or posted.get("ts")))
+            sev, fp, anchor or posted.get("ts"), context=context, jid=jid))
 
     timings["total_s"] = round(time.monotonic() - t0, 2)
     await asyncio.to_thread(_finish, jid, {
@@ -273,18 +273,64 @@ async def run_incident(inc, force: bool = False) -> dict:
 
 
 async def _deep_investigate(host: str, question: str, sev: str,
-                            fingerprint: str = "", thread_ts: str = None) -> None:
-    """백그라운드 심층조사 → Slack 스레드 답글 + Keep Note enrich. 회수 경로는 가이드 §10."""
+                            fingerprint: str = "", thread_ts: str = None,
+                            context: dict = None, jid: int = 0) -> None:
+    """백그라운드 심층조사 → Slack 스레드 답글 + Keep Note enrich. 회수 경로는 가이드 §36.
+
+    자체 심층 모드가 켜져 있으면 그쪽으로, 아니면 HolmesGPT 로 간다. 둘을 나란히 두는
+    것은 같은 사건으로 비교해 보고 제거를 정하기 위해서다(설계서 단계 6).
+    """
+    from ..deep import entry as deep_entry
+
     t0 = time.monotonic()
-    res = await asyncio.to_thread(holmes.investigate, host, question)
+    own = deep_entry.enabled() and context is not None
+    if own:
+        res = await deep_entry.investigate_incident(context)
+        analysis = res.get("text") or ""
+        label = "심층조사"
+    else:
+        res = await asyncio.to_thread(holmes.investigate, host, question)
+        analysis = res.get("analysis") or ""
+        label = "심층조사 — HolmesGPT"
     took = round(time.monotonic() - t0, 1)
-    if not res.get("ok"):
-        log.warning("holmes deep-dive no result host=%s took=%ss err=%s",
-                    host, took, res.get("error"))
+
+    if not res.get("ok") or not analysis:
+        # **실패도 남긴다.** 예전에는 로그 한 줄로 끝나서 담당자도 판정 행도 몰랐다.
+        why = res.get("error") or "결과가 비었다"
+        log.warning("deep-dive no result host=%s took=%ss stopped=%s err=%s",
+                    host, took, res.get("stopped"), why)
+        if jid:
+            await asyncio.to_thread(_note_deep, jid, {
+                "ok": 0, "took_s": took, "stopped": res.get("stopped") or "",
+                "error": why, "own": 1 if own else 0})
         return
-    analysis = res["analysis"]
-    await asyncio.to_thread(slack.post_triage, f"[심층조사] {host} — HolmesGPT",
+
+    await asyncio.to_thread(slack.post_triage, f"[{label}] {host}",
                             sev, host, "심층조사", analysis, thread_ts)
     if fingerprint:
         await asyncio.to_thread(keep.enrich_note, fingerprint, analysis)
-    log.info("holmes deep-dive done host=%s took=%ss (slack thread + keep note)", host, took)
+    if jid:
+        await asyncio.to_thread(_note_deep, jid, {
+            "ok": 1, "took_s": took, "stopped": res.get("stopped") or "",
+            "rounds": res.get("rounds"), "records": res.get("records"),
+            "probes": res.get("probes"), "winner": res.get("winner"),
+            "loop": res.get("loop"), "own": 1 if own else 0})
+    log.info("deep-dive done host=%s took=%ss own=%s stopped=%s (slack thread + keep note)",
+             host, took, own, res.get("stopped"))
+
+
+def _note_deep(jid: int, fields: dict) -> None:
+    """심층 조사 결과를 판정 행에 남긴다. **성공도 실패도 남는다.**
+
+    예전에는 실패가 로그 한 줄로 끝나 담당자도 판정 행도 몰랐다. `store.finish` 를 쓰지
+    않는 이유는 그쪽이 모르는 열을 **조용히 버려서** 기록이 안 남고도 성공으로 보이기
+    때문이다. 판정 주석은 열을 안 늘려도 되고 나중에 집계로 읽힌다.
+    """
+    from .. import store
+
+    ok = bool(fields.pop("ok", 0))
+    note = " · ".join("%s=%s" % (k, v) for k, v in fields.items() if v not in (None, ""))
+    try:
+        store.record_feedback(jid, "deep", ok, note=note[:500], who="deep-mode")
+    except Exception as e:                       # 기록 실패가 분석을 막으면 안 된다
+        log.warning("심층 조사 기록 실패 jid=%s: %s", jid, e)

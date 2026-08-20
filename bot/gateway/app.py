@@ -244,6 +244,30 @@ class AskRequest(BaseModel):
     history: list = []
     # 사람이 보고 있던 패널. 있으면 그 그림을 코드가 붙인다(모델 판단에 안 맡긴다).
     panel: dict = {}
+    # 화면의 심층 모드 토글. 알림 경로는 게이트가 자동으로 정하지만 질의는 사람이 정한다.
+    deep: bool = False
+
+
+async def _ask_deep(question: str, user: str) -> dict:
+    """심층 모드 질의 — 사람이 화면에서 토글을 켰을 때만 온다.
+
+    알림 경로와 **같은 반복문**을 쓴다. 다른 것은 사건 요약이 알림이 아니라 질문이라는 것뿐.
+    시간이 분 단위라 질의 마감(기본 60초)을 그대로 쓰면 구조적으로 못 끝낸다.
+    """
+    from .deep import entry as deep_entry
+
+    context = {"incident": {"host": "", "classes": [], "dominant_sev": ""},
+               "alerts": [{"name": question}], "host": {}}
+    try:
+        got = await deep_entry.investigate_incident(context)
+    except Exception as e:
+        log.warning("심층 질의 실패: %s", e)
+        return {"text": "", "trace": [], "rounds": 0, "images": [],
+                "stopped": "deep_failed", "error": str(e)}
+    return {"text": got.get("text") or "", "trace": [], "images": [],
+            "rounds": int(got.get("rounds") or 0),
+            "stopped": got.get("stopped") or "",
+            "error": got.get("error") or "", "deep": True}
 
 
 @app.post("/ask")
@@ -265,8 +289,12 @@ async def ask_endpoint(req: AskRequest, request: Request,
     log.info("ask panel keys=%s from=%r to=%r",
              sorted((req.panel or {}).keys()),
              (req.panel or {}).get("from"), (req.panel or {}).get("to"))
-    res = await ask.run_ask(req.question, history=hist,
-                            sid=req.session or cid or user, user=user, panel=req.panel)
+    if req.deep:
+        res = await _ask_deep(req.question, user)
+    else:
+        res = await ask.run_ask(req.question, history=hist,
+                                sid=req.session or cid or user, user=user,
+                                panel=req.panel)
     await _off_loop(convo.append, cid, user, "user", req.question)
     if res.get("text"):
         # 그림도 함께 남긴다. 안 남기면 새로고침한 순간 화면에서 사라진다.

@@ -1,0 +1,31 @@
+# Keep 워크플로 — 사람이 요청하는 심층 조사 (프로비저닝 as-code).
+#
+# 봇의 게이트는 신규 사건에만 심층 조사를 태운다. 그 판단이 늘 맞지는 않으므로 담당자가
+# "이건 깊게 봐야겠다" 싶을 때 직접 부를 수 있어야 한다. 없으면 게이트의 판단이 곧 최종
+# 결정이 되고 사람은 뒤집을 방법이 없다.
+#
+# 승인 계층을 새로 만들지 않는다 — 데모 B(시스템 변경)·월간 리포트(고객 발송)·규칙 교체·
+# 재분석에 쓰던 것을 그대로 쓰는 다섯 번째 적용이다. 설계 근거는 keep/KEEP_GUIDE.md.
+workflow:
+  id: deep-analyze
+  name: Investigate this deeply
+  description: Run the deep investigation loop (survey -> hypotheses -> probes)
+  triggers:
+    - type: manual
+  steps:
+    - name: deep
+      # 안전 게이트 — 심층 요청이 붙은 카드에서만 실행된다. 다른 알림에서 실수로 Run 해도
+      # 아무 일도 일어나지 않는다(데모 B 의 service_restart 게이트와 같은 형태).
+      if: "'{{ alert.playbook }}' == 'deep_analyze'"
+      provider:
+        type: ssh
+        config: "{{ providers.core-ansible }}"
+        with:
+          # analyze_ref 로 사건을 되살린다 — 요청 시점에 Zabbix 를 다시 읽어야 그동안
+          # 달라진 상태가 조사에 들어온다. 결과는 평소와 같은 Slack 카드로 간다.
+          command: >-
+            cd /home/rocky/kinx-idc-monitoring-poc/bot &&
+            set -a && . .env && set +a &&
+            ~/bot-venv/bin/python tools/deep_analyze.py
+            --host '{{ alert.host }}'
+            --ref '{{ alert.analyze_ref }}'
