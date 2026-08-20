@@ -127,3 +127,56 @@ def _time_order_checks() -> int:
     assert V.time_ok({"t_first": 0, "t_last": 0}, effect)
     assert V.time_ok(cause, {"t_first": 0, "t_last": 0})
     return 4
+
+
+def _condense_adapter_checks() -> int:
+    """축약 어댑터 — 사용량 매핑과 **판단 경로 오염 금지**."""
+    import os
+
+    from .. import llm
+    from ..deep import condense
+    from ..integrations import openai_luna
+
+    # ① 어댑터 계약 — 출구가 읽는 자리를 다 갖췄는가
+    ad = openai_luna.LunaAdapter()
+    for attr in ("name", "available", "complete", "last_usage", "model"):
+        assert hasattr(ad, attr), attr
+    assert ad.name != "claude", "이름이 겹치면 사용량 표에서 안 갈린다"
+
+    # ② OpenAI 는 토큰 이름이 다르다. 잘못 매핑하면 **공급자가 조용히 무료로 보인다.**
+    got = openai_luna.map_usage({
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20,
+                  "prompt_tokens_details": {"cached_tokens": 60}},
+        "model": "gpt-5.6-luna"})
+    assert got["in"] == 100 and got["out"] == 20, got
+    assert got["cache_read"] == 60, "cached_tokens 를 캐시 읽기로 옮겨야 한다"
+    assert got["cache_write"] == 0, "OpenAI 는 캐시 쓰기 개념이 없다"
+    assert got["model"] == "gpt-5.6-luna"
+    assert openai_luna.map_usage({}) is None, "사용량이 없으면 추정하지 않는다"
+
+    # ③ ⭐ **판단 경로에 Luna 가 섞이면 안 된다.**
+    #    `_adapters()` 는 등록부가 아니라 폴백 체인이라, 넣으면 Claude 가 죽는 순간
+    #    트리아지 판단 프롬프트와 월간 리포트가 통째로 OpenAI 로 간다.
+    saved = os.environ.get("OPENAI_API_KEY")
+    os.environ["OPENAI_API_KEY"] = "sk-검사용"
+    try:
+        for kind in ("triage", "write"):
+            names = [a.name for a in llm._adapters(kind)]
+            assert openai_luna.LunaAdapter.name not in names, (
+                f"{kind} 체인에 축약 모델이 들어갔다 — 판단이 값싼 모델로 넘어간다")
+
+        # ④ 축약 전용 체인은 Luna 가 앞이고 haiku 가 뒤다(열화 경로)
+        chain = [a.name for a in condense.adapters()]
+        assert chain and chain[0] == openai_luna.LunaAdapter.name, chain
+        assert "claude" in chain, "Luna 가 없거나 죽으면 haiku 로 내려가야 한다"
+
+        # ⑤ 키가 없으면 Luna 는 스스로 빠진다 — 체인이 비지 않는다
+        os.environ.pop("OPENAI_API_KEY", None)
+        chain2 = [a.name for a in condense.adapters() if a.available()]
+        assert openai_luna.LunaAdapter.name not in chain2
+    finally:
+        if saved is None:
+            os.environ.pop("OPENAI_API_KEY", None)
+        else:
+            os.environ["OPENAI_API_KEY"] = saved
+    return 14

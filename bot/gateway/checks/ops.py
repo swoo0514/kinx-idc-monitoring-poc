@@ -439,12 +439,17 @@ def _llm_concurrency_checks() -> int:
         # Slack 은 chat.postMessage 라 /api/chat 로 잡으면 오검출된다
         TALKS_PROVIDER = [(r"/api/chat(?![.\w])", "채팅 API"),
                           (r"/v1/messages", "Anthropic 메시지 API"),
-                          (r"\banthropic\.", "Anthropic SDK")]
+                          (r"\banthropic\.", "Anthropic SDK"),
+                          (r"\bopenai\.", "OpenAI SDK"),
+                          (r"/v1/(chat/completions|responses)", "OpenAI 메시지 API")]
         # gateway/ 아래 전부와 bot/ 스크립트를 본다 — 검사 파일은 뺀다(주소가 문자열로 들어 있다)
         gw = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         bot = os.path.dirname(gw)
         files = sorted(glob.glob(os.path.join(gw, "**", "*.py"), recursive=True))
         files += sorted(glob.glob(os.path.join(bot, "*.py")))
+        # bot/ 에 최상위 .py 가 없어 tools/ 12개가 통째로 범위 밖이었다 —
+        # 그래서 latency_bench.py 예외 항목도 한 번도 안 걸렸다(죽은 예외).
+        files += sorted(glob.glob(os.path.join(bot, "tools", "*.py")))
         for f in files:
             base = os.path.basename(f)
             if base == "selftest.py" or os.sep + "checks" + os.sep in f:
@@ -453,8 +458,10 @@ def _llm_concurrency_checks() -> int:
             hits = []
             if base != "egress.py":
                 hits += [w for p, w in CALLS_ADAPTER if re.search(p, src, re.M)]
-            # 어댑터가 사는 곳 둘(llm.py·holmes.py)과 중계(proxy.py)만 공급자 주소를 쓴다
-            if base not in ("egress.py", "llm.py", "holmes.py", "proxy.py", "app.py"):
+            # 어댑터가 사는 곳(llm.py·holmes.py·openai_luna.py)과 중계(proxy.py)만
+            # 공급자 주소를 쓴다. 새 공급자를 붙이면 이 줄과 TALKS_PROVIDER 를 함께 고친다.
+            if base not in ("egress.py", "llm.py", "holmes.py", "openai_luna.py",
+                            "proxy.py", "app.py"):
                 hits += [w for p, w in TALKS_PROVIDER if re.search(p, src, re.M)]
             if base in KNOWN_OUTSIDE:
                 assert hits, (f"{base} 가 예외 목록에 있는데 나가는 코드가 없다 — "

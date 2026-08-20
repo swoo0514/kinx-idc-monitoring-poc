@@ -3,4 +3,4 @@
 설계와 문헌 근거는 private/docs/deep_mode_design.md, 배선은 bot/GATEWAY_GUIDE.md §36.
 """
 
-from . import hypothesis, probe, verify  # noqa: F401
+from . import condense, hypothesis, probe, verify  # noqa: F401

@@ -84,6 +84,8 @@ _MODEL_ENV = {
     "triage": "LLM_MODEL_INVESTIGATE",
     "write": "LLM_MODEL_WRITE",               # 월간 리포트 서사
     "route": "LLM_MODEL_ROUTE",               # 짧은 판단(별도 호출을 만들 때)
+    "plan": "LLM_MODEL_PLAN",                 # 심층 조사 계획자(가설 수립·갱신)
+    "condense": "LLM_MODEL_CONDENSE",         # 심층 조사 축약(판단 안 함)
 }
 
 
