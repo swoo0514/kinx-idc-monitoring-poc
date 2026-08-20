@@ -55,13 +55,23 @@ def prepare(context: dict, masker):
     }
 
 
+def goal_of(inc: dict) -> str:
+    """무엇을 조사하는지 한 줄. **가린 이름만 쓴다.**
+
+    알림 경로에서는 알림 이름, 질의 경로에서는 질문이 `names` 에 들어온다. 둘 다
+    `prepare` 가 이미 가린 값이다.
+    """
+    return ("%s %s" % (inc.get("host", ""),
+                       ", ".join(inc.get("names") or []))).strip()[:200]
+
+
 async def condense_axis(axis: str, subgoal: str, now_res: dict, base_res: dict,
-                        record_id: str, call):
+                        record_id: str, call, goal: str = ""):
     """축 결과 둘을 기록 하나로. 반환 `(기록, 사유)`."""
     from .. import prompts
 
     system = prompts.load("deep_condense", "축을 한 덩이로 줄인다. JSON 하나만 낸다.")
-    user = memory.condense_input(axis, subgoal, now_res, base_res)
+    user = memory.condense_input(axis, subgoal, now_res, base_res, goal=goal)
     res = await call(system, user)
     if not res.get("ok"):
         return None, res.get("reason") or "축약 호출 실패"
@@ -117,13 +127,14 @@ async def survey(st: dict, inc: dict, run_tool, condense_call, now: int) -> None
     span = (now - 3600, now)
     bspan = baseline.window(*span)
     host = inc.get("host", "")
+    goal = goal_of(inc)
     plan = [(axis, tool, memory.next_record_id(st, axis)) for axis, tool in SURVEY]
 
     async def one(axis, tool, rid):
         a, b = await asyncio.gather(run_tool(tool, tool_args(tool, host, span)),
                                     run_tool(tool, tool_args(tool, host, bspan)))
         return axis, await condense_axis(axis, condense.SUBGOAL.get(axis, ""),
-                                         a[0], b[0], rid, condense_call)
+                                         a[0], b[0], rid, condense_call, goal=goal)
 
     for axis, (rec, why) in await asyncio.gather(*[one(*p) for p in plan]):
         if rec:
@@ -149,6 +160,7 @@ async def investigate(context: dict, masker, model_call, condense_call,
 
     now = int(now or time.time())
     inc = prepare(context, masker)
+    goal = goal_of(inc)
     st = S.new_state(inc, {})
     started = time.monotonic()
 
@@ -169,7 +181,7 @@ async def investigate(context: dict, masker, model_call, condense_call,
         rid = memory.next_record_id(st, req["tool"].split("_")[-1])
         axis = next((ax for ax, t in SURVEY if t == req["tool"]), "metrics")
         return await condense_axis(axis, req.get("why") or "", res, {}, rid,
-                                   condense_call)
+                                   condense_call, goal=goal)
 
     system = prompts.load("deep_plan", "조사 → 가설 → 검증으로 원인을 좁힌다.")
     app = G.build(model_call, _probe, guard, system=system)

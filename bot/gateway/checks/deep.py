@@ -225,15 +225,28 @@ def _memory_checks() -> int:
     # ④ ⭐ 축약 입력에는 사건 서사도 다른 축도 가설도 안 실린다
     st2["table"] = [{"id": "H1", "claim": "가설 문장", "status": "미결"}]
     payload = M.condense_input("logs", "평소 대비 무엇이 다른가",
-                               {"lines": ["a"]}, {"lines": ["b"]})
-    for leak in ("복제 지연", "SEV2", "가설 문장", "신규", "security#1"):
+                               {"lines": ["a"]}, {"lines": ["b"]},
+                               goal="[host-1] 복제 지연")
+    for leak in ("SEV2", "가설 문장", "신규", "security#1"):
         assert leak not in payload, "축약 입력에 %r 이 실렸다" % leak
     assert "incident_window" in payload and "baseline_window" in payload
 
-    # ⑤ 기록 id 는 축마다 이어서 붙는다
+    # ⑤ ⭐ 무엇을 조사하는지는 준다. 랩 실증에서 축약이 복제 지연·iowait 대신 메모리와
+    #    버퍼풀을 남겼다 — 계열이 여럿일 때 무엇을 남길지 고를 근거가 없었다.
+    assert "복제 지연" in payload, payload[:200]
+    assert "[host-1]" in payload and "vm-" not in payload
+
+    # ⑥ 기록 id 는 축마다 이어서 붙는다
     assert M.next_record_id(st2, "metrics") == "metrics#1"
     assert M.next_record_id(st2, "logs") == "logs#2"
-    return 12
+
+    # ⑦ 조사와 검증이 같은 목표를 넘긴다 — 한쪽만 넘기면 라운드마다 기준이 달라진다
+    import inspect
+
+    from ..deep import run as deep_run
+    src = inspect.getsource(deep_run)
+    assert src.count("goal=goal") >= 2, "조사와 검증 중 한쪽이 목표를 안 넘긴다"
+    return 15
 
 
 def _state_checks() -> int:

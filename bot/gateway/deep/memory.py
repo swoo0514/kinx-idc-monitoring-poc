@@ -112,14 +112,19 @@ def next_record_id(state: dict, axis: str) -> str:
 
 
 def condense_input(axis: str, subgoal: str, incident_window: dict,
-                   baseline_window: dict) -> str:
+                   baseline_window: dict, goal: str = "") -> str:
     """축약에게 갈 사용자 메시지.
 
-    **소목표와 그 축의 결과 둘(사건 창·정상 창)만 준다.** 사건 서사도 다른 축도 가설도
-    안 준다 — LangChain 벤치마크에서 그 정리가 개선의 큰 몫이었고, 부수 효과로 한 축약
-    호출이 사건 전체를 못 본다.
+    **소목표·조사 목표와 그 축의 결과 둘(사건 창·정상 창)만 준다.** 사건 서사도 다른
+    축도 가설도 안 준다 — LangChain 벤치마크에서 그 정리가 개선의 큰 몫이었고, 부수
+    효과로 한 축약 호출이 사건 전체를 못 본다.
+
+    목표(`goal`)는 알림 이름이나 질문을 가린 문장이다. 랩 실증에서 축약이 복제 지연과
+    iowait 대신 메모리와 버퍼풀을 남겼다 — 계열이 수십 개일 때 무엇을 남길지 고를 근거가
+    없었기 때문이다. 서사가 아니라 **조사 대상의 이름**이라 격리 원칙과 부딪히지 않는다.
     """
     return json.dumps({"axis": axis, "subgoal": subgoal,
+                       "goal": str(goal or "")[:200],
                        "incident_window": incident_window or {},
                        "baseline_window": baseline_window or {}},
                       ensure_ascii=False)[:60000]
