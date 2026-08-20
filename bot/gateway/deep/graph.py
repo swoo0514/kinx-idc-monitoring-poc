@@ -17,7 +17,10 @@ from . import condense, hypothesis as H, memory, probe as P, state as S
 log = logging.getLogger("gateway.deep.graph")
 
 MAX_ROUNDS = int(os.environ.get("DEEP_MAX_ROUNDS", "4"))
-DEADLINE_S = float(os.environ.get("DEEP_DEADLINE_S", "240"))
+# 마감은 목표가 아니라 천장이다. 실측 어림으로 조사 ~8초(병렬) + 반복문 4라운드 ~50초 +
+# 종합 ~5초 = 60초대이고, 여기에 여유를 준 값이다. **Grafana 프록시 시한(180초)보다
+# 낮아야 한다** — 넘으면 게이트웨이가 조사하는 중에 사람은 502 를 본다.
+DEADLINE_S = float(os.environ.get("DEEP_DEADLINE_S", "150"))
 RESULT_BYTES = int(os.environ.get("DEEP_RESULT_BYTES", "80000"))
 CONDENSE_MAX = int(os.environ.get("DEEP_CONDENSE_MAX", "12"))
 

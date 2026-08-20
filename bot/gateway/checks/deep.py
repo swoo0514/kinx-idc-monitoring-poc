@@ -487,3 +487,67 @@ def _deep_record_checks() -> int:
         store.close()
         store.PATH = saved
     return 9
+
+
+def _survey_parallel_checks() -> int:
+    """조사가 축을 **동시에** 훑는가.
+
+    순차로 두면 축 넷이 그대로 더해진다 — 계획서가 아키텍처 변경으로 꼽은 자리다.
+    """
+    import asyncio
+    import time
+
+    from ..deep import run as deep_run
+
+    DELAY = 0.15
+
+    async def slow_tool(name, args):
+        await asyncio.sleep(DELAY)
+        return {"status": "ok"}, 10
+
+    async def slow_condense(system, user):
+        await asyncio.sleep(DELAY)
+        return {"ok": True, "text": '{"status":"ok","finding":"본 것","units":"—",'
+                                    '"baseline_status":"ok","evidence":["x"]}'}
+
+    class _Mk:
+        _fwd = {"h": "[host-1]"}
+
+        def mask(self, x):
+            return x
+
+        def unmask(self, x):
+            return x
+
+    async def go():
+        st = {"records": {}, "steps": []}
+        t0 = time.monotonic()
+        await deep_run.survey(st, {"host": "[host-1]"}, slow_tool, slow_condense,
+                              now=1787000000)
+        return time.monotonic() - t0, st
+
+    took, st = asyncio.run(go())
+
+    # 축 4개 × (조회 2 + 축약 1) = 12번. 순차면 12*DELAY, 병렬이면 2~3 단계면 끝난다.
+    assert len(st["records"]) == 4, st["records"].keys()
+    assert took < DELAY * 7, (
+        "조사가 순차로 돈다(%0.2fs) — 축을 동시에 훑어야 한다" % took)
+    return 2
+
+
+def _deadline_checks() -> int:
+    """마감이 화면 앞단 시한보다 낮은가.
+
+    넘으면 게이트웨이가 멀쩡히 조사하는 중에 사람은 502 를 본다. 어제 감사에서 질의
+    경로가 같은 모양으로 한 번 걸렸다(프록시 기본 30초 → 180초로 올린 자리다).
+    """
+    from ..deep import graph as G
+
+    PROXY_TIMEOUT_S = 180      # lab/docker-compose.yml GF_DATAPROXY_TIMEOUT
+    assert G.DEADLINE_S < PROXY_TIMEOUT_S, (
+        "심층 마감(%s초)이 화면 앞단 시한(%s초)보다 크다 — 사람은 502 를 본다"
+        % (G.DEADLINE_S, PROXY_TIMEOUT_S))
+    # 라운드 상한과도 앞뒤가 맞아야 한다. 라운드마다 최소 한 번은 모델을 부른다.
+    assert G.MAX_ROUNDS * 10 < G.DEADLINE_S, \
+        "라운드 상한이 마감 안에 못 들어간다 — 마감으로만 끝나면 조사가 늘 잘린다"
+    return 2

@@ -85,6 +85,38 @@ def verify(text: str, state: dict):
     return got, ""
 
 
+async def survey(st: dict, inc: dict, run_tool, condense_call, now: int) -> None:
+    """조사 — 네 축 × (사건 창 + 정상 창). **축을 동시에 훑는다.**
+
+    순차로 두면 축 넷의 시간이 그대로 더해진다. 사람이 화면에서 기다리는 경로라 여기가
+    가장 큰 통제 지점이다. 축약 호출은 출구의 동시 상한에 걸려 알아서 줄 서므로 여기서
+    따로 조이지 않는다.
+
+    분류는 보지 않는다 — 게이트가 심층을 **신규** 사건에 발동시키므로 분류별 절차를 두면
+    정작 필요한 쪽(`other`)에 아무것도 없게 된다.
+    """
+    import asyncio
+
+    span = (now - 3600, now)
+    bspan = baseline.window(*span)
+    args = {"host": inc.get("host", "")}
+    plan = [(axis, tool, memory.next_record_id(st, axis)) for axis, tool in SURVEY]
+
+    async def one(axis, tool, rid):
+        a, b = await asyncio.gather(
+            run_tool(tool, dict(args, **{"range": "%d-%d" % span})),
+            run_tool(tool, dict(args, **{"range": "%d-%d" % bspan})))
+        return axis, await condense_axis(axis, condense.SUBGOAL.get(axis, ""),
+                                         a[0], b[0], rid, condense_call)
+
+    for axis, (rec, why) in await asyncio.gather(*[one(*p) for p in plan]):
+        if rec:
+            memory.put_record(st, rec)
+            memory.add_step(st, "조사: %s — %s" % (axis, rec.get("finding", "")))
+        else:
+            memory.add_step(st, "조사: %s 를 줄이지 못했다(%s)" % (axis, why))
+
+
 async def investigate(context: dict, masker, model_call, condense_call,
                       run_tool, now: int = 0):
     """조사 → 가설 → 검증을 한 번 돌린다.
@@ -109,21 +141,7 @@ async def investigate(context: dict, masker, model_call, condense_call,
             return "deadline"
         return ""
 
-    # ── 조사 — 네 축 × (사건 창 + 정상 창). 분류를 보지 않는다.
-    span = (now - 3600, now)
-    bspan = baseline.window(*span)
-    for axis, tool in SURVEY:
-        rid = memory.next_record_id(st, axis)
-        args = {"host": inc["host"]}
-        a, _ = await run_tool(tool, dict(args, **{"range": "%d-%d" % span}))
-        b, _ = await run_tool(tool, dict(args, **{"range": "%d-%d" % bspan}))
-        rec, why = await condense_axis(axis, condense.SUBGOAL.get(axis, ""),
-                                       a, b, rid, condense_call)
-        if rec:
-            memory.put_record(st, rec)
-            memory.add_step(st, "조사: %s — %s" % (axis, rec.get("finding", "")))
-        else:
-            memory.add_step(st, "조사: %s 를 줄이지 못했다(%s)" % (axis, why))
+    await survey(st, inc, run_tool, condense_call, now)
 
     if not (st.get("records") or {}):
         return {"ok": False, "stopped": "no_evidence",
