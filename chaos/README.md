@@ -24,6 +24,7 @@
 | **`service_down.sh`** | 작업자 PC (SSH 별칭 이용) | SSH 별칭 기반 대상 서비스 정지 (`service_down.sh vm-target-002 chronyd`) |
 | **`snmp_iface_error.sh`** | 관측 코어 VM (`lab/` 디렉토리) | `snmpsim` 컨테이너 제어를 통한 네트워크 에러 카운터 변동 유발 |
 | **`seed_security.sh`** | 감시 대상 VM 직접 실행 | 주요 보안 경로 파일 변조를 통한 FIM 경보 시드 생성 |
+| **`cert_expiry_chain.sh`** | 웹 서비스 역할 VM (`vm-target-001`) | 만료 인증서로 HTTPS 를 제공해 "포트는 열려 있는데 사용자는 못 붙는" 사건 생성 |
 
 *(참고: 호스트명, 사설 IP 및 SSH 별칭 매핑 정보는 [`docs/01-build/hosts.md`](../docs/01-build/hosts.md) 문서를 참조합니다.)*
 
@@ -105,3 +106,69 @@ FIM 승격 룰이 적용된 감시 경로 내 파일을 수정하여 보안 경�
 | **`service_kill.sh`** | 특정 서비스 프로세스 강제 종료 (`SIGKILL`) | Zabbix 프로세스 수 관측 트리거 (`proc.num`) |
 
 신규 장애 주입 스크립트 추가 시 대상 파라미터 제어 및 복구(Clean-up) 핸들러를 포함하여 작성하며, 본 README 문서의 동작 사양을 업데이트합니다.
+
+---
+
+## 5. 인증서 만료 사슬 (`cert_expiry_chain.sh`)
+
+### 목적
+
+심층 조사 모드의 **처음 보는 사건** 실증(랩 실증 단계 3)에 쓰는 시나리오입니다. 사건 분류기
+(`classify()`)에 인증서 관련 낱말이 없어 `other` 로 떨어지고, 원인과 증상이 **서로 다른
+호스트**에 있어 병합으로는 한 사건이 되지 않습니다. 두 신호를 잇는 것은 병합이 아니라
+조사 중의 질의여야 합니다.
+
+### 사슬의 실제 모양 — 계획서의 서술을 실측으로 정정함
+
+당초 "인증서 만료 → 443 체크 실패 → 웹 접속 실패"로 적었으나 **거꾸로입니다.** Zabbix 의
+https 체크는 인증서를 검증하지 않습니다.
+
+> "Uses (and only works with) libcurl, does not verify the authenticity of the certificate,
+> does not verify the host name in the SSL certificate, only fetches the response header
+> (HEAD request)."
+> — [Zabbix 7.0 · Service check details](https://www.zabbix.com/documentation/7.0/en/manual/appendix/items/service_check_details)
+
+따라서 실제 사슬은 이렇습니다.
+
+| 자리 | 신호 | 호스트 |
+|---|---|---|
+| 원인 | `Certificate: SSL certificate is invalid` (High) | `cert-vm-target-001.novalocal` (가상) |
+| 증상 | 저널의 `certificate has expired` 반복 | `vm-target-001.novalocal` (실호스트, Loki) |
+| **함정** | `net.tcp.service[https,,8443]` 이 **1(정상)** 로 남음 | `node1` |
+
+포트 점검이 초록으로 남는 것이 이 사건의 핵심입니다. 화면상 서비스는 정상인데 사용자는
+붙지 못합니다. 이것이 매니저가 가치를 인정한 갭(B-6)의 실물이며, 고객 도메인 443 체크만으로는
+만료를 못 잡는다는 진단의 근거이기도 합니다.
+
+### 실행
+
+```bash
+sudo DOMAIN=$(hostname -f) PORT=8443 bash cert_expiry_chain.sh
+```
+
+내부 CA 를 만들고 **이미 지난 기간으로 서버 인증서를 발급**합니다. OpenSSL 3.0 의
+`openssl req -x509` 에는 `not_before`/`not_after` 옵션이 없어(3.5 에서 추가) `openssl ca` 의
+`-startdate`/`-enddate` 를 씁니다. CA 를 신뢰 저장소에 넣는 이유는 실패 사유를 "발급자 불명"이
+아니라 **"만료"**로 만들기 위해서입니다. 사유가 다르면 사건의 성격이 달라집니다.
+
+서비스와 접속 확인이 각각 systemd 유닛으로 돌고 출력이 저널로 갑니다. Alloy 가 저널을 읽으므로
+로그가 Loki 까지 도달합니다(파일 로그는 권한 문제로 못 읽습니다 — `BUILD_GUIDE` 참고).
+
+### Zabbix 쪽 준비 (한 번만)
+
+```bash
+export ZABBIX_API_TOKEN='<관리 권한 토큰>'
+ansible-playbook -i ansible/inventory.ini -i ansible/inventory.local.ini   ansible/certificates.yml -e @ansible/certs.local.yml -e @ansible/lab_vars.yml
+```
+
+`certs.local.yml` 에 `domain: vm-target-001.novalocal` / `port: 8443` 항목이 있어야 합니다.
+포트 점검 아이템(`net.tcp.service[https,,8443]`)은 대상 호스트에 직접 답니다 — 이 아이템이
+없으면 "포트는 정상"이라는 결정적 재료가 조사에 안 잡힙니다.
+
+### 되돌리기
+
+```bash
+sudo systemctl disable --now lab-webapp.service lab-webapp-client.service
+sudo rm -f /etc/systemd/system/lab-webapp*.service            /etc/pki/ca-trust/source/anchors/lab-internal-ca.crt
+sudo update-ca-trust extract && sudo systemctl daemon-reload
+```
