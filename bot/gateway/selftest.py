@@ -94,7 +94,8 @@ from .checks.deep import (_hypothesis_checks,
     _condense_adapter_checks,
     _memory_checks,
     _state_checks,
-    _baseline_checks)
+    _baseline_checks,
+    _loop_checks)
 from .checks.ops import (_flush_checks,
     _heartbeat_checks,
     _llm_concurrency_checks,
@@ -291,7 +292,7 @@ def main():
                    + _time_order_checks()
                    + _condense_adapter_checks()
                    + _memory_checks() + _state_checks()
-                   + _baseline_checks())
+                   + _baseline_checks() + _loop_checks())
     flush_checks = _flush_checks()
 
     if fails:

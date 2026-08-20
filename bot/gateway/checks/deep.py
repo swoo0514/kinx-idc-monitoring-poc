@@ -300,3 +300,100 @@ def _baseline_checks() -> int:
     assert B.direction(None, 5) == "" and B.direction(80, None) == ""
     assert B.direction(80, "x") == ""
     return 12
+
+
+def _loop_checks() -> int:
+    """반복문 — 가르는 질의만 돌고, 판가름이 나면 멈추는가. 유료 호출 없이 돈다."""
+    import asyncio
+    import os
+
+    try:
+        import langgraph  # noqa: F401
+    except ImportError:
+        return 0        # 개발 PC 에 없으면 건너뛴다(랩에서 돈다)
+
+    from ..deep import graph as G
+    from ..deep import state as S
+
+    recs = {"metrics#1": {"id": "metrics#1", "axis": "metrics", "status": "ok",
+                          "finding": "iowait 80%", "units": "%",
+                          "baseline_status": "ok", "t_first": 100, "t_last": 900},
+            "logs#1": {"id": "logs#1", "axis": "logs", "status": "ok",
+                       "finding": "백업 마커", "units": "count",
+                       "baseline_status": "ok", "t_first": 50, "t_last": 900}}
+
+    def _plan(hyps, disc, tool="host_metrics", args=None):
+        calls = [{"type": "tool_use", "name": "plan",
+                  "input": {"hypotheses": hyps, "probe_discriminates": disc,
+                            "probe_why": "가른다", "note": ""}}]
+        if tool:
+            calls.append({"type": "tool_use", "name": tool,
+                          "input": args or {"host": "[host-1]"}})
+        return {"content": calls}
+
+    H1 = {"id": "H1", "claim": "자원 경합", "if_true": "iowait 급등",
+          "if_false": "iowait 평상", "status": "미결", "supports": [], "contradicts": []}
+    H2 = {"id": "H2", "claim": "DB 고장", "if_true": "SQL 스레드 정지",
+          "if_false": "IO/SQL 정상", "status": "미결", "supports": [], "contradicts": []}
+
+    seq = []
+
+    async def model(system, user, specs):
+        seq.append(user)
+        n = len(seq)
+        if n == 1:
+            return _plan([H1, H2], ["H1", "H2"])
+        # 2회차: 근거를 받아 판가름을 낸다
+        return _plan([dict(H1, status="지지", supports=["metrics#1"]),
+                      dict(H2, status="기각", contradicts=["metrics#1"])],
+                     ["H1", "H2"], tool=None)
+
+    async def probe(req):
+        return {"id": "metrics#2", "axis": "metrics", "status": "ok",
+                "finding": "iowait 확인", "units": "%", "baseline_status": "ok",
+                "evidence": ["iowait 80"], "t_first": 100, "t_last": 900}, ""
+
+    saved = os.environ.get("DEEP_LOOP")
+    os.environ["DEEP_LOOP"] = "hypothesis"
+    try:
+        st = S.new_state({"host": "[host-1]"}, dict(recs))
+        app = G.build(model, probe, lambda: "", system="s")
+        out = asyncio.get_event_loop().run_until_complete(
+            app.ainvoke(st, {"recursion_limit": 20}))
+
+        # ① 판가름이 나면 멈춘다 — 세는 상한이 아니라 의미로 끝나야 한다
+        assert out.get("stopped") == "판가름", out.get("stopped")
+        assert int(out.get("round") or 0) <= 2, out.get("round")
+
+        # ② H0 가 코드로 붙어 있다 (모델이 안 냈는데도)
+        ids = [h.get("id") for h in (out.get("table") or [])]
+        assert "H0" in ids, ids
+
+        # ③ 프롬프트가 누적이 아니라 재구성이다 — 2회차가 1회차의 두 배를 안 넘는다
+        assert len(seq) >= 2 and len(seq[1]) < len(seq[0]) * 2.5, [len(x) for x in seq]
+
+        # ④ ⭐ 중복 질의는 두 번 안 돈다
+        async def same(system, user, specs):
+            return _plan([H1, H2], ["H1", "H2"], args={"host": "[host-1]"})
+
+        st2 = S.new_state({"host": "[host-1]"}, dict(recs))
+        out2 = asyncio.get_event_loop().run_until_complete(
+            G.build(same, probe, lambda: "", system="s").ainvoke(
+                st2, {"recursion_limit": 20}))
+        assert len(out2.get("probes") or []) == 1, \
+            "같은 조회를 라운드마다 다시 던지면 안 된다 — 우리가 실측한 낭비가 그것이다"
+        assert out2.get("stopped") in ("못가름", "rounds"), out2.get("stopped")
+
+        # ⑤ 근거 없는 상태 변경은 되돌려진다 (조회 실패로는 기각 못 한다)
+        st3 = S.new_state({"host": "[host-1]"},
+                          {"logs#9": {"id": "logs#9", "status": "unavailable"}})
+        rej = G.apply_plan(st3, {"hypotheses": [
+            dict(H1, status="기각", contradicts=["logs#9"])]})
+        assert rej and "근거가 없다" in rej[0], rej
+        assert st3["table"][0]["status"] == "미결", st3["table"]
+    finally:
+        if saved is None:
+            os.environ.pop("DEEP_LOOP", None)
+        else:
+            os.environ["DEEP_LOOP"] = saved
+    return 10
