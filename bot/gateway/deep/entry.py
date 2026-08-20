@@ -25,11 +25,9 @@ async def _model_call(system: str, user: str, specs: list):
     from .. import egress, llm
 
     def _go():
-        if specs:
-            return llm.claude_tools(system, [{"role": "user", "content": user}], specs,
-                                    kind="plan")
-        return llm.claude_tools(system, [{"role": "user", "content": user}], [],
-                                kind="plan")
+        # 계획자 등급은 model_for 로 고른다 — claude_tools 는 kind 가 아니라 model 을 받는다
+        return llm.claude_tools(system, [{"role": "user", "content": user}],
+                                specs or [], model=llm.model_for("plan"))
 
     res = await asyncio.to_thread(egress.call_raw, _go, kind="deep",
                                   max_per_hour=MAX_PER_HOUR)

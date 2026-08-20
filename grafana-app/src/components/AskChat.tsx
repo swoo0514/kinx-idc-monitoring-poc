@@ -86,6 +86,9 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [toDelete, setToDelete] = useState('');
+  // 심층 모드. 알림 경로는 게이트가 자동으로 정하지만 질의는 사람이 정한다.
+  // 켜면 조사 -> 가설 -> 검증으로 돌아 분 단위가 걸린다(게이트웨이 마감 150초).
+  const [deep, setDeep] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   // 이 탭을 가리키는 이름. 새 대화의 첫 턴에는 대화 번호가 아직 없는데, 그때 모두가
   // 같은 이름('ui')을 보내면 게이트웨이에서 한 세션이 된다. 한 사람이 누른 멈춤이 남의
@@ -184,6 +187,8 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
         // 식별자를 못 받아 제목으로 뒤진다. 첫 턴은 맞고 둘째 턴은 틀리므로
         // 사람이 원인을 가장 짚기 어렵다. 같은 그림을 다시 붙일지는 모델이 정한다.
         panel,
+        // 심층 모드는 같은 반복문을 쓰고 사건 요약만 질문으로 바뀐다.
+        deep,
       });
       if (waitingRef.current !== asked) {
         // 사람이 다른 대화로 옮겨 갔다. 답은 서버에 남아 있으므로 그 대화를 다시 열면
@@ -328,6 +333,21 @@ export function AskChat({ prefill, compact, panel }: { prefill?: string; compact
               </button>
             )}
           </div>
+          <div className={s.opts}>
+            <button
+              className={deep ? s.optOn : s.opt}
+              onClick={() => setDeep((v) => !v)}
+              title="여러 축을 훑고 가설을 세워 하나씩 검증합니다. 1~2분 걸립니다."
+            >
+              <Icon name={deep ? 'check-square' : 'square-shape'} size="sm" />
+              심층 조사
+            </button>
+            {deep && (
+              <span className={s.optNote}>
+                {busy ? '조사하는 중입니다. 1~2분 걸립니다.' : '여러 축을 훑고 가설을 검증합니다. 1~2분 걸립니다.'}
+              </span>
+            )}
+          </div>
         </div>
       </main>
 
@@ -409,6 +429,17 @@ const getStyles = (theme: GrafanaTheme2) => ({
   trace: css`margin-top:${theme.spacing(1.5)};display:flex;flex-wrap:wrap;gap:5px;`,
   chip: css`font-size:12px;padding:2px 8px;border-radius:10px;background:${theme.colors.background.canvas};border:1px solid ${theme.colors.border.weak};color:${theme.colors.text.secondary};`,
   composer: css`padding:${theme.spacing(1.5)};border-top:1px solid ${theme.colors.border.weak};`,
+  opts: css`display:flex;align-items:center;gap:${theme.spacing(1)};margin-top:${theme.spacing(1)};`,
+  opt: css`
+    display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;
+    border:1px solid ${theme.colors.border.weak};border-radius:9px;padding:3px 9px;
+    background:none;color:${theme.colors.text.secondary};
+    &:hover{background:${theme.colors.background.secondary};}`,
+  optOn: css`
+    display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;
+    border:1px solid ${theme.colors.border.strong};border-radius:9px;padding:3px 9px;
+    background:${theme.colors.background.secondary};color:${theme.colors.text.maxContrast};`,
+  optNote: css`font-size:12px;color:${theme.colors.text.disabled};`,
   inputBox: css`
     position:relative;border:1px solid ${theme.colors.border.medium};border-radius:12px;
     background:${theme.colors.background.primary};

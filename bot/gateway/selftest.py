@@ -99,7 +99,8 @@ from .checks.deep import (_hypothesis_checks,
     _deep_budget_checks,
     _deep_record_checks,
     _survey_parallel_checks,
-    _deadline_checks)
+    _deadline_checks,
+    _entry_wiring_checks)
 from .checks.ops import (_flush_checks,
     _heartbeat_checks,
     _llm_concurrency_checks,
@@ -298,7 +299,8 @@ def main():
                    + _memory_checks() + _state_checks()
                    + _baseline_checks() + _loop_checks()
                    + _deep_budget_checks() + _deep_record_checks()
-                   + _survey_parallel_checks() + _deadline_checks())
+                   + _survey_parallel_checks() + _deadline_checks()
+                   + _entry_wiring_checks())
     flush_checks = _flush_checks()
 
     if fails:

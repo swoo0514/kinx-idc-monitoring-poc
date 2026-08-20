@@ -551,3 +551,43 @@ def _deadline_checks() -> int:
     assert G.MAX_ROUNDS * 10 < G.DEADLINE_S, \
         "라운드 상한이 마감 안에 못 들어간다 — 마감으로만 끝나면 조사가 늘 잘린다"
     return 2
+
+
+def _entry_wiring_checks() -> int:
+    """배선 — 진입점이 실제로 부르는 함수와 인자가 맞는가.
+
+    골격을 가짜로만 검사하면 **배선이 틀려도 전부 통과한다.** 실제로 첫 랩 실행이
+    `claude_tools() got an unexpected keyword argument 'kind'` 로 5초 만에 죽었다.
+    """
+    import inspect
+
+    from .. import egress, llm
+    from ..deep import condense, entry
+
+    # ① 계획자·종합이 부르는 함수의 인자가 실제 시그니처에 있는가
+    p = inspect.signature(llm.claude_tools).parameters
+    for need in ("system", "messages", "tools", "model"):
+        assert need in p, "claude_tools 에 %s 가 없다" % need
+    assert "kind" not in p, "kind 를 받는다면 entry 가 그것을 써야 한다"
+
+    # ② 출구가 심층 전용 상한을 받는가 (entry 가 넘긴다)
+    for fn in (egress.call, egress.call_raw):
+        assert "max_per_hour" in inspect.signature(fn).parameters, fn.__name__
+
+    # ③ 축약 체인이 출구가 아는 어댑터 계약을 지키는가
+    for ad in condense.adapters():
+        for attr in ("name", "available", "complete"):
+            assert hasattr(ad, attr), (ad, attr)
+
+    # ④ 진입점이 조사에 넘기는 도구 이름이 닫힌 카탈로그 안에 있는가 —
+    #    없는 도구를 부르면 조사가 통째로 빈다
+    from ..ask import tools as asktools
+    from ..deep import probe as P
+    from ..deep import run as deep_run
+
+    names = {t.get("name") for t in (asktools.TOOL_SPECS or [])}
+    for axis, tool in deep_run.SURVEY:
+        assert tool in names, "조사가 없는 도구를 부른다: %s" % tool
+        assert tool in P.catalog(), tool
+    assert entry.enabled() in (True, False)
+    return 12
