@@ -41,7 +41,10 @@ def prepare(context: dict, masker):
     alerts = context.get("alerts") or []
     pj = next((a.get("prejudge") or {} for a in alerts if a.get("prejudge")), {})
     return {
-        "host": masker.mask(inc.get("host") or context.get("host", {}).get("host", "")),
+        # 질의 경로는 이미 토큰을 넣어 준다. 토큰을 다시 가리면 표에 없는 값이 된다.
+        "host": (inc.get("host") if str(inc.get("host") or "").startswith("[")
+                 else masker.mask(inc.get("host")
+                                  or context.get("host", {}).get("host", ""))),
         "names": [masker.mask(a.get("name") or "") for a in alerts][:8],
         "classes": list(inc.get("classes") or []),
         "sev": inc.get("dominant_sev") or "",

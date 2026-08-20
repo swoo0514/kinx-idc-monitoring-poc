@@ -60,6 +60,24 @@ def _tool_runner(ctx: dict):
     return run
 
 
+def host_from_question(question: str, table: dict) -> str:
+    """질문에 적힌 이름에서 대상 토큰을 찾는다.
+
+    알림 경로는 사건에 호스트가 들어 있지만 **질의는 질문 안에 있다.** 이걸 안 풀면
+    조사가 빈 대상으로 나가고 네 축이 통째로 실패한다 — 랩 첫 실행이 그랬다.
+    """
+    from ..ask.table import resolve_mentions
+
+    resolved = resolve_mentions(question or "", table or {})
+    hits = [tok for tok in (table or {}) if tok in resolved]
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        log.info("질문에 대상이 여럿이다(%s) — 첫 번째를 쓴다", ", ".join(hits[:4]))
+        return hits[0]
+    return ""
+
+
 async def investigate_incident(context: dict, host_token_hint: str = ""):
     """알림 사건 하나를 심층 조사한다. 반환은 `run.investigate` 결과 그대로."""
     from .. import masking
@@ -83,5 +101,15 @@ async def investigate_incident(context: dict, host_token_hint: str = ""):
         "fetch_judgments": lambda h, d: fetch_judgments(h, d, mk),
         "fetch_metrics": lambda ent, m, a, b: fetch_metrics(ent, m, a, b, mk),
     }
+    # 질의 경로는 사건에 호스트가 없다 — 질문에서 찾아 넣는다
+    if not ((context.get("incident") or {}).get("host")):
+        q = " ".join(str(a.get("name") or "") for a in (context.get("alerts") or []))
+        tok = host_token_hint or host_from_question(q, table)
+        if not tok:
+            return {"ok": False, "stopped": "no_target",
+                    "error": "질문에서 조회할 대상을 못 찾았다. 호스트 이름을 함께 적어라"}
+        context = dict(context)
+        context["incident"] = dict(context.get("incident") or {}, host=tok)
+
     return await deep_run.investigate(context, mk, _model_call, _condense_call,
                                       _tool_runner(ctx))

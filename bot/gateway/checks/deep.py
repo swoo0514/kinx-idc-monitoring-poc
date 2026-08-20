@@ -599,3 +599,43 @@ def _entry_wiring_checks() -> int:
         assert tool in P.catalog(), tool
     assert entry.enabled() in (True, False)
     return 12
+
+
+def _ask_target_checks() -> int:
+    """질의 심층 — **질문에서 대상을 찾아내는가.**
+
+    알림은 사건에 호스트가 들어 있지만 질의는 질문 안에 있다. 안 풀면 조사가 빈 대상으로
+    나가 네 축이 통째로 실패한다 — 랩 첫 실행이 그렇게 "구분할 수 없다"로 끝났다.
+    """
+    from ..deep import entry, run as deep_run
+
+    table = {"[host-1]": {"host": "vm-p3-target-002.novalocal",
+                          "logs": "vm-p3-target-002.novalocal", "security": ""},
+             "[host-2]": {"host": "lab-db-agent", "logs": "lab-db-agent",
+                          "security": ""}}
+
+    q = "vm-p3-target-002.novalocal 의 복제 지연이 심각합니다"
+    assert entry.host_from_question(q, table) == "[host-1]", \
+        entry.host_from_question(q, table)
+    assert entry.host_from_question("복제가 느립니다", table) == "", "대상이 없으면 빈 값"
+
+    class _Mk:
+        _fwd = {"x": "y"}
+
+        def mask(self, v):
+            return "가려짐"
+
+        def unmask(self, v):
+            return v
+
+        def register(self, *a, **kw):
+            return ""
+
+    # 이미 토큰인 값을 또 가리면 표에 없는 값이 되어 조회가 전부 실패한다
+    inc = deep_run.prepare({"incident": {"host": "[host-1]"}, "alerts": [], "host": {}},
+                           _Mk())
+    assert inc["host"] == "[host-1]", inc["host"]
+    inc2 = deep_run.prepare({"incident": {"host": "실명"}, "alerts": [], "host": {}},
+                            _Mk())
+    assert inc2["host"] == "가려짐", inc2["host"]
+    return 4
