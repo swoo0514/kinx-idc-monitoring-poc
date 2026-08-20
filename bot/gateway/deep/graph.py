@@ -157,20 +157,20 @@ def build(model_fn, run_probe, guard, system: str = ""):
     """
     from langgraph.graph import END, StateGraph
 
-    def _untested(state):
-        """가를 수 없다는 말을 아직 할 수 없는 상태인가.
+    def _honest(state, reason):
+        """질의를 한 번도 안 던졌을 때 붙일 수 있는 사유로 고친다.
 
         **가를 수 없다는 것은 질의를 해 보고 아는 것이다.** 랩 첫 실행이 축 기록 넷과 미결
         가설 둘을 쥐고 질의 0개로 1라운드에 끝났다 — 이 설계가 막으려던 조기 종결을 설계
-        자신이 했다. 그래서 질의가 하나도 안 나갔으면 사유를 지우고 다시 시킨다. 라운드
-        상한이 그대로 천장이라 무한히 되풀이하지 않는다.
+        자신이 했다. 그래서 질의가 하나도 안 나갔으면 사유를 지우고 다시 시키고, 상한까지
+        가서도 안 나갔으면 '못 가름'이 아니라 상한이라고 적는다. 둘은 사람이 할 일이 다르다.
         """
         if state.get("probes"):
-            return False
+            return reason
         if int(state.get("round") or 0) >= MAX_ROUNDS:
-            return False
+            return "rounds"
         memory.add_step(state, "질의를 안 냈다 — 가설을 가를 질의를 하나 반드시 내라")
-        return True
+        return ""
 
     def _stop(state, why):
         """멈출 때 **왜 멈췄는지 발자취와 함께 남긴다.**
@@ -248,10 +248,10 @@ def build(model_fn, run_probe, guard, system: str = ""):
         if loop_mode() == "hypothesis":
             reason, _note = H.done(state.get("table") or [],
                                    probes_left=bool(state.get("probe")))
-            if reason == "못가름" and _untested(state):
-                reason = ""
-        elif not state.get("probe") and not _untested(state):
-            reason = "못가름"
+            if reason == "못가름":
+                reason = _honest(state, reason)
+        elif not state.get("probe"):
+            reason = _honest(state, "못가름")
         if reason:
             return _stop(state, reason)
 
