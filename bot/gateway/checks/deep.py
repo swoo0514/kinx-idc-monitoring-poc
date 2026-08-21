@@ -443,6 +443,16 @@ def _hypothesis_survival_checks() -> int:
     assert kept[0]["supports"] == ["metrics#1"], kept[0]
     assert rejected and "H1" in rejected[0]
 
+    # 반증을 받고도 지지로 남기면 그 갱신만 되돌린다 — 조사를 통째로 멈추지 않는다.
+    # 랩에서 이것 하나로 5기록·3가설을 쌓은 조사가 invalid_state 로 끝났다(2026-08-21).
+    st3 = {"records": recs, "table": [dict(H1, status="미결")]}
+    rejected = G.apply_plan(st3, {"hypotheses": [dict(H1, status="지지",
+                                                      supports=["metrics#1"],
+                                                      contradicts=["metrics#1"])]})
+    got = [h for h in st3["table"] if h.get("id") == "H1"][0]
+    assert got["status"] != "지지", got
+    assert rejected and "반증" in rejected[0], rejected
+
     # 처음 나온 가설이 잘못 인용하면 버린다 — 남길 이전 모습이 없다
     st2 = {"records": recs, "table": []}
     G.apply_plan(st2, {"hypotheses": [{"id": "H9", "claim": "새 가설",

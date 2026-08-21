@@ -102,6 +102,11 @@ def apply_plan(state: dict, plan: dict) -> list:
                 rejected.append("%s: %s 로 바꿀 근거가 없다(조회 성공 기록 필요)"
                                 % (h.get("id"), want))
                 h = dict(h, status=was)
+        # 반증을 받고도 지지로 남기면(RF-09) 그 갱신만 되돌린다. 상태 검사가 잡아 조사를
+        # 통째로 멈추는 것보다 낫다 — 랩에서 이것 하나로 5기록·3가설 조사가 끝났다.
+        if H.stale_belief(h):
+            rejected.append("%s: 반증을 적어 두고 지지로 남길 수 없다" % h.get("id"))
+            h = dict(h, status=(was if was != "지지" else "미결"))
         out.append(h)
 
     if loop_mode() == "hypothesis":
