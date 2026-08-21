@@ -488,6 +488,48 @@ def _deep_ctx_checks() -> int:
     return 3
 
 
+def _table_merge_checks() -> int:
+    """계획자가 다시 안 보낸 가설이 사라지지 않는가.
+
+    가설표는 **우리 상태**이고 모델의 일은 그것을 갱신하는 것이지 매번 전부 다시 적는 것이
+    아니다. 그런데 표를 모델 출력으로 통째로 갈아 끼우고 있어서, 모델이 하나만 보내면
+    나머지가 거절 기록도 없이 사라졌다. 같은 사건을 돌릴 때마다 가설이 3개였다 1개였다 한
+    이유가 이것이다(2026-08-21 랩, 거절 0건인데 표가 줄었다).
+
+    빼는 것은 밝히고 하는 일이어야 한다 — 기각은 상태로 적는다.
+    """
+    from ..deep import graph as G
+    from ..deep import hypothesis as H
+
+    recs = {"metrics#1": {"id": "metrics#1", "status": "ok"}}
+    H1 = {"id": "H1", "claim": "자원 경합", "status": "미결", "supports": [],
+          "contradicts": []}
+    H2 = {"id": "H2", "claim": "DB 고장", "status": "미결", "supports": [],
+          "contradicts": []}
+    st = {"records": recs, "table": [H1, H2]}
+
+    # 이번 라운드에 H1 만 보냈다 — H2 는 이전 모습으로 남는다
+    G.apply_plan(st, {"hypotheses": [dict(H1, status="지지", supports=["metrics#1"])]})
+    ids = {h.get("id"): h for h in st["table"]}
+    assert "H2" in ids, st["table"]
+    assert ids["H2"]["status"] == "미결"
+    assert ids["H1"]["status"] == "지지"
+    assert H.count_real(st["table"]) == 2
+
+    # 새 가설은 그대로 들어온다
+    G.apply_plan(st, {"hypotheses": [{"id": "H3", "claim": "새 것", "status": "미결",
+                                      "supports": [], "contradicts": []}]})
+    assert H.count_real(st["table"]) == 3
+
+    # 무한정 늘지는 않는다
+    for n in range(4, 4 + G.TABLE_MAX):
+        G.apply_plan(st, {"hypotheses": [{"id": "H%d" % n, "claim": "x",
+                                          "status": "미결", "supports": [],
+                                          "contradicts": []}]})
+    assert H.count_real(st["table"]) <= G.TABLE_MAX, H.count_real(st["table"])
+    return 7
+
+
 def _neighbor_checks() -> int:
     """다른 대상으로 조사를 넓힐 재료가 있는가.
 

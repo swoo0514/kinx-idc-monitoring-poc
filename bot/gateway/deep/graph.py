@@ -23,6 +23,8 @@ MAX_ROUNDS = int(os.environ.get("DEEP_MAX_ROUNDS", "4"))
 DEADLINE_S = float(os.environ.get("DEEP_DEADLINE_S", "150"))
 RESULT_BYTES = int(os.environ.get("DEEP_RESULT_BYTES", "80000"))
 CONDENSE_MAX = int(os.environ.get("DEEP_CONDENSE_MAX", "12"))
+# 가설표가 무한정 늘지 않게. 매 라운드 프롬프트에 통째로 실리므로 상한이 필요하다.
+TABLE_MAX = int(os.environ.get("DEEP_TABLE_MAX", "6"))
 
 
 def loop_mode() -> str:
@@ -78,7 +80,13 @@ def apply_plan(state: dict, plan: dict) -> list:
     rejected = []
     records = state.get("records") or {}
     prev = {h.get("id"): h for h in (state.get("table") or [])}
-    out = []
+
+    # **표는 우리 상태다.** 모델의 일은 갱신이지 매번 전부 다시 적는 것이 아니다. 갈아
+    # 끼우면 이번에 안 보낸 가설이 거절 기록도 없이 사라진다 — 같은 사건에서 가설이 3개였다
+    # 1개였다 한 이유가 이것이었다(2026-08-21 랩, 거절 0건인데 표가 줄었다). 빼는 것은
+    # 밝히고 하는 일이어야 하므로, 없애려면 기각을 상태로 적어야 한다.
+    out = [h for h in (state.get("table") or []) if not H.is_null(h)]
+    at = {h.get("id"): i for i, h in enumerate(out)}
 
     for h in (plan.get("hypotheses") or []):
         if H.is_null(h):
@@ -89,10 +97,7 @@ def apply_plan(state: dict, plan: dict) -> list:
             # 이미 선 가설이면 **이전 모습으로 남긴다.** 질의가 빈손으로 돌아오면 계획자가
             # 기대했던 기록 id 를 인용하는데, 그 한 번으로 표가 통째로 비면 "가설이 둘
             # 미만"이 매 라운드 반복되고 조사가 앞으로 못 간다(랩 실증 2026-08-21).
-            was_h = prev.get(h.get("id"))
-            if was_h:
-                out.append(was_h)
-            continue
+            continue        # 이전 모습은 이미 표에 남아 있다
         was = (prev.get(h.get("id")) or {}).get("status", "미결")
         want = h.get("status") or "미결"
         if want != was:
@@ -107,7 +112,16 @@ def apply_plan(state: dict, plan: dict) -> list:
         if H.stale_belief(h):
             rejected.append("%s: 반증을 적어 두고 지지로 남길 수 없다" % h.get("id"))
             h = dict(h, status=(was if was != "지지" else "미결"))
-        out.append(h)
+
+        hid = h.get("id")
+        if hid in at:
+            out[at[hid]] = h
+        elif H.count_real(out) >= TABLE_MAX:
+            rejected.append("%s: 표가 %d개로 차 있다 — 하나를 먼저 갈라라"
+                            % (hid, TABLE_MAX))
+        else:
+            at[hid] = len(out)
+            out.append(h)
 
     if loop_mode() == "hypothesis":
         out.append(H.null_hypothesis())   # 상시 유지. 덜 기각된 것을 답으로 고르지 않게.
