@@ -40,6 +40,8 @@ ansible/certs.local.yml
 # 생성된 고객 리포트 — 고객사 데이터가 담긴 산출물이라 커밋 금지.
 # report_deliver.py 는 기본 출력을 리포 밖(REPORT_OUT_DIR)으로 두지만, 그래도 이중 방어.
 *.pdf
+# 발표자료는 산출물이라 예외로 둔다. 생성 리포트 차단은 위 규칙으로 유지된다.
+!docs/00-presentation/*.pdf
 
 # Grafana 플러그인 빌드 산출물 — 소스에서 만들어진다
 grafana-app/dist/
