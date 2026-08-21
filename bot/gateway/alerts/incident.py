@@ -326,6 +326,8 @@ class Alert:
     # 계약 제약을 버리면 조치가 금지된 고객사 사건에도 변경 권고 문장이 만들어진다
     scope: str = ""
     automate: str = ""
+    # 보안 알림의 이력 열쇠. 트리거가 없는 알림은 이것과 대상 이름으로 만성 여부를 센다.
+    rule_id: str = ""
 
 
 @dataclass

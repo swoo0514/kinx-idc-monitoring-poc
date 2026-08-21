@@ -102,6 +102,7 @@ from .checks.deep import (_hypothesis_checks,
     _deep_ctx_checks,
     _table_merge_checks,
     _wazuh_window_checks,
+    _wazuh_prejudge_checks,
     _hypothesis_survival_checks,
     _grounded_verdict_checks,
     _tracing_off_checks,
@@ -325,6 +326,7 @@ def main():
                    + _baseline_checks() + _loop_checks() + _premature_checks() + _citation_kind_checks() + _neighbor_checks() + _tracing_off_checks() + _dry_axis_checks() + _grounded_verdict_checks()
                    + _hypothesis_survival_checks() + _deep_ctx_checks()
                    + _table_merge_checks() + _wazuh_window_checks()
+                   + _wazuh_prejudge_checks()
                    + _deep_budget_checks() + _deep_record_checks()
                    + _survey_parallel_checks() + _deadline_checks()
                    + _entry_wiring_checks() + _ask_target_checks()

@@ -1,6 +1,7 @@
 """컨텍스트 수집기 — Zabbix(읽기전용 `.get`) + Loki 로그 + Wazuh 경보. 상세는 GATEWAY_GUIDE §9."""
 
 import asyncio
+from datetime import datetime, timezone
 import fnmatch
 import logging
 import os
@@ -317,10 +318,13 @@ async def collect_incident_context(zbx: ZabbixClient, incident) -> dict:
             "metrics": r.get("metrics", []),
             "prejudge": r.get("prejudge", {}),
         })
-    for a in incident.alerts:
-        if not a.trigger_id:   # Wazuh 등 트리거 없는 알림
+    no_trigger = [a for a in incident.alerts if not a.trigger_id]
+    if no_trigger:
+        # 트리거가 없는 알림(Wazuh 등)도 같은 판정기를 쓴다. 이력 열쇠만 다르다.
+        pj = await asyncio.gather(*[_wazuh_prejudge(a, now) for a in no_trigger])
+        for a, v in zip(no_trigger, pj):
             alerts_ctx.append({"name": a.alert_name, "source": a.source, "sev": a.sev,
-                               "class": a.incident_class, "prejudge": {}})
+                               "class": a.incident_class, "prejudge": v})
 
     picked_logs = select_logs(logs)
     return {
@@ -735,6 +739,64 @@ def flatten_alert(src: dict) -> dict:
             "groups": ",".join(groups) if isinstance(groups, list) else groups,
             "path": sc.get("path"),
             "change": sc.get("event")}
+
+
+async def _wazuh_prejudge(alert, now: int) -> dict:
+    """트리거 없는 알림의 만성·신규 판정. 못 세면 빈 판정을 준다(지어내지 않는다)."""
+    url = os.environ.get("WAZUH_INDEXER_URL", "").rstrip("/")
+    rid, host = str(getattr(alert, "rule_id", "") or ""), str(alert.host or "")
+    if not url or not rid or not host:
+        return {}
+    try:
+        async with httpx.AsyncClient(verify=False) as client:
+            r = await client.post(
+                f"{url}/wazuh-alerts-*/_search",
+                json=wazuh_history_body(rid, host, now),
+                auth=(os.environ.get("WAZUH_INDEXER_USER", ""),
+                      os.environ.get("WAZUH_INDEXER_PASSWORD", "")),
+                timeout=TIMEOUT_S)
+            r.raise_for_status()
+            body = r.json()
+    except Exception as e:
+        log.warning("보안 이력 조회 실패 rule=%s host=%s: %s", rid, host, e)
+        return {}
+    hits = (body.get("hits") or {}).get("hits") or []
+    total = ((body.get("hits") or {}).get("total") or {}).get("value")
+    clocks = wazuh_history_clocks(hits)
+    return prejudge.judge(clocks, now=now,
+                          total_count=int(total) if total is not None else len(clocks))
+
+
+def wazuh_history_body(rule_id: str, agent_name: str, ref: int) -> dict:
+    """같은 규칙이 같은 대상에서 몇 번 울렸나. 선판정에 줄 이력 조회다.
+
+    선판정은 Zabbix 트리거 id 로 세는데 보안 알림에는 트리거가 없어 판정이 빈 채로 나갔고,
+    심층 조사 발동 규칙(만성 억제·신규 발동)이 둘 다 판정을 보므로 **단일 보안 알림은
+    처음 보는 것이어도 심층이 가지 않았다**(로드맵 G11).
+    """
+    return {
+        "size": prejudge._list_limit(),
+        "sort": [{"@timestamp": {"order": "desc"}}],
+        "query": {"bool": {"must": [
+            {"term": {"rule.id": str(rule_id)}},
+            {"term": {"agent.name": str(agent_name)}},
+            wazuh_range(ref, prejudge.WINDOW_S),
+        ]}},
+        "_source": ["@timestamp"],
+    }
+
+
+def wazuh_history_clocks(hits: list) -> list:
+    """조회 결과에서 발생 시각(초)만 뽑는다. 못 읽는 값은 버린다."""
+    out = []
+    for h in hits or []:
+        ts = ((h or {}).get("_source") or {}).get("@timestamp") or ""
+        try:
+            t = datetime.strptime(str(ts)[:19], "%Y-%m-%dT%H:%M:%S")
+            out.append(int(t.replace(tzinfo=timezone.utc).timestamp()))
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def wazuh_range(ref: int, window_s: int = 0) -> dict:

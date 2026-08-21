@@ -557,6 +557,50 @@ def _wazuh_window_checks() -> int:
     return 5
 
 
+def _wazuh_prejudge_checks() -> int:
+    """보안 알림에도 만성·신규 판정이 붙는가.
+
+    선판정은 Zabbix 트리거 id 로 90일 이력을 세는데 **Wazuh 알림에는 트리거가 없어** 판정이
+    빈 채로 나갔다. 심층 조사 발동 규칙은 만성 억제·신규 발동 두 축인데 둘 다 판정을 보므로,
+    **단일 보안 알림은 아무리 처음 보는 것이어도 심층이 가지 않았다**(로드맵 G11).
+
+    Wazuh 쪽 이력 열쇠는 `rule.id` + `agent.name` 이다 — 같은 규칙이 같은 대상에서 몇 번
+    울렸는지가 곧 만성 여부다.
+    """
+    import json
+
+    from ..alerts import collector, incident, prejudge
+
+    a = incident.Alert(source="wazuh", event_id="e1", trigger_id="", host="h1",
+                       alert_name="SSH 무차별 대입", sev="SEV2", incident_class="auth_security",
+                       recv=0.0, rule_id="5712")
+    assert a.rule_id == "5712"
+
+    ref = 1787200000
+    body = collector.wazuh_history_body("5712", "h1", ref)
+    txt = json.dumps(body, ensure_ascii=False)
+    assert "5712" in txt and "h1" in txt, txt
+    assert "now-" not in txt, "여기도 서버 시각을 쓰면 안 된다"
+    assert body.get("size", 0) > 0
+
+    # 같은 판정기를 쓴다 — 출처마다 다른 잣대를 만들지 않는다
+    hits = [{"_source": {"@timestamp": "2026-08-01T00:00:00.000Z"}}] * 6
+    clocks = collector.wazuh_history_clocks(hits)
+    assert len(clocks) == 6 and all(isinstance(c, int) for c in clocks), clocks
+    v = prejudge.judge(clocks, now=ref, total_count=len(clocks))
+    assert v.get("verdict"), v
+
+    # 배선까지 본다 — 함수만 있고 안 부르면 빈 판정이 그대로 나간다
+    import inspect
+
+    src = inspect.getsource(collector.collect_incident_context)
+    assert "_wazuh_prejudge" in src, "트리거 없는 알림에 선판정을 안 붙인다"
+    assert '"prejudge": {}' not in src, "빈 판정을 그대로 싣는 자리가 남아 있다"
+    assert "rule_id=" in inspect.getsource(__import__(
+        "gateway.app", fromlist=["_dispatch"])._dispatch), "웹훅이 rule_id 를 안 싣는다"
+    return 10
+
+
 def _neighbor_checks() -> int:
     """다른 대상으로 조사를 넓힐 재료가 있는가.
 

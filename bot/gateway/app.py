@@ -452,7 +452,9 @@ def _dispatch(bg, source, event_id, trigger_id, host, alert_name, sev, decision,
             incident_class=cls, recv=time.monotonic(), clock=_as_clock(clock),
             # 계약 제약은 라우팅에서 쓰고 끝나면 안 된다 — 분석 문장에도 필요하다.
             scope=tag_router.tag_value(tags or [], tag_router.SCOPE_TAG) or "",
-            automate=tag_router.tag_value(tags or [], tag_router.AUTOMATE_TAG) or "")
+            automate=tag_router.tag_value(tags or [], tag_router.AUTOMATE_TAG) or "",
+            # 보안 알림의 이력 열쇠. 없으면 만성·신규 판정이 빈 채로 나간다(G11).
+            rule_id=str(rule_id or ""))
         # 파일에 먼저 적고, 적지 못하면 200 을 주지 않는다 — Zabbix 가 재시도하게 둔다
         rec = {"source": source, "event_id": event_id, "trigger_id": trigger_id,
                "host": host, "alert_name": alert_name, "sev": sev, "class": cls,
