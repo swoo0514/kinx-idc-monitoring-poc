@@ -86,6 +86,12 @@ def apply_plan(state: dict, plan: dict) -> list:
         ok, why = H.validate(h, records)
         if not ok:
             rejected.append("%s: %s" % (h.get("id"), why))
+            # 이미 선 가설이면 **이전 모습으로 남긴다.** 질의가 빈손으로 돌아오면 계획자가
+            # 기대했던 기록 id 를 인용하는데, 그 한 번으로 표가 통째로 비면 "가설이 둘
+            # 미만"이 매 라운드 반복되고 조사가 앞으로 못 간다(랩 실증 2026-08-21).
+            was_h = prev.get(h.get("id"))
+            if was_h:
+                out.append(was_h)
             continue
         was = (prev.get(h.get("id")) or {}).get("status", "미결")
         want = h.get("status") or "미결"

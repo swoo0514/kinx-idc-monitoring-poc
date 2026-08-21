@@ -418,6 +418,39 @@ def _grounded_verdict_checks() -> int:
     return 6
 
 
+def _hypothesis_survival_checks() -> int:
+    """인용 하나가 틀렸다고 이전 라운드의 가설까지 버리지 않는가.
+
+    랩 실증에서 질의가 빈손으로 돌아오자 계획자가 **기대했던 기록 id 를 인용**했고, 그
+    한 번의 잘못으로 표가 통째로 비었다(`가설=0`). 그러면 "가설이 둘 미만이라 다시 세우게
+    한다"가 매 라운드 반복되고 조사가 앞으로 못 간다.
+
+    이미 선 가설은 이전 모습으로 남기고 이번 갱신만 버린다. 처음 나온 가설이 잘못 인용한
+    경우에만 버린다 — 남길 이전 모습이 없기 때문이다.
+    """
+    from ..deep import graph as G
+
+    recs = {"metrics#1": {"id": "metrics#1", "status": "ok"}}
+    H1 = {"id": "H1", "claim": "자원 경합", "status": "지지", "supports": ["metrics#1"],
+          "contradicts": []}
+    st = {"records": recs, "table": [H1]}
+
+    # 있던 가설이 없는 기록을 인용했다 — 이전 모습으로 남는다
+    bad = dict(H1, status="기각", supports=["logs#2"])
+    rejected = G.apply_plan(st, {"hypotheses": [bad]})
+    kept = [h for h in st["table"] if h.get("id") == "H1"]
+    assert kept and kept[0]["status"] == "지지", st["table"]
+    assert kept[0]["supports"] == ["metrics#1"], kept[0]
+    assert rejected and "H1" in rejected[0]
+
+    # 처음 나온 가설이 잘못 인용하면 버린다 — 남길 이전 모습이 없다
+    st2 = {"records": recs, "table": []}
+    G.apply_plan(st2, {"hypotheses": [{"id": "H9", "claim": "새 가설",
+                                       "supports": ["logs#9"], "contradicts": []}]})
+    assert not [h for h in st2["table"] if h.get("id") == "H9"], st2["table"]
+    return 5
+
+
 def _neighbor_checks() -> int:
     """다른 대상으로 조사를 넓힐 재료가 있는가.
 
