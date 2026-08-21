@@ -11,7 +11,8 @@ import logging
 import os
 import time
 
-from . import baseline, condense, graph as G, hypothesis as H, memory, state as S
+from . import (baseline, condense, graph as G, hypothesis as H, memory, state as S,
+               verdict as V)
 
 log = logging.getLogger("gateway.deep.run")
 
@@ -95,6 +96,13 @@ def verify(text: str, state: dict):
     if ops:
         log.warning("심층 종합에 위험 명령이 섞였다: %s", ", ".join(ops))
         got = llm.mark_destructive(got)
+
+    # 아직 안 갈린 가설을 원인으로 내세웠으면 코드가 확인한 상태를 덧붙인다. 답을 버리지
+    # 않는 이유는 조사 결과에 사람이 다음에 볼 것을 정할 재료가 들어 있기 때문이다.
+    bad = V.ungrounded(got, state.get("table") or [])
+    if bad:
+        log.warning("종합이 미결 가설을 원인으로 들었다: %s", ", ".join(bad))
+        got = V.annotate(got, bad)
     return got, ""
 
 
@@ -144,6 +152,36 @@ async def survey(st: dict, inc: dict, run_tool, condense_call, now: int) -> None
             memory.add_step(st, "조사: %s 를 줄이지 못했다(%s)" % (axis, why))
 
 
+NEIGHBOR_MAX = 8
+
+
+async def neighbors(inc: dict, run_tool) -> list:
+    """같은 시각 다른 대상에 열린 문제. **코드가 만든다.**
+
+    조사 범위를 모델의 자유 탐색에 맡기지 않는다. 문헌이 권하는 방식은 후보를 명시적으로
+    주는 쪽이다 — 의존 관계를 안 주면 모델이 없는 관계를 지어낸다. 그래서 지금 실제로 열려
+    있는 문제만 목록으로 주고, 프롬프트는 그 안에서 고르라고만 말한다.
+
+    랩 실증 단계 3 에서 조사가 사건 호스트를 벗어나지 못했다. 원인과 증상이 다른 호스트에
+    있는 사건에서는 이 목록이 유일한 연결 고리다.
+    """
+    try:
+        res, _ = await run_tool("open_problems", {})
+    except Exception as e:
+        log.warning("이웃 조회 실패: %s", e)
+        return []
+    mine = str(inc.get("host") or "")
+    out = []
+    for p in (res or {}).get("problems") or []:
+        h = str(p.get("host") or "")
+        if not h or h == mine:
+            continue
+        out.append({"host": h, "name": p.get("name", ""), "sev": p.get("sev", "")})
+        if len(out) >= NEIGHBOR_MAX:
+            break
+    return out
+
+
 async def investigate(context: dict, masker, model_call, condense_call,
                       run_tool, now: int = 0):
     """조사 → 가설 → 검증을 한 번 돌린다.
@@ -170,6 +208,7 @@ async def investigate(context: dict, masker, model_call, condense_call,
         return ""
 
     await survey(st, inc, run_tool, condense_call, now)
+    st["neighbors"] = await neighbors(inc, run_tool)
 
     if not (st.get("records") or {}):
         return {"ok": False, "stopped": "no_evidence",

@@ -120,13 +120,17 @@ def read_probe(state: dict, plan: dict, calls: list):
         # 가설표를 안 쓰는 형태에서는 가름 선언을 요구하지 않는다. 중복 검출은 그대로.
         if P.fingerprint(req) in set(state.get("seen") or []):
             return None, "중복 질의다 — 같은 조회를 이미 했다"
-        return req, ""
+        ok, why = P.not_dry(state, req)
+        return (req, "") if ok else (None, why)
 
     ok, why = P.validate(req, state.get("table") or [], set(state.get("seen") or []))
     if not ok:
         return None, why
     if not P.splits(state.get("table") or [], req["discriminates"]):
         return None, "선언한 가설들이 갈리지 않는다"
+    ok, why = P.not_dry(state, req)
+    if not ok:
+        return None, why
     return req, ""
 
 
@@ -223,6 +227,7 @@ def build(model_fn, run_probe, guard, system: str = ""):
         state.setdefault("probes", []).append(req)
         state.setdefault("seen", []).append(P.fingerprint(req))
         if not rec:
+            P.note_dry(state, req)
             memory.add_step(state, "%s 조회가 결과를 못 냈다: %s" % (req["tool"], why))
             return state
         memory.put_record(state, rec)

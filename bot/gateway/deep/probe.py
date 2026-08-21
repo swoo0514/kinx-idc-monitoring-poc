@@ -61,3 +61,34 @@ def splits(table: list, ids: list) -> bool:
     seen = {(str(h.get("if_true") or "").strip(),
              str(h.get("if_false") or "").strip()) for h in picked}
     return len(seen) > 1
+
+
+# 빈 결과가 몇 번 나오면 그 축을 접을까. 한 번은 창이 어긋났을 수 있으니 두 번으로 둔다.
+DRY_LIMIT = 2
+
+
+def dry_key(req: dict):
+    """빈 결과를 세는 열쇠. **시간 창은 넣지 않는다.**
+
+    중복 검출은 조회 인자까지 넣은 지문으로 도는데, 창만 바꾸면 지문이 달라져 빠져나간다.
+    랩 실증 단계 3 에서 로그를 세 번 물었고 세 번 다 비었다 — 반복·정체 실패가 이 경로로
+    재발했다. 없는 것은 창을 넓혀도 없다.
+    """
+    args = req.get("args") or {}
+    return (str(req.get("tool") or ""), str(args.get("host") or ""))
+
+
+def note_dry(state: dict, req: dict) -> None:
+    """이 조회가 빈 결과였음을 센다."""
+    k = dry_key(req)
+    d = state.setdefault("dry", {})
+    d[k] = int(d.get(k) or 0) + 1
+
+
+def not_dry(state: dict, req: dict):
+    """또 물어도 되는가. 반환 `(허용, 사유)`."""
+    n = int((state.get("dry") or {}).get(dry_key(req)) or 0)
+    if n >= DRY_LIMIT:
+        return False, ("%s 는 이 대상에서 이미 %d번 비었다 — 창을 바꿔도 없다"
+                       % (req.get("tool"), n))
+    return True, ""

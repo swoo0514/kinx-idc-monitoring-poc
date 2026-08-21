@@ -340,6 +340,121 @@ def _citation_kind_checks() -> int:
     return 5
 
 
+def _tracing_off_checks() -> int:
+    """검사를 돌릴 때 추적이 꺼져 있는가.
+
+    셀프테스트는 가짜 모델로 그래프를 돌린다. 추적이 켜져 있으면 그 가짜 실행이 외부 추적
+    서비스로 올라간다. 실제로 올라갔다 — 프로젝트 설정 코드는 서비스 기동 때만 도는데
+    검사는 그 경로를 안 지나므로 `default` 프로젝트에 86건이 쌓였다(2026-08-21 확인).
+    비용·지연 통계가 가짜 값으로 오염되고, 무엇보다 검사 데이터가 외부로 나간다.
+    """
+    import os
+
+    from .. import tracing
+
+    assert not tracing.enabled(), "검사 중에 추적이 켜져 있다"
+    assert os.environ.get("LANGSMITH_TRACING", "").lower() in ("", "0", "false", "off"),         os.environ.get("LANGSMITH_TRACING")
+    return 2
+
+
+def _dry_axis_checks() -> int:
+    """같은 대상의 같은 축이 두 번 비면 그만 묻는가.
+
+    중복 검출이 조회 인자까지 넣은 지문으로 도는데, 시간 창만 바꾸면 지문이 달라져 빠져
+    나간다. 랩 실증 단계 3 에서 로그를 세 번 물었고 **세 번 다 비었다** — 반복·정체
+    실패(RF-12)가 이 경로로 재발했다. 없는 것은 창을 넓혀도 없다.
+    """
+    from ..deep import probe as P
+
+    st = {"dry": {}}
+    req = {"tool": "host_logs", "args": {"host": "[host-1]", "range": "1~2"}}
+    assert P.dry_key(req) == ("host_logs", "[host-1]")
+
+    P.note_dry(st, req)
+    ok, _ = P.not_dry(st, req)
+    assert ok, "한 번 비었다고 막으면 안 된다"
+
+    P.note_dry(st, dict(req, args={"host": "[host-1]", "range": "3~4"}))
+    ok, why = P.not_dry(st, dict(req, args={"host": "[host-1]", "range": "5~6"}))
+    assert not ok and "비었" in why, why
+
+    # 대상이 다르면 막지 않는다
+    ok, _ = P.not_dry(st, dict(req, args={"host": "[host-2]", "range": "1~2"}))
+    assert ok
+    return 5
+
+
+def _grounded_verdict_checks() -> int:
+    """종합이 아직 안 갈린 가설을 원인으로 내세우면 표시하는가.
+
+    랩 실증 단계 3 에서 종합이 미결 상태인 H1·H3 를 "공동으로 작용했을 가능성이 높습니다"로
+    결론에 올렸다. 근거가 없다는 것은 본문에서 스스로 밝혔으나 결론 문장에는 남았다.
+    문헌이 권하는 방식은 근거 없는 주장을 되돌리거나 표시하는 쪽이다 — 우리는 답을 버리지
+    않고 **코드가 확인한 상태를 덧붙인다.** 사람이 무엇을 믿을지 고를 수 있어야 한다.
+    """
+    from ..deep import verdict as V
+
+    table = [{"id": "H1", "claim": "갱신 실패", "status": "미결"},
+             {"id": "H2", "claim": "계획된 변경", "status": "기각"},
+             {"id": "H3", "claim": "검증 로직 변경", "status": "지지"}]
+
+    bad = V.ungrounded("H1과 H3이 공동으로 작용했을 가능성이 높습니다.", table)
+    assert bad == ["H1"], bad
+
+    assert V.ungrounded("H3 이 원인이다", table) == []
+    assert V.ungrounded("H2 는 기각했다", table) == []      # 기각은 밝혀도 된다
+    assert V.ungrounded("원인 미상", table) == []
+
+    # verify 가 실제로 부르는지까지 본다 — 모듈만 있고 안 부르면 검사가 헛돈다
+    import inspect
+
+    from ..deep import run as deep_run
+    src = inspect.getsource(deep_run.verify)
+    assert "ungrounded" in src and "annotate" in src, "verify 가 근거 검사를 안 부른다"
+
+    note = V.annotate("H1이 원인입니다.", ["H1"])
+    assert "H1" in note and note.startswith("H1이 원인입니다.")
+    assert "미결" in note, note
+    return 6
+
+
+def _neighbor_checks() -> int:
+    """다른 대상으로 조사를 넓힐 재료가 있는가.
+
+    랩 실증 단계 3 에서 조사가 사건 호스트를 벗어나지 못했다. 원인이 프롬프트만은 아니었다 —
+    **열린 문제 목록이 호스트 이름을 안 실어서** 전체를 조회해도 어느 대상의 문제인지 알 수
+    없었다. 원인과 증상이 다른 호스트에 있는 사건에서는 그 목록이 유일한 연결 고리다.
+
+    조사 범위를 모델의 자유 탐색에 맡기지 않는다. 문헌이 권하는 방식은 후보를 명시적으로
+    주는 쪽이다(의존 관계를 안 주면 모델이 지어낸다). 그래서 코드가 목록을 만들어 기억에
+    싣고, 프롬프트는 그 목록 안에서 고르라고만 말한다.
+    """
+    from ..ask.fetch import zabbix as fz
+    from ..deep import memory as M
+    from ..deep import state as S
+
+    rows = [{"name": "MySQL: Service is down", "severity": "4", "clock": "100",
+             "hosts": [{"host": "web-01"}]}]
+    got = fz.problems_result(rows)
+    assert got["problems"][0].get("host") == "web-01", got["problems"][0]
+
+    # 이름은 다른 값과 같은 규칙으로 가린다
+    class _M:
+        def mask(self, x):
+            return "[host-9]" if x == "web-01" else x
+
+    got = fz.problems_result(rows, _M())
+    assert got["problems"][0]["host"] == "[host-9]", got["problems"][0]
+
+    # 기억이 이웃을 보여 준다 — 사건 호스트 자신은 빼고
+    st = S.new_state({"host": "[host-1]"}, {})
+    st["neighbors"] = [{"host": "[host-2]", "name": "웹 접속 실패", "sev": "4"}]
+    txt = M.render(st)
+    assert "[host-2]" in txt and "웹 접속 실패" in txt, txt
+    assert M.render(S.new_state({"host": "[host-1]"}, {})).count("다른 대상") == 0
+    return 5
+
+
 def _premature_checks() -> int:
     """질의를 한 번도 안 던지고 '못 가름'으로 끝내지 않는가.
 

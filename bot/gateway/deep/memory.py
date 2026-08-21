@@ -84,12 +84,21 @@ def render(state: dict) -> str:
         parts.append("[관측] 인용 가능한 기록 id: %s\n%s"
                      % (", ".join(sorted(recs)), body))
 
-    # ③ 가설표
+    # ③ 같은 시각 다른 대상의 문제 — **코드가 만든다.** 조사 범위를 모델의 자유 탐색에
+    #    맡기면 없는 의존 관계를 지어낸다. 후보를 목록으로 주고 그 안에서 고르게 한다.
+    nb = state.get("neighbors") or []
+    if nb:
+        lines = ["- %s: %s (심각도 %s)" % (n.get("host", "?"), n.get("name", ""),
+                                          n.get("sev", "?")) for n in nb]
+        parts.append("[같은 시각 다른 대상의 문제]\n" +
+                     "\n".join(lines))
+
+    # ④ 가설표
     table = state.get("table") or []
     if table:
         parts.append("[가설]\n" + "\n".join(_hypothesis_line(h) for h in table))
 
-    # ④ 발자취 — 무엇을 왜 봤는지. **이미 본 축을 또 묻지 않게 하는 재료다.**
+    # ⑤ 발자취 — 무엇을 왜 봤는지. **이미 본 축을 또 묻지 않게 하는 재료다.**
     steps = state.get("steps") or []
     if steps:
         parts.append("[지금까지]\n" + "\n".join("- %s" % s for s in steps))

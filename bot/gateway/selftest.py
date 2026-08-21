@@ -97,6 +97,10 @@ from .checks.deep import (_hypothesis_checks,
     _baseline_checks,
     _loop_checks,
     _premature_checks,
+    _neighbor_checks,
+    _dry_axis_checks,
+    _grounded_verdict_checks,
+    _tracing_off_checks,
     _citation_kind_checks,
     _deep_budget_checks,
     _deep_record_checks,
@@ -115,7 +119,20 @@ from .checks.ops import (_flush_checks,
 log = logging.getLogger("gateway.selftest")
 
 
+def _tracing_off() -> None:
+    """검사를 돌리기 전에 추적을 끈다.
+
+    셀프테스트는 가짜 모델로 그래프를 돌린다. 추적이 켜진 환경에서 돌리면 그 가짜 실행이
+    외부 추적 서비스로 올라간다 — 랩에서 실제로 `default` 프로젝트에 86건이 쌓였다
+    (2026-08-21). 프로젝트 이름을 정하는 코드는 서비스 기동 때만 돌기 때문에 검사 실행분은
+    어디로 가는지도 모르는 채 나갔다. 끄는 것이 맞다.
+    """
+    for k in ("LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING"):
+        os.environ[k] = "false"
+
+
 def main():
+    _tracing_off()
     fails = 0
     for source, level, expected in CASES_SEVERITY:
         got = severity.normalize(source, level)
@@ -301,7 +318,7 @@ def main():
                    + _time_order_checks()
                    + _condense_adapter_checks()
                    + _memory_checks() + _state_checks()
-                   + _baseline_checks() + _loop_checks() + _premature_checks() + _citation_kind_checks()
+                   + _baseline_checks() + _loop_checks() + _premature_checks() + _citation_kind_checks() + _neighbor_checks() + _tracing_off_checks() + _dry_axis_checks() + _grounded_verdict_checks()
                    + _deep_budget_checks() + _deep_record_checks()
                    + _survey_parallel_checks() + _deadline_checks()
                    + _entry_wiring_checks() + _ask_target_checks()

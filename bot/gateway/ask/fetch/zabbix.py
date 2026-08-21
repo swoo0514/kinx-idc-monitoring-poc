@@ -34,9 +34,18 @@ def problems_result(rows: list, masker: masking.Masker = None, total: int = 0) -
     """열린 문제 결과 한 벌."""
     from ...alerts import collector
     mask = masker.mask if masker is not None else (lambda x: x)
-    out = {"problems": [{"name": mask(str(p.get("name") or "")),
-                         "sev": p.get("severity"),
-                         "t": int(p.get("clock") or 0)} for p in rows or []],
+    def _one(p):
+        # 어느 대상의 문제인지 없으면 전체 조회가 쓸모없다 — 사슬이 여러 호스트에 걸친
+        # 사건에서 이 목록이 유일한 연결 고리다(랩 실증 단계 3).
+        hs = p.get("hosts") or []
+        host = mask(str((hs[0] or {}).get("host") or "")) if hs else ""
+        row = {"name": mask(str(p.get("name") or "")), "sev": p.get("severity"),
+               "t": int(p.get("clock") or 0)}
+        if host:
+            row["host"] = host
+        return row
+
+    out = {"problems": [_one(p) for p in rows or []],
            "status": collector.SOURCE_OK}
     if total:
         out["total"] = int(total)
@@ -137,6 +146,7 @@ async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
             zbx = collector.ZabbixClient(source=src)
             async with httpx.AsyncClient() as c:
                 params = {"output": ["eventid", "name", "severity", "clock"],
+                          "selectHosts": ["host"],
                           "sortfield": "eventid", "sortorder": "DESC", "limit": 50}
                 if entry:
                     hosts = await zbx.call(c, "host.get", {
@@ -147,7 +157,8 @@ async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
                 got = await zbx.call(c, "problem.get", params)
                 # 총계는 countOutput 으로 따로 센다 — 빼는 것이지 비우는 것이 아니다(output: None 은 거부)
                 cnt_params = {k: v for k, v in params.items()
-                              if k not in ("output", "limit", "sortfield", "sortorder")}
+                              if k not in ("output", "limit", "sortfield", "sortorder",
+                                           "selectHosts")}
                 cnt_params["countOutput"] = True
                 cnt = await zbx.call(c, "problem.get", cnt_params)
                 try:
