@@ -222,10 +222,18 @@ def build(model_fn, run_probe, guard, system: str = ""):
                      if c.get("name") == "plan"), {})
 
         if loop_mode() == "hypothesis":
-            for why in apply_plan(state, plan):
+            rejected = apply_plan(state, plan)
+            for why in rejected:
                 memory.add_step(state, "거절: %s" % why)
+            if rejected:
+                # 발자취는 마지막 몇 줄만 로그에 남아 폐기 사유가 자주 잘린다. 가설이
+                # 왜 사라졌는지는 이 반복문을 고칠 때마다 필요했으므로 그 자리에서 남긴다.
+                log.info("라운드 %s 가설 거절 %d건: %s", state.get("round"),
+                         len(rejected), " / ".join(rejected[:4]))
             if not H.enough(state.get("table") or []):
                 memory.add_step(state, "가설이 둘 미만이라 다시 세우게 한다")
+                log.info("라운드 %s 가설 %d개뿐 — 다시 세우게 한다",
+                         state.get("round"), H.count_real(state.get("table") or []))
 
         req, why = read_probe(state, plan, calls)
         state["probe"] = req
