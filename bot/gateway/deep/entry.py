@@ -52,6 +52,23 @@ async def _condense_call(system: str, user: str):
             "reason": res.get("reason") or ""}
 
 
+# 화면 없는 경로다. 패널 도구는 사람이 보던 대시보드가 전제라 여기서는 뜻이 없다.
+NO_SCREEN = ("panel_image", "list_panels", "answer")
+
+# 맥락이 제공하는 열쇠. 도구를 늘릴 때 여기와 아래 ctx 가 함께 늘어야 한다 — 검사가 본다.
+CTX_KEYS = ("table", "now", "panel_span", "panel_refs",
+            "fetch_logs", "fetch_security", "fetch_judgments", "fetch_metrics",
+            "fetch_problems")
+
+
+def planner_tools() -> list:
+    """계획자에게 줄 도구 이름."""
+    from ..ask import tools as asktools
+
+    return [t.get("name") for t in (asktools.TOOL_SPECS or [])
+            if t.get("name") not in NO_SCREEN]
+
+
 def _tool_runner(ctx: dict):
     """조회 — **ask 조회 계층을 지난다.** 임의 창을 받고 항목마다 마스킹이 걸린다."""
     from ..ask import tools as asktools
@@ -88,7 +105,7 @@ async def investigate_incident(context: dict, host_token_hint: str = ""):
     from ..ask.fetch.judgments import fetch_judgments
     from ..ask.fetch.loki import fetch_logs
     from ..ask.fetch.wazuh import fetch_security
-    from ..ask.fetch.zabbix import fetch_metrics
+    from ..ask.fetch.zabbix import fetch_metrics, fetch_problems
     from . import run as deep_run
 
     mk = masking.Masker()
@@ -103,6 +120,8 @@ async def investigate_incident(context: dict, host_token_hint: str = ""):
         "fetch_security": lambda body: fetch_security(body, mk),
         "fetch_judgments": lambda h, d: fetch_judgments(h, d, mk),
         "fetch_metrics": lambda ent, m, a, b: fetch_metrics(ent, m, a, b, mk),
+        # 이웃 조회가 여기에 달려 있다. 없으면 조사 범위 확장이 조용히 죽는다.
+        "fetch_problems": lambda ent: fetch_problems(ent, mk),
     }
     # 질의 경로는 사건에 호스트가 없다 — 질문에서 찾아 넣는다
     if not ((context.get("incident") or {}).get("host")):

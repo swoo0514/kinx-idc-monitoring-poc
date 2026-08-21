@@ -199,8 +199,11 @@ def build(model_fn, run_probe, guard, system: str = ""):
     async def plan_node(state: dict) -> dict:
         from ..ask import tools as asktools
 
+        from . import entry as deep_entry
+
+        allow = set(deep_entry.planner_tools())
         specs = [plan_spec()] + [t for t in (asktools.TOOL_SPECS or [])
-                                 if t.get("name") != "answer"]
+                                 if t.get("name") in allow]
         try:
             reply = await model_fn(system, memory.render(state), specs)
         except Exception as e:

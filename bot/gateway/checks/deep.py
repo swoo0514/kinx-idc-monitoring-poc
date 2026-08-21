@@ -451,6 +451,33 @@ def _hypothesis_survival_checks() -> int:
     return 5
 
 
+def _deep_ctx_checks() -> int:
+    """계획자에게 준 도구를 심층 맥락이 전부 실행할 수 있는가.
+
+    `open_problems` 를 도구 목록에 넣어 놓고 맥락에 `fetch_problems` 를 안 넣어서 호출이
+    통째로 실패했다(2026-08-21 랩). 이웃 목록이 그것에 달려 있었으므로 조사 범위 확장이
+    조용히 죽어 있었다. 도구를 늘릴 때마다 같은 실수가 나므로 정적으로 잡는다.
+    """
+    import inspect
+    import re
+
+    from ..ask import tools as asktools
+    from ..deep import entry
+
+    names = set(entry.planner_tools())
+    assert names, "계획자에게 줄 도구가 없다"
+    assert "panel_image" not in names and "list_panels" not in names,         "화면 없는 경로에 패널 도구를 주지 않는다"
+
+    have = set(entry.CTX_KEYS)
+    for name in sorted(names):
+        fn = (asktools._TOOLS or {}).get(name)
+        assert fn, name
+        need = set(re.findall(r'ctx\["([a-z_]+)"\]', inspect.getsource(fn)))
+        missing = need - have
+        assert not missing, "%s 가 쓰는 %s 가 심층 맥락에 없다" % (name, sorted(missing))
+    return 3
+
+
 def _neighbor_checks() -> int:
     """다른 대상으로 조사를 넓힐 재료가 있는가.
 
