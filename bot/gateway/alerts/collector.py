@@ -737,6 +737,22 @@ def flatten_alert(src: dict) -> dict:
             "change": sc.get("event")}
 
 
+def wazuh_range(ref: int, window_s: int = 0) -> dict:
+    """보안 축 조회 구간. **사건 시각을 절대값으로 준다.**
+
+    `now-15m` 은 인덱서의 시계다. 알림이 늦게 도착하면(재시도·적체·지난 사건 재조사) 사건과
+    무관한 구간을 보고, 거기서 아무것도 안 나오면 "침해 배제"가 된다. 조회 상태 계약을 붙여
+    놓고도 엉뚱한 구간을 성공으로 읽는 경로다.
+
+    `epoch_millis` 는 OpenSearch 기본 날짜 형식에 포함되지만 매핑에 기대지 않고 명시한다.
+    https://docs.opensearch.org/latest/query-dsl/term/range/
+    """
+    ref = int(ref or 0)
+    w = int(window_s or CORR_WINDOW_S)
+    return {"range": {"@timestamp": {"gte": (ref - w) * 1000, "lte": ref * 1000,
+                                     "format": "epoch_millis"}}}
+
+
 async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "", source: str = "") -> tuple:
     """Wazuh Indexer(OpenSearch) 최근 경보. 반환 (경보 목록, 조회 상태).
 
@@ -758,7 +774,7 @@ async def _wazuh_alerts(agent_name: str, now: int, zbx_host: str = "", source: s
         "query": {"bool": {"must": [
             # 이름이 정확히 같은 것만 — 느슨하면 다른 고객의 경보가 이 사건 카드에 원문으로 나간다
             {"term": {"agent.name": agent_name}},
-            {"range": {"@timestamp": {"gte": f"now-{CORR_WINDOW_S // 60}m"}}},
+            wazuh_range(now),
         ]}},
         "_source": ["@timestamp", "rule.level", "rule.description", "agent.name",
                     "rule.id", "rule.groups", "syscheck.path", "syscheck.event"],

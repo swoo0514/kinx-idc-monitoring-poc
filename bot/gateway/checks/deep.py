@@ -530,6 +530,33 @@ def _table_merge_checks() -> int:
     return 7
 
 
+def _wazuh_window_checks() -> int:
+    """보안 축이 사건 시각으로 조회하는가.
+
+    `_wazuh_alerts` 는 기준 시각을 인자로 받아 놓고 **쓰지 않고** `now-15m` 으로 조회했다.
+    그것은 인덱서의 시계다. 알림이 늦게 도착하면(재시도·적체·지난 사건 재조사) 사건과
+    무관한 구간을 보고, 거기서 아무것도 안 나오면 "침해 배제"가 된다. 조회 상태 계약을
+    붙여 놓고도 엉뚱한 구간을 성공으로 읽는 경로다.
+    """
+    import json
+
+    from ..alerts import collector
+
+    ref = 1787200000
+    rng = collector.wazuh_range(ref)
+    body = json.dumps(rng)
+    assert "now-" not in body, body
+    r = rng["range"]["@timestamp"]
+    assert r["format"] == "epoch_millis", r
+    assert r["lte"] == ref * 1000, r
+    assert r["gte"] == (ref - collector.CORR_WINDOW_S) * 1000, r
+
+    import inspect
+    src = inspect.getsource(collector._wazuh_alerts)
+    assert "wazuh_range(" in src and "now-" not in src, "서버 상대시각이 남아 있다"
+    return 5
+
+
 def _neighbor_checks() -> int:
     """다른 대상으로 조사를 넓힐 재료가 있는가.
 
