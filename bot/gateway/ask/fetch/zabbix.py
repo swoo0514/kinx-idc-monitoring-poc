@@ -134,6 +134,30 @@ async def fetch_metrics(entry: dict, match: str, start: int, end: int,
         total=total, shown=len(out), dropped=dropped)
 
 
+async def _attach_hosts(zbx, client, rows: list) -> None:
+    """문제마다 어느 대상의 것인지 붙인다.
+
+    **`problem.get` 은 `selectHosts` 를 받지 않는다** — 공식 문서상 select 파라미터는
+    acknowledges·tags·suppressionData 뿐이다. 호스트는 `objectid`(트리거)로 한 번 더
+    조회해서 붙인다. 어느 대상의 문제인지 없으면 전체 조회가 쓸모없다.
+    """
+    ids = sorted({str(r.get("objectid") or "") for r in rows or []} - {""})
+    if not ids:
+        return
+    try:
+        trg = await zbx.call(client, "trigger.get",
+                             {"triggerids": ids, "output": ["triggerid"],
+                              "selectHosts": ["host"]})
+    except Exception as e:
+        log.warning("문제의 호스트 조회 실패: %s", e)
+        return
+    by_id = {str(t.get("triggerid")): (t.get("hosts") or []) for t in trg or []}
+    for r in rows or []:
+        hs = by_id.get(str(r.get("objectid") or ""))
+        if hs:
+            r["hosts"] = hs
+
+
 async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
     """지금 열려 있는 문제. 호스트를 안 주면 허용된 감시 서버 전체."""
     import httpx
@@ -145,8 +169,8 @@ async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
         for src in sources:
             zbx = collector.ZabbixClient(source=src)
             async with httpx.AsyncClient() as c:
-                params = {"output": ["eventid", "name", "severity", "clock"],
-                          "selectHosts": ["host"],
+                params = {"output": ["eventid", "name", "severity", "clock",
+                                     "objectid"],
                           "sortfield": "eventid", "sortorder": "DESC", "limit": 50}
                 if entry:
                     hosts = await zbx.call(c, "host.get", {
@@ -157,14 +181,14 @@ async def fetch_problems(entry, masker: masking.Masker = None) -> dict:
                 got = await zbx.call(c, "problem.get", params)
                 # 총계는 countOutput 으로 따로 센다 — 빼는 것이지 비우는 것이 아니다(output: None 은 거부)
                 cnt_params = {k: v for k, v in params.items()
-                              if k not in ("output", "limit", "sortfield", "sortorder",
-                                           "selectHosts")}
+                              if k not in ("output", "limit", "sortfield", "sortorder")}
                 cnt_params["countOutput"] = True
                 cnt = await zbx.call(c, "problem.get", cnt_params)
                 try:
                     total += int(cnt if isinstance(cnt, (int, str)) else 0)
                 except (TypeError, ValueError):
                     total += len(got)
+                await _attach_hosts(zbx, c, got)
                 out.extend(problems_result(got, masker)["problems"])
     except Exception as e:
         log.warning("열린 문제 조회 실패: %s", e)

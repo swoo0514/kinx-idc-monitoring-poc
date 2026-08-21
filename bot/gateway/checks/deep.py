@@ -493,6 +493,14 @@ def _neighbor_checks() -> int:
     from ..deep import memory as M
     from ..deep import state as S
 
+    # problem.get 은 selectHosts 를 안 받는다(공식 문서: acknowledges·tags·suppressionData
+    # 뿐). 호스트는 objectid 로 트리거를 한 번 더 조회해 붙인다.
+    import inspect
+
+    src = inspect.getsource(fz.fetch_problems)
+    assert "selectHosts" not in src, "problem.get 에 selectHosts 를 주면 Invalid params 다"
+    assert "_attach_hosts" in src, "문제에 호스트를 안 붙인다"
+
     rows = [{"name": "MySQL: Service is down", "severity": "4", "clock": "100",
              "hosts": [{"host": "web-01"}]}]
     got = fz.problems_result(rows)
